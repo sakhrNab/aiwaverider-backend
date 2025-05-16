@@ -1,0 +1,77 @@
+/**
+ * Test Script for Auth Controller Signup Welcome Email
+ * 
+ * This script tests the welcome email functionality directly via the emailService
+ */
+
+require('dotenv').config();
+const emailService = require('../services/emailService');
+const logger = require('../utils/logger');
+
+// Test user data
+const userData = {
+  uid: `test-${Date.now()}`,
+  email: 'test@example.com',
+  username: `testuser-${Date.now()}`,
+  firstName: 'Test',
+  lastName: 'User',
+  displayName: 'Test User'
+};
+
+// Test function
+async function testSignupEmailFlow() {
+  console.log('\n🧪 TESTING SIGNUP WELCOME EMAIL');
+  console.log('==============================');
+  console.log('Test user data:', userData);
+  
+  try {
+    // Simulate the welcome email sending part from authController.signup
+    console.log('\nSimulating welcome email sending...');
+    
+    const emailResult = await emailService.sendWelcomeEmail(userData);
+    
+    if (emailResult.success) {
+      console.log(`\n✅ Welcome email sent successfully!`);
+      console.log(`Message ID: ${emailResult.messageId}`);
+    } else {
+      console.log(`\n❌ Failed to send welcome email: ${emailResult.error}`);
+    }
+    
+    console.log('\nTest completed');
+    
+    return emailResult;
+  } catch (error) {
+    console.error('\n❌ Test failed:', error.message);
+    if (error.stack) {
+      console.error(error.stack);
+    }
+    throw error;
+  }
+}
+
+// Analyze the email sending process
+function analyzeEmailProcess() {
+  console.log('\n📋 EMAIL PROCESS ANALYSIS');
+  console.log('========================');
+  console.log('1. During signup, the emailService.sendWelcomeEmail function is called');
+  console.log('2. The function is called with user data (uid, email, name, etc.)');
+  console.log('3. The email is sent asynchronously and does not block registration');
+  console.log('4. Success/failure is logged but does not affect signup completion');
+  console.log('\nPossible issues if welcome emails are not being received:');
+  console.log('- Email configuration in .env might be incorrect');
+  console.log('- SMTP server might be blocking emails (check spam filters)');
+  console.log('- Promise handling might cause emails to not be sent before process exits');
+  console.log('- Welcome email template might have errors');
+}
+
+// Run the test
+console.log('Starting signup welcome email test...');
+testSignupEmailFlow()
+  .then(() => {
+    analyzeEmailProcess();
+    console.log('\nTest execution completed');
+  })
+  .catch(err => {
+    console.error('Test execution failed:', err);
+    process.exit(1);
+  }); 

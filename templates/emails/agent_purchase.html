@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your AI Agent Template is Ready</title>
+  <style>
+    /* Reset styles */
+    body, p, h1, h2, h3, h4, h5, h6, ul, ol, li {
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+      color: #333333;
+      background-color: #f5f5f5;
+    }
+    
+    /* Container */
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* Header */
+    .header {
+      background-color: #4a86e8;
+      padding: 30px 20px;
+      text-align: center;
+      color: #ffffff;
+    }
+    
+    .header h1 {
+      font-size: 28px;
+      margin-bottom: 5px;
+    }
+    
+    .header p {
+      font-size: 18px;
+      opacity: 0.9;
+    }
+    
+    /* Content */
+    .content {
+      padding: 30px 20px;
+    }
+    
+    .content h2 {
+      font-size: 22px;
+      margin-bottom: 15px;
+      color: #4a86e8;
+    }
+    
+    .content p {
+      margin-bottom: 15px;
+    }
+    
+    /* Order details */
+    .order-details {
+      background-color: #f9f9f9;
+      border-radius: 6px;
+      padding: 20px;
+      margin: 20px 0;
+      border-left: 4px solid #4a86e8;
+    }
+    
+    .order-details p {
+      margin-bottom: 10px;
+    }
+    
+    .order-details strong {
+      color: #555555;
+      display: inline-block;
+      width: 120px;
+    }
+    
+    /* Agent info */
+    .agent-info {
+      margin: 25px 0;
+      padding: 20px;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+    }
+    
+    .agent-info h3 {
+      color: #333333;
+      margin-bottom: 10px;
+      font-size: 20px;
+    }
+    
+    .agent-info p {
+      color: #555555;
+    }
+    
+    /* Instructions */
+    .instructions {
+      margin-top: 30px;
+    }
+    
+    .instructions h3 {
+      font-size: 20px;
+      margin-bottom: 15px;
+      color: #333333;
+    }
+    
+    .instructions ol {
+      margin-left: 25px;
+      margin-bottom: 20px;
+    }
+    
+    .instructions li {
+      margin-bottom: 10px;
+    }
+    
+    /* Button */
+    .button {
+      display: inline-block;
+      padding: 12px 25px;
+      background-color: #4a86e8;
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 4px;
+      font-weight: bold;
+      margin-top: 15px;
+    }
+    
+    /* Payment info */
+    .payment-info {
+      background-color: #f0f7ff;
+      border-radius: 6px;
+      padding: 20px;
+      margin: 20px 0;
+      border-left: 4px solid #4a86e8;
+    }
+    
+    .payment-info h3 {
+      color: #333333;
+      margin-bottom: 10px;
+      font-size: 20px;
+    }
+    
+    .payment-info p {
+      margin-bottom: 12px;
+    }
+    
+    .payment-status {
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-weight: bold;
+      margin-top: 5px;
+      background-color: #f8f8f8;
+    }
+    
+    .status-pending {
+      background-color: #fff8e1;
+      color: #f57c00;
+    }
+    
+    .status-completed {
+      background-color: #e8f5e9;
+      color: #388e3c;
+    }
+    
+    /* Download info */
+    .download-info {
+      margin-top: 20px;
+      padding: 20px;
+      background-color: #f9f9f9;
+      border-radius: 6px;
+      border-left: 4px solid #4a86e8;
+    }
+    
+    .download-button {
+      display: inline-block;
+      padding: 12px 25px;
+      background-color: #4a86e8;
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 4px;
+      font-weight: bold;
+      margin-top: 15px;
+    }
+    
+    .download-note {
+      margin-top: 10px;
+      font-size: 14px;
+      color: #777777;
+    }
+    
+    /* Footer */
+    .footer {
+      background-color: #f5f5f5;
+      padding: 30px 20px;
+      text-align: center;
+      color: #777777;
+      font-size: 14px;
+      border-top: 1px solid #e0e0e0;
+    }
+    
+    .footer p {
+      margin-bottom: 10px;
+    }
+    
+    .footer a {
+      color: #4a86e8;
+      text-decoration: none;
+    }
+    
+    /* Responsive */
+    @media only screen and (max-width: 480px) {
+      .header {
+        padding: 20px 15px;
+      }
+      
+      .header h1 {
+        font-size: 24px;
+      }
+      
+      .header p {
+        font-size: 16px;
+      }
+      
+      .content {
+        padding: 20px 15px;
+      }
+      
+      .order-details strong {
+        display: block;
+        margin-bottom: 5px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>{{headerTitle}}</h1>
+      <p>{{headerSubtitle}}</p>
+    </div>
+    
+    <div class="content">
+      <h2>Hello {{name}},</h2>
+      
+      <p>Thank you for your purchase. Your payment has been processed and your AI agent template is ready.</p>
+      
+      <div class="payment-info">
+        <h3>Payment Details</h3>
+        <p><strong>Order ID:</strong> {{orderId}}</p>
+        <p><strong>Order Date:</strong> {{orderDate}}</p>
+        <p><strong>Amount:</strong> {{currency}} {{price}}</p>
+        <p><strong>Status:</strong> <span class="payment-status status-completed">Completed</span></p>
+      </div>
+      
+      <div class="agent-info">
+        <h3>{{agentName}}</h3>
+        <p>{{agentDescription}}</p>
+      </div>
+      
+      {{#if downloadUrl}}
+        <div class="download-info">
+          <a href="{{downloadUrl}}" class="download-button">Download Your Template</a>
+          <p class="download-note">This download link will remain active for 30 days.</p>
+        </div>
+      {{/if}}
+      
+      <div class="instructions">
+        <h3>How to Use Your Agent Template</h3>
+        <p>Getting started with your new AI agent is simple:</p>
+        <ol>
+          <li>Open the attached template file</li>
+          <li>Copy the entire content of the template</li>
+          <li>Paste it into your preferred AI platform (like ChatGPT, Claude, or others)</li>
+          <li>Start interacting with your new agent!</li>
+        </ol>
+        
+        <p>You can customize the agent template to better suit your specific needs by modifying the instructions within the template.</p>
+      </div>
+      
+      <p>If you have any questions or need assistance with your agent template, please don't hesitate to contact our support team.</p>
+      
+      <a href="mailto:{{supportEmail}}" class="button">Contact Support</a>
+    </div>
+    
+    <div class="footer">
+      <p>&copy; {{currentYear}} AI Waverider. All rights reserved.</p>
+      <p>
+        <a href="{{websiteUrl}}">Visit our website</a> | 
+        <a href="{{websiteUrl}}/terms">Terms of Service</a> | 
+        <a href="{{websiteUrl}}/privacy">Privacy Policy</a>
+      </p>
+      <p>If you have any questions, please contact us at <a href="mailto:{{supportEmail}}">{{supportEmail}}</a></p>
+    </div>
+  </div>
+</body>
+</html> 

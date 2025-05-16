@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{title}} - AI Waverider</title>
+  <style>
+    /* Reset styles */
+    body, html {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background-color: #f9f9f9;
+    }
+    
+    /* Container */
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #ffffff;
+    }
+    
+    /* Header */
+    .header {
+      text-align: center;
+      padding: 20px 0;
+      background-color: #3498db;
+      color: white;
+    }
+    
+    /* Content */
+    .content {
+      padding: 20px;
+    }
+    
+    /* Update section */
+    .update-section {
+      margin: 20px 0;
+    }
+    
+    .section-title {
+      color: #3498db;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 5px;
+      margin-top: 25px;
+    }
+    
+    /* Card */
+    .card {
+      margin: 15px 0;
+      padding: 15px;
+      background-color: #f8f9fa;
+      border-left: 3px solid #3498db;
+      border-radius: 4px;
+    }
+    
+    /* Footer */
+    .footer {
+      text-align: center;
+      padding: 20px;
+      font-size: 12px;
+      color: #666;
+      background-color: #f4f4f4;
+    }
+    
+    /* Button */
+    .button {
+      display: inline-block;
+      padding: 10px 20px;
+      margin: 20px 0;
+      background-color: #3498db;
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 4px;
+      text-align: center;
+    }
+    
+    /* Stats */
+    .stats {
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      margin: 20px 0;
+    }
+    
+    .stat-box {
+      flex: 1;
+      min-width: 30%;
+      text-align: center;
+      padding: 15px;
+      margin: 5px;
+      background-color: #f0f7fd;
+      border-radius: 4px;
+    }
+    
+    .stat-number {
+      font-size: 24px;
+      font-weight: bold;
+      color: #3498db;
+    }
+    
+    .stat-label {
+      font-size: 14px;
+      color: #666;
+    }
+    
+    /* Responsive */
+    @media only screen and (max-width: 600px) {
+      .container {
+        width: 100%;
+      }
+      .content {
+        padding: 10px;
+      }
+      .stats {
+        flex-direction: column;
+      }
+      .stat-box {
+        margin: 5px 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>{{title}}</h1>
+    </div>
+    
+    <div class="content">
+      <p>Dear <span style="font-weight: bold; font-size: 1.2em;">{{name}},</span></p>
+      
+      <p>Here's your weekly update on what's happening in AI Waverider:</p>
+      
+      <div class="stats">
+        <div class="stat-box">
+          <div class="stat-number">{{newTools}}</div>
+          <div class="stat-label">New Tools</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-number">{{newAgents}}</div>
+          <div class="stat-label">New Agents</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-number">{{totalUsers}}</div>
+          <div class="stat-label">Active Users</div>
+        </div>
+      </div>
+      
+      {{{content}}}
+      
+      <div class="update-section">
+        <h3 class="section-title">Popular This Week</h3>
+        
+        {{{popularContent}}}
+      </div>
+      
+      <div class="update-section">
+        <h3 class="section-title">Tips & Tutorials</h3>
+        
+        {{{tipsContent}}}
+      </div>
+      
+      <div style="text-align: center;">
+        <a href="{{websiteUrl}}/dashboard" class="button">Visit Your Dashboard</a>
+      </div>
+      
+      <p>If you have any questions, please contact us at <a href="mailto:{{supportEmail}}">{{supportEmail}}</a>.</p>
+      
+      <p>Best regards,<br>The AI Waverider Team</p>
+    </div>
+    
+    <div class="footer">
+      <p>&copy; {{currentYear}} AI Waverider. All rights reserved.</p>
+      <p>
+        You received this email because you're a valued member of the AI Waverider community.<br>
+        You can <a href="{{websiteUrl}}/profile">manage your notification preferences</a> at any time.
+      </p>
+    </div>
+  </div>
+</body>
+</html> 

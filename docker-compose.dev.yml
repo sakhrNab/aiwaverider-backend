@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: backend_dev
+    ports:
+      - "4000:4000"
+    volumes:
+      - .:/usr/src/app # Mount current directory to app directory in container for live changes
+      - /usr/src/app/node_modules # Anonymous volume to prevent host node_modules overwriting container's
+      - ./server/aiwaverider8-privatekey.json:/usr/src/app/server/aiwaverider8-privatekey.json:ro # Mount key read-only
+    env_file:
+      - .env # Load environment variables from .env file
+    environment:
+      - NODE_ENV=development
+      - REDIS_HOST=redis # Override to use the service name
+      # Add any other overrides or Docker-specific dev vars here
+    depends_on:
+      - redis
+    networks:
+      - app_network_backend
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis_dev
+    ports:
+      - "6379:6379" # Expose Redis to host for direct access if needed (optional)
+    volumes:
+      - redis_dev_data:/data
+    networks:
+      - app_network_backend
+
+volumes:
+  redis_dev_data:
+
+networks:
+  app_network_backend:
+    driver: bridge

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to AI Waverider</title>
+  <style>
+    /* Reset styles */
+    body, html {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background-color: #f9f9f9;
+    }
+    
+    /* Container */
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #ffffff;
+    }
+    
+    /* Header */
+    .header {
+      text-align: center;
+      padding: 20px;
+      background-color: #4a86e8;
+      color: white;
+    }
+    
+    /* Content */
+    .content {
+      padding: 20px;
+    }
+    
+    /* Button */
+    .button {
+      display: inline-block;
+      padding: 10px 20px;
+      margin: 20px 0;
+      background-color: #4a86e8;
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 4px;
+      text-align: center;
+    }
+    
+    /* Footer */
+    .footer {
+      text-align: center;
+      padding: 20px;
+      font-size: 12px;
+      color: #666;
+      background-color: #f4f4f4;
+    }
+    
+    /* Features */
+    .features {
+      margin: 20px 0;
+    }
+    
+    .feature {
+      margin-bottom: 15px;
+    }
+    
+    .feature-icon {
+      display: inline-block;
+      width: 30px;
+      height: 30px;
+      margin-right: 10px;
+      background-color: #4a86e8;
+      color: white;
+      text-align: center;
+      line-height: 30px;
+      border-radius: 50%;
+    }
+    
+    /* Responsive */
+    @media only screen and (max-width: 600px) {
+      .container {
+        width: 100%;
+      }
+      .content {
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Welcome to AI Waverider!</h1>
+    </div>
+    
+    <div class="content">
+      <p>Dear <span style="font-weight: bold; font-size: 1.2em;">{{name}},</span></p>
+      
+      <p>Thank you for joining AI Waverider! We're excited to have you as part of our community.</p>
+      
+      <p>Here's what you can do with your new account:</p>
+      
+      <div class="features">
+        <div class="feature">
+          <span class="feature-icon">✓</span>
+          <strong>Create AI Agents:</strong> Build custom AI agents for various tasks.
+        </div>
+        
+        <div class="feature">
+          <span class="feature-icon">✓</span>
+          <strong>Access Tools:</strong> Utilize a growing library of integrated tools.
+        </div>
+        
+        <div class="feature">
+          <span class="feature-icon">✓</span>
+          <strong>Community:</strong> Join discussions and share your creations.
+        </div>
+        
+        <div class="feature">
+          <span class="feature-icon">✓</span>
+          <strong>Stay Updated:</strong> Receive the latest AI news and platform updates.
+        </div>
+      </div>
+      
+      <div style="text-align: center;">
+        <a href="{{websiteUrl}}/dashboard" class="button">Go to Dashboard</a>
+      </div>
+      
+      <p>If you have any questions, feel free to reply to this email or contact our support team.</p>
+      
+      <p>Best regards,<br>The AI Waverider Team</p>
+    </div>
+    
+    <div class="footer">
+      <p>&copy; {{currentYear}} AI Waverider. All rights reserved.</p>
+      <p>
+        You're receiving this email because you recently signed up for an account.<br>
+        If you did not create this account, please contact us immediately.
+      </p>
+    </div>
+  </div>
+</body>
+</html> 

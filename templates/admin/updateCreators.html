@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Update Agent Creators - Admin</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 30px;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 10px;
+    }
+    h1 {
+      color: #333;
+    }
+    .instruction {
+      background-color: #f9f9f9;
+      padding: 15px;
+      border-radius: 5px;
+      border-left: 4px solid #3498db;
+      margin-bottom: 20px;
+    }
+    .warning {
+      background-color: #fff8e1;
+      padding: 15px;
+      border-radius: 5px;
+      border-left: 4px solid #ffc107;
+      margin-bottom: 20px;
+    }
+    .button-container {
+      text-align: center;
+      margin: 30px 0;
+    }
+    .update-button {
+      background-color: #3498db;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      font-size: 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+    .update-button:hover {
+      background-color: #2980b9;
+    }
+    .update-button:disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
+    }
+    #result {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 5px;
+      border: 1px solid #eee;
+      min-height: 100px;
+      max-height: 300px;
+      overflow-y: auto;
+      display: none;
+    }
+    .success {
+      background-color: #e8f5e9;
+      border-color: #4caf50 !important;
+    }
+    .error {
+      background-color: #ffebee;
+      border-color: #f44336 !important;
+    }
+    .loading {
+      display: none;
+      text-align: center;
+      margin: 20px 0;
+    }
+    .spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #3498db;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 2s linear infinite;
+      margin: 0 auto;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .agent-list {
+      margin-top: 20px;
+    }
+    .agent-item {
+      padding: 10px;
+      border-bottom: 1px solid #eee;
+    }
+    .agent-item:last-child {
+      border-bottom: none;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Update Agent Creators</h1>
+    <p>Add username and role fields to all agent creator objects</p>
+  </header>
+
+  <div class="instruction">
+    <h3>What This Does</h3>
+    <p>This utility will update all agents in your database to ensure each agent has a creator object with the following structure:</p>
+    <pre>{
+  name: "Creator Name",
+  username: "CreatorUsername",
+  role: "Admin" or "Partner"
+}</pre>
+    <p>If an agent has a creator as a string, it will be converted to this structure. If an agent has no creator, a default one will be added.</p>
+  </div>
+
+  <div class="warning">
+    <h3>Important</h3>
+    <p>This operation will modify your database. Please make sure you have a backup of your agents collection before proceeding.</p>
+    <p>This process may take some time depending on the number of agents in your database.</p>
+  </div>
+
+  <div class="button-container">
+    <button id="updateButton" class="update-button">Update Agent Creators</button>
+  </div>
+
+  <div id="loading" class="loading">
+    <div class="spinner"></div>
+    <p>Updating agent creators... This may take a few moments.</p>
+  </div>
+
+  <div id="result"></div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const updateButton = document.getElementById('updateButton');
+      const loading = document.getElementById('loading');
+      const result = document.getElementById('result');
+
+      updateButton.addEventListener('click', function() {
+        // Confirm before proceeding
+        if (!confirm('Are you sure you want to update all agent creators? This cannot be undone.')) {
+          return;
+        }
+
+        // Show loading, hide result, disable button
+        loading.style.display = 'block';
+        result.style.display = 'none';
+        updateButton.disabled = true;
+
+        // Make API request
+        fetch('/api/admin/update-agent-creators', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        })
+        .then(response => response.json())
+        .then(data => {
+          // Hide loading
+          loading.style.display = 'none';
+          
+          // Display result
+          result.style.display = 'block';
+          
+          if (data.success) {
+            result.className = 'success';
+            
+            // Create result HTML
+            const stats = data.stats;
+            let html = `
+              <h3>Update Successful ✅</h3>
+              <p><strong>Total agents processed:</strong> ${stats.total}</p>
+              <p><strong>Agents updated:</strong> ${stats.updated}</p>
+              <p><strong>Agents skipped (already had correct structure):</strong> ${stats.skipped}</p>
+              <p><strong>Batches committed:</strong> ${stats.batches}</p>
+            `;
+            
+            // Add updated agents list if available
+            if (data.updatedAgents && data.updatedAgents.length > 0) {
+              html += `<h4>Sample of Updated Agents:</h4>
+                <div class="agent-list">`;
+              
+              data.updatedAgents.forEach(agent => {
+                html += `
+                  <div class="agent-item">
+                    <strong>${agent.name}</strong> (ID: ${agent.id})<br>
+                    Original creator: ${agent.originalCreator}<br>
+                    New creator: ${agent.newCreator}
+                  </div>
+                `;
+              });
+              
+              html += `</div>`;
+              
+              if (stats.updated > data.updatedAgents.length) {
+                html += `<p><em>Showing ${data.updatedAgents.length} of ${stats.updated} updated agents</em></p>`;
+              }
+            }
+            
+            result.innerHTML = html;
+          } else {
+            result.className = 'error';
+            result.innerHTML = `
+              <h3>Update Failed ❌</h3>
+              <p><strong>Error:</strong> ${data.message || 'Unknown error'}</p>
+              <p><strong>Details:</strong> ${data.error || 'No details available'}</p>
+            `;
+          }
+          
+          // Re-enable button
+          updateButton.disabled = false;
+        })
+        .catch(error => {
+          // Hide loading
+          loading.style.display = 'none';
+          
+          // Display error
+          result.style.display = 'block';
+          result.className = 'error';
+          result.innerHTML = `
+            <h3>Update Failed ❌</h3>
+            <p><strong>Error:</strong> ${error.message || 'Network error'}</p>
+            <p>Please check the console for more details.</p>
+          `;
+          
+          // Re-enable button
+          updateButton.disabled = false;
+          
+          console.error('Error updating agent creators:', error);
+        });
+      });
+    });
+  </script>
+</body>
+</html> 

@@ -1,0 +1,28 @@
+# Use an official Node runtime as a parent image
+FROM node:18-alpine AS development
+
+# Set the working directory in the container
+WORKDIR /usr/src/app
+
+# Copy package.json and package-lock.json (or yarn.lock)
+COPY package*.json ./
+
+# Install app dependencies
+RUN npm install
+
+# Copy the rest of the application code
+COPY . .
+
+# Ensure the Firebase private key is accessible if not mounted via compose
+# If you always mount it, this line can be commented out or removed.
+# COPY server/aiwaverider8-privatekey.json server/aiwaverider8-privatekey.json
+
+# Make port 4000 available to the world outside this container
+EXPOSE 4000
+
+# Define the command to run the app
+CMD ["node", "index.js"]
+# If you use nodemon for development for auto-restarts on code change:
+# First, ensure nodemon is a dev dependency: npm i --save-dev nodemon
+# Then, add a script to package.json: "dev": "nodemon index.js"
+# CMD ["npm", "run", "dev"]

@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{title}} - AI Waverider</title>
+  <style>
+    /* Reset styles */
+    body, html {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background-color: #f9f9f9;
+    }
+    
+    /* Container */
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #ffffff;
+    }
+    
+    /* Header */
+    .header {
+      text-align: center;
+      padding: 30px 0;
+      background-color: #27ae60;
+      color: white;
+      margin-bottom: 20px;
+    }
+    
+    /* Content */
+    .content {
+      padding: 20px;
+    }
+    
+    /* Update box */
+    .update-box {
+      background-color: #f8f9fa;
+      border-left: 4px solid #27ae60;
+      padding: 15px;
+      margin: 20px 0;
+    }
+    
+    /* Feature list */
+    .feature-list {
+      margin: 20px 0;
+    }
+    
+    .feature-item {
+      margin-bottom: 15px;
+    }
+    
+    .feature-title {
+      font-weight: bold;
+      color: #27ae60;
+    }
+    
+    /* Button */
+    .button {
+      display: inline-block;
+      padding: 10px 20px;
+      margin: 20px 0;
+      background-color: #27ae60;
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 4px;
+      text-align: center;
+    }
+    
+    /* Footer */
+    .footer {
+      text-align: center;
+      padding: 20px;
+      font-size: 12px;
+      color: #666;
+      background-color: #f4f4f4;
+      margin-top: 20px;
+    }
+    
+    /* Banner image */
+    .banner-image {
+      width: 100%;
+      max-height: 200px;
+      object-fit: cover;
+      margin-bottom: 20px;
+    }
+    
+    /* Responsive */
+    @media only screen and (max-width: 600px) {
+      .container {
+        width: 100%;
+      }
+      .content {
+        padding: 10px;
+      }
+      .header {
+        padding: 20px 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>{{title}}</h1>
+    </div>
+    
+    <div class="content">
+      <p>Dear <span style="font-weight: bold; font-size: 1.2em;">{{name}},</span></p>
+      
+      {{#if imageUrl}}
+      <img src="{{imageUrl}}" alt="Update Banner" class="banner-image">
+      {{/if}}
+      
+      <p>We're excited to share some updates with you about AI Waverider:</p>
+      
+      <div class="update-box">
+        {{{content}}}
+      </div>
+      
+      {{#if features}}
+      <div class="feature-list">
+        <h3>What's New:</h3>
+        {{#each features}}
+        <div class="feature-item">
+          <div class="feature-title">{{this.title}}</div>
+          <p>{{this.description}}</p>
+        </div>
+        {{/each}}
+      </div>
+      {{/if}}
+      
+      {{#if actionUrl}}
+      <div style="text-align: center;">
+        <a href="{{actionUrl}}" class="button">{{actionText}}</a>
+      </div>
+      {{/if}}
+      
+      <p>If you have any questions or need assistance, please contact us at <a href="mailto:{{supportEmail}}">{{supportEmail}}</a>.</p>
+      
+      <p>Thank you for being part of our journey!</p>
+      
+      <p>Best regards,<br>The AI Waverider Team</p>
+    </div>
+    
+    <div class="footer">
+      <p>&copy; {{currentYear}} AI Waverider. All rights reserved.</p>
+      <p>
+        You received this email because you're a valued member of the AI Waverider community.<br>
+        You can <a href="{{websiteUrl}}/profile">manage your notification preferences</a> at any time.
+      </p>
+    </div>
+  </div>
+</body>
+</html> 

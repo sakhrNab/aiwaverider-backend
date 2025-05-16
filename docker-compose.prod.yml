@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: backend_prod
+    ports:
+      # Only expose if directly accessing, otherwise rely on reverse proxy
+      # - "4000:4000" 
+    env_file:
+      - .env.prod # Load production environment variables
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+      # Ensure FIREBASE_SERVICE_ACCOUNT_PATH is set correctly in .env.prod
+      # It should be the path inside the container, e.g., "server/aiwaverider8-privatekey.json"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - app_network_backend_prod # Use a production-specific network
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis_prod
+    # For production, consider not exposing Redis port directly to the host if not needed
+    # ports:
+    #  - "6379:6379" 
+    command: redis-server --save 60 1 --loglevel warning # Example persistence config
+    # If your Redis needs a password, set it via config file or command:
+    # command: redis-server --requirepass YOUR_REDIS_PASSWORD
+    volumes:
+      - redis_prod_data:/data
+    restart: unless-stopped
+    networks:
+      - app_network_backend_prod
+
+volumes:
+  redis_prod_data:
+
+networks:
+  app_network_backend_prod:
+    driver: bridge

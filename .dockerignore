@@ -1,0 +1,52 @@
+# Node modules and dependencies
+node_modules
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Build artifacts
+/dist
+/build
+/.next
+/.nuxt
+/.cache
+
+# Environment files
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# System Files
+.DS_Store
+Thumbs.db
+
+# Package files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Large directories that don't need to be in the Docker context
+/public/uploads
+/public/assets
+/src/assets/videos
+/src/assets/images
+
+# Logs
+logs
+*.log
+
+# Testing
+/coverage
+.nyc_output
+tests
+test

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="New AI Agents available on AI Waverider">
+  <title>{{title}} - AI Waverider</title>
+  <style>
+    /* Reset styles */
+    body, html {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background-color: #f9f9f9;
+    }
+    
+    /* Container */
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #ffffff;
+    }
+    
+    /* Header */
+    .header {
+      text-align: center;
+      padding: 20px 0;
+      background-color: #3498db;
+      color: white;
+    }
+    
+    /* Content */
+    .content {
+      padding: 20px;
+    }
+    
+    /* Update box */
+    .update-box {
+      margin: 20px 0;
+      padding: 15px;
+      background-color: #eaf2f8;
+      border-left: 4px solid #3498db;
+      border-radius: 4px;
+    }
+    
+    /* Agent details */
+    .agent-details {
+      margin: 15px 0;
+      padding: 15px;
+      background-color: #f8f9fa;
+      border-radius: 4px;
+    }
+    
+    /* Feature list */
+    .feature-list {
+      list-style-type: none;
+      padding-left: 0;
+    }
+    
+    .feature-list li {
+      margin-bottom: 10px;
+      padding-left: 25px;
+      position: relative;
+    }
+    
+    .feature-list li:before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: #3498db;
+    }
+    
+    /* Footer */
+    .footer {
+      text-align: center;
+      padding: 20px;
+      font-size: 12px;
+      color: #666;
+      background-color: #f4f4f4;
+    }
+    
+    /* Call to action */
+    .cta {
+      display: block;
+      text-align: center;
+      margin: 20px 0;
+    }
+    
+    /* Button */
+    .button {
+      display: inline-block;
+      padding: 10px 20px;
+      margin: 20px 0;
+      background-color: #3498db;
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 4px;
+      text-align: center;
+    }
+    
+    /* Responsive */
+    @media only screen and (max-width: 600px) {
+      .container {
+        width: 100%;
+      }
+      .content {
+        padding: 10px;
+      }
+    }
+
+    /* Agent cards section */
+    .agents-container {
+      margin: 20px 0;
+    }
+
+    .agents-heading {
+      font-size: 18px;
+      margin-bottom: 15px;
+      color: #333;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 8px;
+    }
+
+    .agent-card {
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 15px;
+      background-color: #fff;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      display: block;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .agent-card:hover {
+      box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    }
+
+    .agent-image {
+      width: 100%;
+      height: 140px;
+      object-fit: cover;
+      border-bottom: 1px solid #eee;
+    }
+
+    .agent-info {
+      padding: 12px;
+    }
+
+    .agent-title {
+      font-size: 16px;
+      font-weight: bold;
+      margin-bottom: 5px;
+      color: #333;
+    }
+
+    .agent-creator {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 5px;
+    }
+
+    .agent-rating {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .star {
+      color: #ffc107;
+      font-size: 14px;
+      margin-right: 2px;
+    }
+
+    .rating-count {
+      font-size: 12px;
+      color: #666;
+      margin-left: 5px;
+    }
+
+    .agent-price {
+      font-weight: bold;
+      color: #3498db;
+    }
+    
+    .price-discount {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .original-price {
+      text-decoration: line-through;
+      color: #999;
+      font-size: 12px;
+      margin-right: 8px;
+    }
+    
+    .discount-badge {
+      background-color: #e74c3c;
+      color: white;
+      font-size: 11px;
+      font-weight: bold;
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+    
+    .location {
+      font-size: 12px;
+      color: #777;
+      margin-top: 4px;
+    }
+    
+    .promo-code {
+      font-size: 12px;
+      color: #9b59b6;
+      margin-top: 4px;
+    }
+    
+    .expiry {
+      font-size: 11px;
+      color: #e74c3c;
+      margin-top: 4px;
+    }
+
+    /* No agents message */
+    .no-agents {
+      text-align: center;
+      padding: 20px;
+      background-color: #f8f9fa;
+      border-radius: 4px;
+    }
+    
+    /* New badge */
+    .new-badge {
+      display: inline-block;
+      background-color: #3498db;
+      color: white;
+      font-size: 12px;
+      font-weight: bold;
+      padding: 3px 8px;
+      border-radius: 3px;
+      margin-bottom: 10px;
+    }
+
+    /* Custom style for the announcement text */
+    .announcement-text {
+      font-size: 16px;
+      line-height: 1.6;
+      margin-bottom: 15px;
+    }
+
+    /* Agents container within update box */
+    .update-box .agents-container {
+      margin-top: 20px;
+    }
+    
+    .update-box .agent-card {
+      background-color: #ffffff;
+      border: 1px solid #d9e8f7;
+      margin-bottom: 12px;
+    }
+    
+    .update-box .agents-heading {
+      color: #2980b9;
+      margin-top: 5px;
+      padding-top: 10px;
+      border-top: 1px solid #b3d1e8;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>{{headerTitle}}</h1>
+    </div>
+    
+    <div class="content">
+      <p>Dear <span style="font-weight: bold; font-size: 1.2em;">{{name}},</span></p>
+      
+      <div class="update-box">
+        <div class="new-badge">NEW</div>
+        {{#if content}}
+        <div class="announcement-text">{{{content}}}</div>
+        {{/if}}
+        
+        <div class="agents-container">
+          <h3 class="agents-heading">Latest AI Agents</h3>
+          
+          {{#if latestAgents.length}}
+            {{#each latestAgents}}
+            <a href="{{url}}" class="agent-card">
+              <img src="{{imageUrl}}" alt="{{name}}" class="agent-image">
+              <div class="agent-info">
+                <div class="agent-title">{{name}}</div>
+                <div class="agent-creator">by {{#if creator.username}}{{creator.username}}{{else}}{{#if creator.name}}{{creator.name}}{{else}}{{#if creator}}{{creator}}{{else}}Admin{{/if}}{{/if}}{{/if}}</div>
+                
+                <div class="agent-rating">
+                  {{#times rating.average}}
+                  <span class="star">★</span>
+                  {{/times}}
+                  <span class="rating-count">({{rating.count}})</span>
+                </div>
+                
+                {{#if location}}
+                <div class="location">{{location}}</div>
+                {{/if}}
+                
+                <div class="price-discount">
+                  <div>
+                    {{#if priceDetails.originalPrice}}
+                    <span class="original-price">{{formatPrice priceDetails.originalPrice}}</span>
+                    {{/if}}
+                    <span class="agent-price">{{formatPrice price}}</span>
+                  </div>
+                  
+                  {{#if priceDetails.discountPercentage}}
+                  <span class="discount-badge">-{{priceDetails.discountPercentage}}%</span>
+                  {{/if}}
+                </div>
+                
+                {{#if promoCode}}
+                <div class="promo-code">{{promoCode}}</div>
+                {{/if}}
+                
+                {{#if expiryDate}}
+                <div class="expiry">Ends on {{formatDate expiryDate}}</div>
+                {{/if}}
+              </div>
+            </a>
+            {{/each}}
+          {{else}}
+            <div class="no-agents">
+              <p>We're currently preparing new AI agents for you. Stay tuned for exciting updates coming soon!</p>
+            </div>
+          {{/if}}
+        </div>
+      </div>
+      
+      <div class="cta">
+        <a href="{{websiteUrl}}/agents" class="button">Try New Agents</a>
+      </div>
+      
+      <p>If you have any questions, please contact us at <a href="mailto:{{supportEmail}}">{{supportEmail}}</a>.</p>
+      
+      <p>Best regards,<br>The AI Waverider Team</p>
+    </div>
+    
+    <div class="footer">
+      <p>&copy; {{currentYear}} AI Waverider. All rights reserved.</p>
+      <p>
+        You received this email because you opted in to AI Agent updates from AI Waverider.<br>
+        You can <a href="{{websiteUrl}}/profile/notification-preferences">manage your notification preferences</a> at any time.
+      </p>
+    </div>
+  </div>
+</body>
+</html> 
