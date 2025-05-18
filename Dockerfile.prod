@@ -10,11 +10,6 @@ RUN npm install --omit=dev
 
 COPY . .
 
-# Ensure the Firebase private key is copied into the image
-# Make sure this file is present in the build context and not in .dockerignore
-COPY server/aiwaverider8-privatekey.json server/aiwaverider8-privatekey.json
-
-
 # Stage 2: Production stage
 FROM node:18-alpine AS production
 
