@@ -5,6 +5,10 @@ WORKDIR /usr/src/app
 
 COPY package*.json ./
 
+# Add this at the end of your Dockerfile
+RUN mkdir -p /usr/src/app/logs && \
+    chown -R node:node /usr/src/app/logs
+
 # Install production dependencies only
 RUN npm install --omit=dev
 
