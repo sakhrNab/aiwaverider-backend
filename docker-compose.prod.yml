@@ -11,11 +11,19 @@ services:
       - "4000:4000" 
     env_file:
       - .env.production # Load production environment variables
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/usr/src/app/server/aiwaverider8-privatekey.json
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_TLS=false
     depends_on:
       - redis
     restart: unless-stopped
     networks:
       - app_network_backend_prod # Use a production-specific network
+    volumes:
+      - ./server:/usr/src/app/server
 
   redis:
     image: redis:7-alpine
