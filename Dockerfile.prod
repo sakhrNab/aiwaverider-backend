@@ -27,6 +27,6 @@ COPY --from=builder /usr/src/app ./
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 USER appuser
 
-EXPOSE 4000
+EXPOSE 8080
 
 CMD ["node", "index.js"]

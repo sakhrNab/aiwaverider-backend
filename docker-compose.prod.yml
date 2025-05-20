@@ -6,9 +6,9 @@ services:
       context: .
       dockerfile: Dockerfile.prod
     container_name: backend_prod
-    ports:
-      # Only expose if directly accessing, otherwise rely on reverse proxy
-      - "4000:4000" 
+    # Remove direct port exposure as nginx will handle this
+    # ports:
+    #   - "8080:8080"
     env_file:
       - .env.production # Load production environment variables
     environment:
@@ -24,6 +24,31 @@ services:
       - app_network_backend_prod # Use a production-specific network
     volumes:
       - ./server:/usr/src/app/server
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx_prod
+    ports:
+      - "81:80"  # Map external port 81 to internal port 80 for HTTP
+      - "443:443" # Keep port 443 for HTTPS
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/ssl:/etc/nginx/ssl
+      - ./nginx/certbot/conf:/etc/letsencrypt
+      - ./nginx/certbot/www:/var/www/certbot
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - app_network_backend_prod
+
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    volumes:
+      - ./nginx/certbot/conf:/etc/letsencrypt
+      - ./nginx/certbot/www:/var/www/certbot
+    command: certonly --webroot --webroot-path=/var/www/certbot --email admin@aiwaverider.com --agree-tos --no-eff-email -d api.aiwaverider.com
 
   redis:
     image: redis:7-alpine
