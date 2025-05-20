@@ -35,11 +35,10 @@ else
     echo -e "${GREEN}Docker Compose already installed${NC}"
 fi
 
-# Configure firewall to allow traffic on port 81 and 443
+# Configure firewall to allow traffic on port 81
 echo -e "${YELLOW}Configuring firewall...${NC}"
 apt install -y ufw
 ufw allow 81/tcp
-ufw allow 443/tcp
 ufw allow ssh
 # Only enable if not already enabled to avoid locking yourself out
 if ! ufw status | grep -q "Status: active"; then
@@ -51,24 +50,10 @@ fi
 echo -e "${YELLOW}Running deployment script...${NC}"
 bash ./deploy.sh
 
-# Check for SSL certificates
-echo -e "${YELLOW}Checking for SSL certificates...${NC}"
-if [ ! -d "nginx/certbot/conf/live/api.aiwaverider.com" ]; then
-    echo -e "${YELLOW}No SSL certificates found. Will use HTTP only for now.${NC}"
-    # Use the HTTP-only configuration
-    cp nginx/conf.d/api.http-only.conf nginx/conf.d/api.conf
-    docker-compose -f docker-compose.prod.yml restart nginx
-    
-    echo -e "${YELLOW}To set up SSL certificates later, run:${NC}"
-    echo -e "  docker-compose -f docker-compose.prod.yml run --rm certbot"
-    echo -e "  cp nginx/conf.d/api.https.conf nginx/conf.d/api.conf"
-    echo -e "  docker-compose -f docker-compose.prod.yml restart nginx"
-else
-    echo -e "${GREEN}SSL certificates found. Using HTTPS configuration.${NC}"
-    # Use the HTTPS configuration with redirection
-    cp nginx/conf.d/api.https.conf nginx/conf.d/api.conf
-    docker-compose -f docker-compose.prod.yml restart nginx
-fi
+# Use HTTP-only configuration since port 443 is already in use
+echo -e "${YELLOW}Setting up HTTP-only configuration (port 443 is already in use)...${NC}"
+cp nginx/conf.d/api.http-only.conf nginx/conf.d/api.conf
+docker-compose -f docker-compose.prod.yml restart nginx || true
 
 # Set up monitoring
 echo -e "${YELLOW}Setting up monitoring...${NC}"
@@ -77,7 +62,11 @@ bash ./setup-monitoring.sh
 echo -e "${GREEN}Deployment to Digital Ocean completed!${NC}"
 echo -e "Your API should now be accessible at:"
 echo -e "  HTTP: http://api.aiwaverider.com:81"
-echo -e "  HTTPS: https://api.aiwaverider.com (if SSL is configured)"
+echo -e ""
+echo -e "Note: HTTPS (port 443) configuration was not set up because the port is already in use by another service."
+echo -e "If you want to use HTTPS, you'll need to:"
+echo -e "  1. Configure your existing web server to proxy requests to port 81"
+echo -e "  2. Set up SSL certificates for api.aiwaverider.com in your existing web server"
 echo -e ""
 echo -e "To verify the API is running correctly, you can use:"
 echo -e "  curl http://api.aiwaverider.com:81/api/health"

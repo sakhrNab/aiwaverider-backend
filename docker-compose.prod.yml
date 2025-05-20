@@ -26,29 +26,17 @@ services:
       - ./server:/usr/src/app/server
 
   nginx:
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
     container_name: nginx_prod
     ports:
       - "81:80"  # Map external port 81 to internal port 80 for HTTP
-      - "443:443" # Keep port 443 for HTTPS
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d
-      - ./nginx/ssl:/etc/nginx/ssl
-      - ./nginx/certbot/conf:/etc/letsencrypt
-      - ./nginx/certbot/www:/var/www/certbot
     depends_on:
       - backend
     restart: unless-stopped
     networks:
       - app_network_backend_prod
-
-  certbot:
-    image: certbot/certbot
-    container_name: certbot
-    volumes:
-      - ./nginx/certbot/conf:/etc/letsencrypt
-      - ./nginx/certbot/www:/var/www/certbot
-    command: certonly --webroot --webroot-path=/var/www/certbot --email admin@aiwaverider.com --agree-tos --no-eff-email -d api.aiwaverider.com
 
   redis:
     image: redis:7-alpine

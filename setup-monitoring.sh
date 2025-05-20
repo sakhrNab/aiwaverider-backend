@@ -20,7 +20,6 @@ cat > ~/monitoring/health-check.sh << 'EOF'
 
 # Configuration
 API_URL_HTTP="http://api.aiwaverider.com:81/api/health"
-API_URL_HTTPS="https://api.aiwaverider.com/api/health"
 FRONTEND_URL="https://aiwaverider.com"
 EMAIL="your-email@example.com"
 SLACK_WEBHOOK="https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK" # Optional
@@ -33,21 +32,6 @@ if [ "$API_HTTP_STATUS" != "200" ]; then
     
     # Send email alert
     echo $MESSAGE | mail -s "ALERT: AIWaverider API HTTP Down" $EMAIL
-    
-    # Send Slack alert if configured
-    if [ -n "$SLACK_WEBHOOK" ] && [ "$SLACK_WEBHOOK" != "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK" ]; then
-        curl -s -X POST -H 'Content-type: application/json' --data "{\"text\":\"🔴 $MESSAGE\"}" $SLACK_WEBHOOK
-    fi
-fi
-
-# Check API health via HTTPS
-API_HTTPS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -k $API_URL_HTTPS)
-if [ "$API_HTTPS_STATUS" != "200" ]; then
-    MESSAGE="API HTTPS endpoint is down! Status code: $API_HTTPS_STATUS"
-    echo $MESSAGE
-    
-    # Send email alert
-    echo $MESSAGE | mail -s "ALERT: AIWaverider API HTTPS Down" $EMAIL
     
     # Send Slack alert if configured
     if [ -n "$SLACK_WEBHOOK" ] && [ "$SLACK_WEBHOOK" != "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK" ]; then
