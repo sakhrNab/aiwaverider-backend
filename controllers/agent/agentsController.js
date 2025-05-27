@@ -315,10 +315,322 @@ const getAgents = async (req, res) => {
 };
 
 const getFeaturedAgents = async (req, res) => { /* ... your existing code ... */ };
-const getAgentById = async (req, res) => { /* ... your existing code ... */ };
-const toggleWishlist = async (req, res) => { /* ... your existing code ... */ };
-const getWishlists = async (req, res) => { /* ... your existing code ... */ };
-const getWishlistById = async (req, res) => { /* ... your existing code ... */ };
+/**
+ * Get a single agent by ID
+ * @param {object} req - Express request object
+ * @param {object} res - Express response object
+ */
+const getAgentById = async (req, res) => {
+  try {
+    // Get agentId from either params.id or params.agentId
+    const agentId = req.params.id || req.params.agentId;
+    
+    // Log the request details for debugging
+    console.log(`Attempting to get agent with ID: "${agentId}"`);
+    
+    // Basic validation - only check if it exists and is a string
+    if (!agentId || typeof agentId !== 'string') {
+      console.error('Invalid agent ID format:', agentId);
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid agent ID format',
+        error: 'Agent ID must be a valid string' 
+      });
+    }
+    
+    // Clean the agent ID - accept more formats
+    let cleanAgentId = agentId.trim();
+    
+    // Only check for actual path separators (/ or \), NOT hyphens
+    // Hyphens are valid in IDs like "agent-41"
+    if (cleanAgentId.includes('/') || cleanAgentId.includes('\\')) {
+      console.log(`Agent ID contains actual path separators, extracting ID portion`);
+      const parts = cleanAgentId.split(/[/\\]/);
+      cleanAgentId = parts[parts.length - 1];
+      console.log(`Extracted ID from path: ${cleanAgentId}`);
+      
+      // Check again for path separators after extraction to prevent directory traversal
+      if (cleanAgentId.includes('/') || cleanAgentId.includes('\\')) {
+        console.error('Agent ID still contains path separators after cleaning:', cleanAgentId);
+        return res.status(400).json({ 
+          success: false,
+          message: 'Invalid agent ID format',
+          error: 'Agent ID must be a valid string without path separators' 
+        });
+      }
+    }
+    
+    // For standard "agent-X" format, we have two options:
+    // 1. Use the ID as is (agent-41)
+    // 2. Strip the prefix and use just the number (41)
+    
+    let originalId = cleanAgentId; // Save original ID before any transformations
+    
+    // Check if it's prefixed with 'agent-' and strip it if needed
+    if (cleanAgentId.startsWith('agent-')) {
+      const numericPart = cleanAgentId.substring(6);
+      // Only use the numeric part if it looks valid
+      if (/^\d+$/.test(numericPart)) {
+        cleanAgentId = numericPart;
+        console.log(`Stripped 'agent-' prefix, using numeric ID: ${cleanAgentId}`);
+      }
+    }
+    
+    // Fetch the agent document - first try with cleaned ID
+    let agentDoc = await db.collection('agents').doc(cleanAgentId).get();
+    
+    // If not found and we modified the ID, try with the original format
+    if (!agentDoc.exists && cleanAgentId !== originalId) {
+      console.log(`Agent not found with cleaned ID: ${cleanAgentId}, trying original ID: ${originalId}`);
+      agentDoc = await db.collection('agents').doc(originalId).get();
+    }
+    
+    if (!agentDoc.exists) {
+      console.error(`Agent not found with either ID format: ${cleanAgentId} or ${originalId}`);
+      return res.status(404).json({ 
+        success: false,
+        message: 'Agent not found',
+        error: `No agent exists with ID: ${agentId}` 
+      });
+    }
+    
+    // Get agent data
+    const agentData = {
+      id: agentDoc.id,
+      ...agentDoc.data()
+    };
+    
+    // Fetch reviews related to this agent
+    const reviewsSnapshot = await db.collection('reviews')
+      .where('agentId', '==', cleanAgentId)
+      .orderBy('createdAt', 'desc')
+      .limit(5)
+      .get();
+    
+    const reviews = [];
+    reviewsSnapshot.forEach(doc => {
+      reviews.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+    
+    // Add reviews to the agent data
+    agentData.reviews = reviews;
+    
+    // Calculate average rating if there are reviews
+    if (reviews.length > 0) {
+      const totalRating = reviews.reduce((sum, review) => sum + (review.rating || 0), 0);
+      agentData.averageRating = totalRating / reviews.length;
+      agentData.reviewCount = reviews.length;
+    }
+    
+    // Return successful response
+    return res.status(200).json({
+      success: true,
+      message: 'Agent retrieved successfully',
+      data: agentData
+    });
+    
+  } catch (error) {
+    console.error('Error getting agent by ID:', error);
+    // Return structured error response
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve agent',
+      error: error.message,
+      details: {
+        code: error.code,
+        path: req.path,
+        params: req.params
+      }
+    });
+  }
+};
+/**
+ * Toggle agent in user's wishlist (add or remove)
+ */
+const toggleWishlist = async (req, res) => {
+  try {
+    // Extract agentId and sanitize it
+    let agentId = req.params.agentId;
+    
+    // Check if the ID contains extra path segments
+    if (agentId && agentId.includes('/')) {
+      agentId = agentId.split('/')[0];
+    }
+    
+    // Check if the ID contains query parameters
+    if (agentId && agentId.includes('?')) {
+      agentId = agentId.split('?')[0];
+    }
+    
+    // Validate agent ID
+    if (!agentId || typeof agentId !== 'string' || agentId.trim() === '') {
+      console.error('Invalid agent ID for wishlist toggle:', agentId);
+      return res.status(400).json({ error: 'Invalid agent ID provided' });
+    }
+
+    const sanitizedAgentId = agentId.trim();
+    const { uid } = req.user; // From auth middleware
+    
+    // Check if agent exists
+    const agentDoc = await db.collection('agents').doc(sanitizedAgentId).get();
+    if (!agentDoc.exists) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+    
+    // Wishlist ID is a combination of user ID and agent ID
+    const wishlistId = `${uid}_${sanitizedAgentId}`;
+    const wishlistRef = db.collection('wishlists').doc(wishlistId);
+    
+    // Check if wishlist item exists
+    const wishlistDoc = await wishlistRef.get();
+    
+    if (wishlistDoc.exists) {
+      // If it exists, remove it
+      await wishlistRef.delete();
+      
+      // Decrement wishlist count on agent
+      const agentRef = db.collection('agents').doc(sanitizedAgentId);
+      await db.runTransaction(async (transaction) => {
+        const agentDoc = await transaction.get(agentRef);
+        if (agentDoc.exists) {
+          const currentCount = agentDoc.data().wishlistCount || 0;
+          transaction.update(agentRef, { 
+            wishlistCount: Math.max(0, currentCount - 1) 
+          });
+        }
+      });
+      
+      return res.status(200).json({ 
+        message: 'Agent removed from wishlist',
+        inWishlist: false
+      });
+    } else {
+      // If it doesn't exist, add it
+      await wishlistRef.set({
+        userId: uid,
+        agentId: sanitizedAgentId,
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      
+      // Increment wishlist count on agent
+      const agentRef = db.collection('agents').doc(sanitizedAgentId);
+      await db.runTransaction(async (transaction) => {
+        const agentDoc = await transaction.get(agentRef);
+        if (agentDoc.exists) {
+          const currentCount = agentDoc.data().wishlistCount || 0;
+          transaction.update(agentRef, { 
+            wishlistCount: currentCount + 1 
+          });
+        }
+      });
+      
+      return res.status(201).json({ 
+        message: 'Agent added to wishlist',
+        inWishlist: true
+      });
+    }
+  } catch (error) {
+    console.error('Error toggling wishlist:', error);
+    return res.status(500).json({ error: 'Failed to update wishlist' });
+  }
+};
+/**
+ * Get agent wishlists for the current user
+ */
+const getWishlists = async (req, res) => {
+  try {
+    const { uid } = req.user; // From auth middleware
+    
+    // Query wishlists for this user
+    const wishlistsSnapshot = await db.collection('wishlists')
+      .where('userId', '==', uid)
+      .get();
+    
+    const agentIds = [];
+    wishlistsSnapshot.forEach(doc => {
+      agentIds.push(doc.data().agentId);
+    });
+    
+    // If no wishlisted agents, return empty array
+    if (agentIds.length === 0) {
+      return res.status(200).json({ agents: [] });
+    }
+    
+    // Fetch agent details for each ID
+    // Note: Firestore doesn't support direct "where in" with more than 10 items
+    const agents = [];
+    
+    // Process in batches of 10 if there are many agent IDs
+    for (let i = 0; i < agentIds.length; i += 10) {
+      const batchIds = agentIds.slice(i, i + 10);
+      const batchSnapshot = await db.collection('agents')
+        .where(admin.firestore.FieldPath.documentId(), 'in', batchIds)
+        .get();
+      
+      batchSnapshot.forEach(doc => {
+        agents.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+    }
+    
+    return res.status(200).json({ agents });
+  } catch (error) {
+    console.error('Error fetching wishlists:', error);
+    return res.status(500).json({ error: 'Failed to fetch wishlists' });
+  }
+};
+
+/**
+ * Get a specific wishlist by ID
+ */
+const getWishlistById = async (req, res) => {
+  try {
+    // Extract wishlistId and sanitize it
+    let wishlistId = req.params.wishlistId;
+    
+    // Check if the ID contains extra path segments
+    if (wishlistId && wishlistId.includes('/')) {
+      wishlistId = wishlistId.split('/')[0];
+    }
+    
+    // Check if the ID contains query parameters
+    if (wishlistId && wishlistId.includes('?')) {
+      wishlistId = wishlistId.split('?')[0];
+    }
+    
+    // Validate wishlist ID
+    if (!wishlistId || typeof wishlistId !== 'string' || wishlistId.trim() === '') {
+      console.error('Invalid wishlist ID:', wishlistId);
+      return res.status(400).json({ error: 'Invalid wishlist ID provided' });
+    }
+
+    const sanitizedWishlistId = wishlistId.trim();
+    
+    // Fetch the wishlist document
+    const wishlistDoc = await db.collection('wishlists').doc(sanitizedWishlistId).get();
+    
+    if (!wishlistDoc.exists) {
+      return res.status(404).json({ error: 'Wishlist not found' });
+    }
+    
+    // Get the wishlist data
+    const wishlistData = {
+      id: wishlistDoc.id,
+      ...wishlistDoc.data()
+    };
+    
+    return res.status(200).json(wishlistData);
+  } catch (error) {
+    console.error('Error fetching wishlist:', error);
+    return res.status(500).json({ error: 'Failed to fetch wishlist' });
+  }
+};
+
 const generateMockAgents = (count) => { /* ... your existing code ... */ };
 const seedAgents = async (req, res) => { /* ... your existing code ... */ };
 // --- END OF EXISTING FUNCTIONS ---
