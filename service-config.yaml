@@ -1,0 +1,92 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: aiwaverider-backend-service
+  namespace: aiwaverider-backend-460819
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+      - image: europe-west1-docker.pkg.dev/aiwaverider-backend-460819/cloud-run-source-deploy/aiwaverider-backend-service:latest
+        ports:
+        - name: http1
+          containerPort: 8080
+        resources:
+          requests:
+            memory: "512Mi"
+          limits:
+            memory: "1Gi"
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: CORS_ORIGINS
+          value: "https://aiwaverider.com,https://www.aiwaverider.com,https://api.aiwaverider.com,https://aiwaverider-backend-service-730350199428.europe-west1.run.app"
+        - name: FIREBASE_STORAGE_BUCKET
+          value: "aiwaverider.firebasestorage.app"
+        - name: GOOGLE_CLIENT_ID
+          value: "4916o059519nru.apps.googleusercontent.com"
+        - name: GOOGLE_CALLBACK_URL
+          value: "https://api.aiwaverider.com/api/auth/google/callback"
+        - name: API_URL
+          value: "https://api.aiwaverider.com"
+        - name: FRONTEND_URL
+          value: "https://aiwaverider.com"
+        - name: MICROSOFT_CLIENT_ID
+          value: "c4ae9618-3b0f-453da2d0e97a"
+        - name: MICROSOFT_CALLBACK_URL
+          value: "https://aiwaverider.firebaseapp.com/__/auth/handler"
+        - name: REDIS_HOST
+          value: "64.226.68.82"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_TLS
+          value: "true"
+        - name: STRIPE_PUBLISHABLE_KEY
+          value: "pk_test_51R2112HlDxuwLTKvZuzoJTkH5l9gKERbMTvhYVVROWdmkzcN6WzLCMvZa8j71BSeOVDtrWAYGbCfDmb8AGjKr0YS00m8aH9BD8"
+        - name: PAYPAL_CLIENT_ID
+          value: "ARKmoVvHgdgebkNzZaxX1xmTtMGewjV0aX2RvWBxubTenIlDc_s9FHD3SPm0FpMen-_rn9qNOrzk7rho"
+        - name: SMTP_HOST
+          value: "smtp.zoho.com"
+        - name: SMTP_PORT
+          value: "465"
+        - name: SMTP_SECURE
+          value: "true"
+        - name: SMTP_USER
+          value: "support@aiwaverider.com"
+        - name: EMAIL_FROM
+          value: "support@aiwaverider.com"
+        - name: EMAIL_FROM_NAME
+          value: "AI Wave Rider"
+        - name: WEBSITE_URL
+          value: "https://aiwaverider.com"
+        - name: SUPPORT_EMAIL
+          value: "support@aiwaverider.com"
+        - name: JWT_SECRET
+          valueFrom: { secretKeyRef: { name: JWT_SECRET, key: latest } }
+        - name: REFRESH_TOKEN_SECRET
+          valueFrom: { secretKeyRef: { name: REFRESH_TOKEN_SECRET, key: latest } }
+        - name: FIREBASE_SERVICE_ACCOUNT_JSON
+          valueFrom: { secretKeyRef: { name: FIREBASE_SERVICE_ACCOUNT_JSON, key: latest } }
+        - name: GOOGLE_CLIENT_SECRET
+          valueFrom: { secretKeyRef: { name: GOOGLE_CLIENT_SECRET, key: latest } }
+        - name: SESSION_SECRET
+          valueFrom: { secretKeyRef: { name: SESSION_SECRET, key: latest } }
+        - name: MICROSOFT_CLIENT_SECRET
+          valueFrom: { secretKeyRef: { name: MICROSOFT_CLIENT_SECRET, key: latest } }
+        - name: REDIS_PASSWORD
+          valueFrom: { secretKeyRef: { name: REDIS_PASSWORD, key: latest } }
+        - name: STRIPE_SECRET_KEY
+          valueFrom: { secretKeyRef: { name: STRIPE_SECRET_KEY, key: latest } }
+        - name: STRIPE_WEBHOOK_SECRET
+          valueFrom: { secretKeyRef: { name: STRIPE_WEBHOOK_SECRET, key: latest } }
+        - name: PAYPAL_CLIENT_SECRET
+          valueFrom: { secretKeyRef: { name: PAYPAL_CLIENT_SECRET, key: latest } }
+        - name: OPENAI_API_KEY
+          valueFrom: { secretKeyRef: { name: OPENAI_API_KEY, key: latest } }
+        - name: SMTP_PASS
+          valueFrom: { secretKeyRef: { name: SMTP_PASS, key: latest } }

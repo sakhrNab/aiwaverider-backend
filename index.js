@@ -12,9 +12,13 @@ const { initializePassport } = require('./config/passport');
 const { db } = require('./config/firebase');
 const { initializeSettings } = require('./models/siteSettings');
 const uploadMiddleware = require('./middleware/upload');
+const admin = require('firebase-admin');
 
 // Initialize express
 const app = express();
+
+// Basic health check route - must be before ANY middleware
+app.get('/_health', (_, res) => res.send('OK'));
 
 // Environment variables
 const isProduction = process.env.NODE_ENV === 'production';
@@ -35,7 +39,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // ------------------ CORS Configuration ------------------
 const allowedOrigins = isProduction
   ? (process.env.CORS_ORIGINS || '').split(',').map(origin => origin.trim())
-  : ['http://localhost:5173', 'http://localhost:3000']; // Frontend origins
+  : ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:45977']; // Frontend origins
 
 // Create a CORS middleware function with proper configuration
 const corsOptions = {
@@ -285,6 +289,16 @@ if (!isProduction) {
 }
 
 // ------------------ Start the Server ------------------
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV}`);
+  console.log(`Firebase credentials available: ${!!process.env.FIREBASE_SERVICE_ACCOUNT_JSON}`);
+  console.log(`CORS origins: ${allowedOrigins.join(', ')}`);
+  console.log(`Storage bucket: ${process.env.FIREBASE_STORAGE_BUCKET}`);
+  console.log(`Firestore database available: ${!!db}`);
+});
+
+// Add error handler for the server
+server.on('error', (error) => {
+  console.error('Server failed to start:', error);
 });

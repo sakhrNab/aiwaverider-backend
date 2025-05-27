@@ -1,0 +1,41 @@
+# Stage 1: Build stage
+FROM node:18-alpine AS builder
+
+WORKDIR /usr/src/app
+
+# Copy package.json AND package-lock.json (or npm-shrinkwrap.json)
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install --production
+
+COPY . .
+
+# Stage 2: Production stage
+FROM node:18-alpine AS production
+
+WORKDIR /usr/src/app
+
+# Copy dependencies and built code from the builder stage
+COPY --from=builder /usr/src/app/node_modules ./node_modules
+COPY --from=builder /usr/src/app ./
+
+# Create a non-root user for security first
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Create the logs directory AND change its ownership to appuser BEFORE switching user.
+# This ensures appuser can write to it.
+RUN mkdir -p /usr/src/app/logs && chown -R appuser:appgroup /usr/src/app/logs
+# If your app needs to write to other locations within /usr/src/app,
+# you might consider changing ownership of the entire app directory:
+# RUN chown -R appuser:appgroup /usr/src/app
+
+# Switch to the non-root user
+USER appuser
+
+# Cloud Run will set PORT environment variable
+ENV PORT=8080
+EXPOSE 8080
+
+# Start the application
+CMD ["node", "index.js"]
