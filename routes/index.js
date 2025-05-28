@@ -18,6 +18,7 @@ const adminRoutes = require('./admin/admin');
 const adminEmailRoutes = require('./admin/adminEmailRoutes');
 const chatRoutes = require('./chat/chatRoutes');
 const emailRoutes = require('./api/emailRoutes');
+const healthRoutes = require('./health');
 
 // Mount routes - these will all be under /api in the main app
 router.use('/auth', authRoutes);
@@ -36,6 +37,7 @@ router.use('/admin', adminRoutes);
 router.use('/admin/email', adminEmailRoutes);
 // Note: /api/chat is mounted separately in the main app file
 router.use('/email', emailRoutes);
+router.use('/health', healthRoutes);
 
 // Add redirect for product routes to the agents routes
 // This handles legacy or alternative product URLs
@@ -52,15 +54,6 @@ router.get('/product/:productId', (req, res) => {
   // Forward the request to the agents API endpoint
   req.url = `/agents/${productId}`;
   router.handle(req, res);
-});
-
-// Health check endpoint
-router.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'UP', 
-    timestamp: new Date().toISOString(),
-    version: process.env.npm_package_version || '1.0.0'
-  });
 });
 
 module.exports = router; 
