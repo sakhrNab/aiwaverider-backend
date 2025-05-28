@@ -5,6 +5,7 @@ const { db } = require('../../config/firebase');
 const admin = require('firebase-admin');
 // const axios = require('axios'); // Uncomment if used
 const logger = require('../../utils/logger');
+const { getCache, setCache, deleteCache } = require('../../utils/cache');
 // const { parseCustomFilters } = require('../utils/queryParser'); // Uncomment if used
 // const { restructureAgent } = require('../scripts/update-agent-structure'); // REMOVED/COMMENTED OUT
 
@@ -316,21 +317,23 @@ const getAgents = async (req, res) => {
 
 const getFeaturedAgents = async (req, res) => { /* ... your existing code ... */ };
 /**
- * Get a single agent by ID
+ * Get a single agent by ID with Redis caching
  * @param {object} req - Express request object
  * @param {object} res - Express response object
  */
 const getAgentById = async (req, res) => {
   try {
     // Get agentId from either params.id or params.agentId
-    const agentId = req.params.id || req.params.agentId;
+    const agentIdFromParams = req.params.id || req.params.agentId; // Renamed for clarity
     
-    // Log the request details for debugging
-    console.log(`Attempting to get agent with ID: "${agentId}"`);
+    // Parse query parameters
+    const skipCache = req.query.skipCache === 'true' || req.query.refresh === 'true';
+    // const includeReviews = req.query.includeReviews !== 'false'; // This is no longer needed as reviews are embedded
     
-    // Basic validation - only check if it exists and is a string
-    if (!agentId || typeof agentId !== 'string') {
-      console.error('Invalid agent ID format:', agentId);
+    logger.info(`Attempting to get agent with ID: "${agentIdFromParams}"`, { skipCache });
+    
+    if (!agentIdFromParams || typeof agentIdFromParams !== 'string') {
+      logger.error('Invalid agent ID format:', agentIdFromParams);
       return res.status(400).json({ 
         success: false,
         message: 'Invalid agent ID format',
@@ -338,20 +341,14 @@ const getAgentById = async (req, res) => {
       });
     }
     
-    // Clean the agent ID - accept more formats
-    let cleanAgentId = agentId.trim();
-    
-    // Only check for actual path separators (/ or \), NOT hyphens
-    // Hyphens are valid in IDs like "agent-41"
+    let cleanAgentId = agentIdFromParams.trim();
     if (cleanAgentId.includes('/') || cleanAgentId.includes('\\')) {
-      console.log(`Agent ID contains actual path separators, extracting ID portion`);
+      logger.info(`Agent ID contains actual path separators, extracting ID portion`);
       const parts = cleanAgentId.split(/[/\\]/);
       cleanAgentId = parts[parts.length - 1];
-      console.log(`Extracted ID from path: ${cleanAgentId}`);
-      
-      // Check again for path separators after extraction to prevent directory traversal
+      logger.info(`Extracted ID from path: ${cleanAgentId}`);
       if (cleanAgentId.includes('/') || cleanAgentId.includes('\\')) {
-        console.error('Agent ID still contains path separators after cleaning:', cleanAgentId);
+        logger.error('Agent ID still contains path separators after cleaning:', cleanAgentId);
         return res.status(400).json({ 
           success: false,
           message: 'Invalid agent ID format',
@@ -360,90 +357,116 @@ const getAgentById = async (req, res) => {
       }
     }
     
-    // For standard "agent-X" format, we have two options:
-    // 1. Use the ID as is (agent-41)
-    // 2. Strip the prefix and use just the number (41)
-    
-    let originalId = cleanAgentId; // Save original ID before any transformations
-    
-    // Check if it's prefixed with 'agent-' and strip it if needed
-    if (cleanAgentId.startsWith('agent-')) {
-      const numericPart = cleanAgentId.substring(6);
-      // Only use the numeric part if it looks valid
+    let originalIdForLookup = cleanAgentId; // Keep the initially cleaned ID
+    let idToUseForDb = cleanAgentId; // This will be the ID we try for DB
+
+    if (idToUseForDb.startsWith('agent-')) {
+      const numericPart = idToUseForDb.substring(6);
       if (/^\d+$/.test(numericPart)) {
-        cleanAgentId = numericPart;
-        console.log(`Stripped 'agent-' prefix, using numeric ID: ${cleanAgentId}`);
+        idToUseForDb = numericPart; // Prioritize numeric ID if 'agent-' prefix was stripped
+        logger.info(`Stripped 'agent-' prefix, using numeric ID for DB: ${idToUseForDb}`);
       }
     }
     
-    // Fetch the agent document - first try with cleaned ID
-    let agentDoc = await db.collection('agents').doc(cleanAgentId).get();
+    // The cache key should ideally use the ID that uniquely identifies the agent in the DB.
+    // Since we might try `idToUseForDb` (e.g., numeric '41') or `originalIdForLookup` (e.g., 'agent-41'),
+    // we need to be careful. For simplicity, let's base the primary cache key on `idToUseForDb` if it was transformed,
+    // otherwise `originalIdForLookup`. The invalidation logic will need to handle both possibilities.
+    const primaryCacheKeyId = idToUseForDb;
+    const cacheKey = `${CACHE_KEYS.AGENT}${primaryCacheKeyId}`; // Simplified cache key
     
-    // If not found and we modified the ID, try with the original format
-    if (!agentDoc.exists && cleanAgentId !== originalId) {
-      console.log(`Agent not found with cleaned ID: ${cleanAgentId}, trying original ID: ${originalId}`);
-      agentDoc = await db.collection('agents').doc(originalId).get();
+    if (!skipCache) {
+      try {
+        const cachedData = await getCache(cacheKey);
+        if (cachedData) {
+          logger.info(`Cache hit for agent ${primaryCacheKeyId} using key ${cacheKey}`);
+          return res.status(200).json({
+            success: true,
+            message: 'Agent retrieved from cache',
+            data: cachedData,
+            fromCache: true
+          });
+        }
+        logger.info(`Cache miss for agent ${primaryCacheKeyId} (key: ${cacheKey}), fetching from database`);
+      } catch (cacheError) {
+        logger.error(`Redis cache GET error for ${primaryCacheKeyId}:`, cacheError);
+      }
+    }
+    
+    let agentDoc = await db.collection('agents').doc(idToUseForDb).get();
+    let finalIdUsedForAgent = idToUseForDb;
+    
+    if (!agentDoc.exists && idToUseForDb !== originalIdForLookup) {
+      logger.info(`Agent not found with ID: ${idToUseForDb}, trying original ID: ${originalIdForLookup}`);
+      agentDoc = await db.collection('agents').doc(originalIdForLookup).get();
+      if (agentDoc.exists) {
+        finalIdUsedForAgent = originalIdForLookup;
+      }
     }
     
     if (!agentDoc.exists) {
-      console.error(`Agent not found with either ID format: ${cleanAgentId} or ${originalId}`);
+      logger.error(`Agent not found with any potential ID: ${idToUseForDb} or ${originalIdForLookup}`);
       return res.status(404).json({ 
         success: false,
         message: 'Agent not found',
-        error: `No agent exists with ID: ${agentId}` 
+        error: `No agent exists with ID: ${agentIdFromParams}` 
       });
     }
     
-    // Get agent data
     const agentData = {
-      id: agentDoc.id,
+      id: agentDoc.id, // Use the ID from the document itself (which is `finalIdUsedForAgent`)
       ...agentDoc.data()
     };
     
-    // Fetch reviews related to this agent
-    const reviewsSnapshot = await db.collection('reviews')
-      .where('agentId', '==', cleanAgentId)
-      .orderBy('createdAt', 'desc')
-      .limit(5)
-      .get();
-    
-    const reviews = [];
-    reviewsSnapshot.forEach(doc => {
-      reviews.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
-    
-    // Add reviews to the agent data
-    agentData.reviews = reviews;
-    
-    // Calculate average rating if there are reviews
-    if (reviews.length > 0) {
-      const totalRating = reviews.reduce((sum, review) => sum + (review.rating || 0), 0);
-      agentData.averageRating = totalRating / reviews.length;
-      agentData.reviewCount = reviews.length;
+    // Reviews are already part of agentData.reviews if the field exists.
+    // Ensure reviews are sorted and calculate average rating.
+    if (agentData.reviews && Array.isArray(agentData.reviews)) {
+      agentData.reviews.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)); // Sort by date desc
+      if (agentData.reviews.length > 0) {
+        const totalRating = agentData.reviews.reduce((sum, review) => sum + (review.rating || 0), 0);
+        agentData.averageRating = totalRating / agentData.reviews.length;
+        agentData.reviewCount = agentData.reviews.length;
+      } else {
+        agentData.averageRating = 0;
+        agentData.reviewCount = 0;
+      }
+    } else {
+      // If no reviews field, initialize it
+      agentData.reviews = [];
+      agentData.averageRating = 0;
+      agentData.reviewCount = 0;
     }
     
-    // Return successful response
+    agentData._fetchTime = Date.now();
+    
+    // Cache using the ID that successfully fetched the document (`finalIdUsedForAgent`)
+    const effectiveCacheKey = `${CACHE_KEYS.AGENT}${finalIdUsedForAgent}`;
+    try {
+      await setCache(effectiveCacheKey, agentData, 300); // 5 minutes TTL
+      logger.info(`Cached agent ${finalIdUsedForAgent} in Redis using key ${effectiveCacheKey}.`);
+    } catch (cacheError) {
+      logger.error(`Error caching agent ${finalIdUsedForAgent} in Redis:`, cacheError);
+    }
+    
+    res.set({
+      'Cache-Control': 'public, max-age=300',
+      'ETag': `W/"agent-${finalIdUsedForAgent}-${agentData._fetchTime}"`
+    });
+    
     return res.status(200).json({
       success: true,
-      message: 'Agent retrieved successfully',
-      data: agentData
+      message: 'Agent retrieved successfully (from DB)',
+      data: agentData,
+      fromCache: false
     });
     
   } catch (error) {
-    console.error('Error getting agent by ID:', error);
-    // Return structured error response
+    logger.error('Error getting agent by ID:', error);
     return res.status(500).json({
       success: false,
       message: 'Failed to retrieve agent',
       error: error.message,
-      details: {
-        code: error.code,
-        path: req.path,
-        params: req.params
-      }
+      details: { code: error.code, path: req.path, params: req.params, query: req.query }
     });
   }
 };
@@ -1047,6 +1070,208 @@ const updateAgent = async (req, res) => {
   }
 };
 
+// Helper to resolve agent ID for cache and DB ops (consistent with getAgentById)
+// You might want to make this a shared utility if used in many places.
+const _resolveAgentIdInternal = (rawAgentId) => {
+  let cleanId = rawAgentId.trim();
+  if (cleanId.includes('/') || cleanId.includes('\\')) {
+    const parts = cleanId.split(/[/\\]/);
+    cleanId = parts[parts.length - 1];
+  }
+  
+  let idToUse = cleanId;
+  let originalId = cleanId; // Store the version before stripping 'agent-'
+
+  if (idToUse.startsWith('agent-')) {
+    const numericPart = idToUse.substring(6);
+    if (/^\d+$/.test(numericPart)) {
+      idToUse = numericPart;
+    }
+  }
+  return { primaryId: idToUse, originalId: originalId }; // Return both for robust lookup/invalidation
+};
+
+
+/**
+ * Add a review to an agent's embedded reviews array
+ * POST /api/agents/:agentId/reviews
+ */
+const addAgentReview_controller = async (req, res) => {
+  const { agentId: agentIdFromParams } = req.params;
+  const { uid, displayName, email } = req.user; // from auth middleware
+  const { content, rating, verificationStatus } = req.body;
+
+  if (!content || rating === undefined) {
+    return res.status(400).json({ success: false, message: 'Content and rating are required.' });
+  }
+  if (typeof rating !== 'number' || rating < 1 || rating > 5) {
+    return res.status(400).json({ success: false, message: 'Rating must be a number between 1 and 5.' });
+  }
+
+  const { primaryId: resolvedAgentId, originalId: originalAgentId } = _resolveAgentIdInternal(agentIdFromParams);
+
+  try {
+    const agentRef = db.collection('agents').doc(resolvedAgentId);
+    let agentDoc = await agentRef.get();
+    let finalAgentIdUsed = resolvedAgentId;
+
+    // If not found with primary resolved ID, try original (e.g., if DB stores 'agent-41' and resolved is '41')
+    if (!agentDoc.exists && resolvedAgentId !== originalAgentId) {
+        const originalAgentRef = db.collection('agents').doc(originalAgentId);
+        const originalAgentDoc = await originalAgentRef.get();
+        if (originalAgentDoc.exists) {
+            agentDoc = originalAgentDoc;
+            finalAgentIdUsed = originalAgentId; // This was the ID that worked
+        }
+    }
+
+    if (!agentDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Agent not found' });
+    }
+
+    const agentData = agentDoc.data();
+    const currentReviews = agentData.reviews || [];
+
+    // Check if user has already reviewed (optional, based on your rules)
+    // const existingReview = currentReviews.find(r => r.userId === uid);
+    // if (existingReview) {
+    //   return res.status(403).json({ success: false, message: 'You have already reviewed this agent.' });
+    // }
+
+    const newReview = {
+      id: db.collection('agents').doc().id, // Generate a unique ID for the review
+      userId: uid,
+      userName: displayName || email.split('@')[0],
+      content: content,
+      rating: Number(rating),
+      verificationStatus: verificationStatus || 'unverified',
+      createdAt: new Date().toISOString(), // Use ISO string for consistency
+      updatedAt: new Date().toISOString(),
+    };
+
+    const updatedReviews = [...currentReviews, newReview];
+    updatedReviews.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)); // Keep sorted
+
+    // Calculate new average rating and review count
+    const newReviewCount = updatedReviews.length;
+    const newTotalRating = updatedReviews.reduce((sum, r) => sum + r.rating, 0);
+    const newAverageRating = newReviewCount > 0 ? newTotalRating / newReviewCount : 0;
+
+    await db.collection('agents').doc(finalAgentIdUsed).update({
+      reviews: updatedReviews,
+      averageRating: newAverageRating,
+      reviewCount: newReviewCount,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp() // Update agent's updatedAt
+    });
+
+    // --- CACHE INVALIDATION ---
+    // Invalidate cache for both potential ID forms
+    const cacheKey1 = `${CACHE_KEYS.AGENT}${resolvedAgentId}`;
+    const cacheKey2 = `${CACHE_KEYS.AGENT}${originalAgentId}`;
+    await deleteCache(cacheKey1);
+    if (resolvedAgentId !== originalAgentId) {
+        await deleteCache(cacheKey2);
+    }
+    logger.info(`Invalidated Redis cache for agent ${finalAgentIdUsed} (keys: ${cacheKey1}, ${cacheKey2}) due to new review.`);
+    // --- END CACHE INVALIDATION ---
+
+    return res.status(201).json({
+      success: true,
+      message: 'Review added successfully',
+      review: newReview, // Return the added review
+      agentId: finalAgentIdUsed
+    });
+
+  } catch (error) {
+    logger.error(`Error adding review for agent ${agentIdFromParams}:`, error);
+    return res.status(500).json({ success: false, message: 'Failed to add review', error: error.message });
+  }
+};
+
+/**
+ * Delete a review from an agent's embedded reviews array
+ * DELETE /api/agents/:agentId/reviews/:reviewId
+ */
+const deleteAgentReview_controller = async (req, res) => {
+  const { agentId: agentIdFromParams, reviewId } = req.params;
+  const { uid, role } = req.user; // from auth middleware
+
+  if (!reviewId) {
+    return res.status(400).json({ success: false, message: 'Review ID is required.' });
+  }
+
+  const { primaryId: resolvedAgentId, originalId: originalAgentId } = _resolveAgentIdInternal(agentIdFromParams);
+
+  try {
+    const agentRef = db.collection('agents').doc(resolvedAgentId);
+    let agentDoc = await agentRef.get();
+    let finalAgentIdUsed = resolvedAgentId;
+
+    if (!agentDoc.exists && resolvedAgentId !== originalAgentId) {
+        const originalAgentRef = db.collection('agents').doc(originalAgentId);
+        const originalAgentDoc = await originalAgentRef.get();
+        if (originalAgentDoc.exists) {
+            agentDoc = originalAgentDoc;
+            finalAgentIdUsed = originalAgentId;
+        }
+    }
+
+    if (!agentDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Agent not found' });
+    }
+
+    const agentData = agentDoc.data();
+    const currentReviews = agentData.reviews || [];
+    const reviewIndex = currentReviews.findIndex(r => r.id === reviewId);
+
+    if (reviewIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Review not found on this agent.' });
+    }
+
+    const reviewToDelete = currentReviews[reviewIndex];
+
+    // Authorization: User can delete their own review, or admin can delete any
+    if (reviewToDelete.userId !== uid && role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'You are not authorized to delete this review.' });
+    }
+
+    const updatedReviews = currentReviews.filter(r => r.id !== reviewId);
+    updatedReviews.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)); // Keep sorted
+
+    // Calculate new average rating and review count
+    const newReviewCount = updatedReviews.length;
+    const newTotalRating = updatedReviews.reduce((sum, r) => sum + r.rating, 0);
+    const newAverageRating = newReviewCount > 0 ? newTotalRating / newReviewCount : 0;
+
+    await db.collection('agents').doc(finalAgentIdUsed).update({
+      reviews: updatedReviews,
+      averageRating: newAverageRating,
+      reviewCount: newReviewCount,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // --- CACHE INVALIDATION ---
+    const cacheKey1 = `${CACHE_KEYS.AGENT}${resolvedAgentId}`;
+    const cacheKey2 = `${CACHE_KEYS.AGENT}${originalAgentId}`;
+    await deleteCache(cacheKey1);
+    if (resolvedAgentId !== originalAgentId) {
+        await deleteCache(cacheKey2);
+    }
+    logger.info(`Invalidated Redis cache for agent ${finalAgentIdUsed} (keys: ${cacheKey1}, ${cacheKey2}) due to review deletion.`);
+    // --- END CACHE INVALIDATION ---
+
+    return res.status(200).json({ 
+        success: true, 
+        message: 'Review deleted successfully',
+        agentId: finalAgentIdUsed
+    });
+
+  } catch (error) {
+    logger.error(`Error deleting review ${reviewId} for agent ${agentIdFromParams}:`, error);
+    return res.status(500).json({ success: false, message: 'Failed to delete review', error: error.message });
+  }
+};
+
 
 // --- YOUR OTHER EXISTING FUNCTIONS (deleteAgent, combinedUpdate, etc. - KEEP AS IS) ---
 const deleteAgent = async (req, res) => { /* ... your existing code ... */ };
@@ -1064,7 +1289,10 @@ const functionsToExport = {
   getAgents, getFeaturedAgents, getAgentById, toggleWishlist, getWishlists, getWishlistById,
   seedAgents, generateMockAgents, createAgent, updateAgent, deleteAgent,
   combinedUpdate, createAgentWithPrice, getDownloadCount, incrementDownloadCount,
-  getLatestAgents, getLatestAgentsRoute
+  getLatestAgents, getLatestAgentsRoute,
+  // Add the new review handlers
+  addAgentReview_controller,
+  deleteAgentReview_controller
 };
 for (const funcName in functionsToExport) {
   logger.info(`- ${funcName}: ${typeof functionsToExport[funcName] === 'function'}`);

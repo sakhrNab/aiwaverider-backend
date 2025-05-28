@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const agentsController = require('../../controllers/agent/agentsController');
-const validateFirebaseToken = require('../../middleware/authenticationMiddleware').validateFirebaseToken;
+const { validateFirebaseToken, isAdmin } = require('../../middleware/authenticationMiddleware');
 const publicCacheMiddleware = require('../../middleware/publicCacheMiddleware');
 const upload = require('../../middleware/upload');
 const { db } = require('../../config/firebase');
@@ -83,111 +83,195 @@ router.post('/:agentId/downloads', validateFirebaseToken, agentsController.incre
 // ----- AGENT REVIEWS AND RATINGS -----
 
 // Get reviews for an agent
-router.get('/:agentId/reviews', async (req, res) => {
-  try {
-    const { agentId } = req.params;
+// router.get('/:agentId/reviews', async (req, res) => {
+//   try {
+//     const { agentId } = req.params;
     
-    const reviewsQuery = db.collection('agent_reviews')
-      .where('agentId', '==', agentId)
-      .orderBy('createdAt', 'desc');
+//     const reviewsQuery = db.collection('agent_reviews')
+//       .where('agentId', '==', agentId)
+//       .orderBy('createdAt', 'desc');
       
-    const reviewsSnapshot = await reviewsQuery.get();
-    const reviews = [];
+//     const reviewsSnapshot = await reviewsQuery.get();
+//     const reviews = [];
     
-    reviewsSnapshot.forEach(doc => {
-      reviews.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
+//     reviewsSnapshot.forEach(doc => {
+//       reviews.push({
+//         id: doc.id,
+//         ...doc.data()
+//       });
+//     });
     
-    res.json(reviews);
-  } catch (error) {
-    console.error('Error fetching agent reviews:', error);
-    res.status(500).json({ error: 'Failed to fetch reviews' });
-  }
-});
+//     res.json(reviews);
+//   } catch (error) {
+//     console.error('Error fetching agent reviews:', error);
+//     res.status(500).json({ error: 'Failed to fetch reviews' });
+//   }
+// });
+
+// Delete a review (admin only)
+router.delete('/:agentId/reviews/:reviewId', validateFirebaseToken, 
+  // isAdmin,
+  agentsController.deleteAgentReview_controller
+);
+  
+  // , async (req, res) => {
+//   try {
+//     const { agentId, reviewId } = req.params;
+    
+//     // Validate input
+//     if (!reviewId || !reviewId.trim()) {
+//       return res.status(400).json({ error: 'Review ID is required' });
+//     }
+    
+//     // Get the agent document
+//     const agentRef = db.collection('agents').doc(agentId);
+//     const agentDoc = await agentRef.get();
+    
+//     if (!agentDoc.exists) {
+//       return res.status(404).json({ error: 'Agent not found' });
+//     }
+    
+//     const agentData = agentDoc.data();
+//     const reviews = agentData.reviews || [];
+    
+//     // Find the review in the array
+//     const reviewIndex = reviews.findIndex(review => review.id === reviewId);
+    
+//     if (reviewIndex === -1) {
+//       return res.status(404).json({ error: 'Review not found in this agent\'s reviews' });
+//     }
+    
+//     // Remove the review from the array
+//     const removedReview = reviews.splice(reviewIndex, 1)[0];
+    
+//     // Recalculate average rating
+//     let totalRating = 0;
+//     const reviewCount = reviews.length;
+    
+//     reviews.forEach(review => {
+//       totalRating += review.rating || 0;
+//     });
+    
+//     const newAverageRating = reviewCount > 0 ? totalRating / reviewCount : 0;
+    
+//     // Update the agent document
+//     await agentRef.update({
+//       reviews: reviews,
+//       rating: {
+//         average: newAverageRating,
+//         count: reviewCount
+//       }
+//     });
+    
+//     console.log(`Admin deleted review ${reviewId} from agent ${agentId}`);
+//     console.log(`New rating: ${newAverageRating} from ${reviewCount} reviews`);
+    
+//     // Clear related Redis cache
+//     try {
+//       const { deleteCache } = require('../../utils/cache');
+//       // Clear both with_reviews and no_reviews cache versions
+//       await deleteCache(`agent:${agentId}:with_reviews`);
+//       await deleteCache(`agent:${agentId}:no_reviews`);
+//       console.log(`Cleared Redis cache for agent ${agentId} after review deletion`);
+//     } catch (cacheError) {
+//       console.error(`Error clearing cache for agent ${agentId}:`, cacheError);
+//       // Continue execution as this is not critical
+//     }
+    
+//     return res.status(200).json({ 
+//       success: true,
+//       message: 'Review deleted successfully',
+//       reviewId: reviewId
+//     });
+//   } catch (error) {
+//     console.error('Error deleting review:', error);
+//     return res.status(500).json({ error: 'Failed to delete review' });
+//   }
+// });
 
 // Add a review to an agent
-router.post('/:agentId/reviews', validateFirebaseToken, async (req, res) => {
-  try {
-    const { agentId } = req.params;
-    const { content, rating } = req.body;
-    const userId = req.user.uid;
-    const userName = req.user.displayName || req.user.email.split('@')[0];
+router.post('/:agentId/reviews', validateFirebaseToken,
+  agentsController.addAgentReview_controller
+);
+//   async (req, res) => {
+//   try {
+//     const { agentId } = req.params;
+//     const { content, rating } = req.body;
+//     const userId = req.user.uid;
+//     const userName = req.user.displayName || req.user.email.split('@')[0];
     
-    // Validate input
-    if (!content || !content.trim()) {
-      return res.status(400).json({ error: 'Review content is required' });
-    }
+//     // Validate input
+//     if (!content || !content.trim()) {
+//       return res.status(400).json({ error: 'Review content is required' });
+//     }
     
-    if (!rating || rating < 1 || rating > 5) {
-      return res.status(400).json({ error: 'Rating must be between 1 and 5' });
-    }
+//     if (!rating || rating < 1 || rating > 5) {
+//       return res.status(400).json({ error: 'Rating must be between 1 and 5' });
+//     }
     
-    // Check if agent exists
-    const agentRef = db.collection('agents').doc(agentId);
-    const agentDoc = await agentRef.get();
+//     // Check if agent exists
+//     const agentRef = db.collection('agents').doc(agentId);
+//     const agentDoc = await agentRef.get();
     
-    if (!agentDoc.exists) {
-      return res.status(404).json({ error: 'Agent not found' });
-    }
+//     if (!agentDoc.exists) {
+//       return res.status(404).json({ error: 'Agent not found' });
+//     }
     
-    // Create review document
-    const reviewData = {
-      agentId,
-      userId,
-      userName,
-      content,
-      rating,
-      createdAt: new Date().toISOString()
-    };
+//     // Create review document
+//     const reviewData = {
+//       agentId,
+//       userId,
+//       userName,
+//       content,
+//       rating,
+//       createdAt: new Date().toISOString()
+//     };
     
-    const reviewRef = await db.collection('agent_reviews').add(reviewData);
+//     const reviewRef = await db.collection('agent_reviews').add(reviewData);
     
-    // Update agent's rating
-    const agentData = agentDoc.data();
-    const currentRating = agentData.rating || { average: 0, count: 0 };
-    const reviews = agentData.reviews || [];
+//     // Update agent's rating
+//     const agentData = agentDoc.data();
+//     const currentRating = agentData.rating || { average: 0, count: 0 };
+//     const reviews = agentData.reviews || [];
     
-    // Calculate new average
-    const totalRating = (currentRating.average * currentRating.count) + rating;
-    const newCount = currentRating.count + 1;
-    const newAverage = totalRating / newCount;
+//     // Calculate new average
+//     const totalRating = (currentRating.average * currentRating.count) + rating;
+//     const newCount = currentRating.count + 1;
+//     const newAverage = totalRating / newCount;
     
-    // Add review to agent document
-    const newReview = {
-      id: reviewRef.id,
-      userId,
-      userName,
-      content,
-      rating,
-      createdAt: new Date().toISOString()
-    };
+//     // Add review to agent document
+//     const newReview = {
+//       id: reviewRef.id,
+//       userId,
+//       userName,
+//       content,
+//       rating,
+//       createdAt: new Date().toISOString()
+//     };
     
-    // Update agent document
-    await agentRef.update({
-      rating: {
-        average: newAverage,
-        count: newCount
-      },
-      reviews: admin.firestore.FieldValue.arrayUnion(newReview)
-    });
+//     // Update agent document
+//     await agentRef.update({
+//       rating: {
+//         average: newAverage,
+//         count: newCount
+//       },
+//       reviews: admin.firestore.FieldValue.arrayUnion(newReview)
+//     });
     
-    res.status(201).json({
-      success: true,
-      reviewId: reviewRef.id,
-      newRating: {
-        average: newAverage,
-        count: newCount
-      }
-    });
+//     res.status(201).json({
+//       success: true,
+//       reviewId: reviewRef.id,
+//       newRating: {
+//         average: newAverage,
+//         count: newCount
+//       }
+//     });
     
-  } catch (error) {
-    console.error('Error adding review:', error);
-    res.status(500).json({ error: 'Failed to add review' });
-  }
-});
+//   } catch (error) {
+//     console.error('Error adding review:', error);
+//     res.status(500).json({ error: 'Failed to add review' });
+//   }
+// });
 
 // Toggle like on an agent
 router.post('/:agentId/toggle-like', validateFirebaseToken, async (req, res) => {
