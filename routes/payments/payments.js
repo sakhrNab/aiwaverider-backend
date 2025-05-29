@@ -65,6 +65,131 @@ router.get('/test', (req, res) => {
   });
 });
 
+// Provider-specific health check endpoint for Stripe
+router.get('/providers/stripe/health', async (req, res) => {
+  try {
+    // Check if Stripe is configured
+    const stripeIsConfigured = !!process.env.STRIPE_SECRET_KEY;
+    
+    // Try to access Stripe API (lightweight check)
+    let stripeApiAccessible = false;
+    if (stripeIsConfigured) {
+      try {
+        const paymentMethods = await stripe.paymentMethods.list({
+          limit: 1,
+        });
+        stripeApiAccessible = true;
+      } catch (stripeError) {
+        logger.error('Stripe API access error:', stripeError);
+        stripeApiAccessible = false;
+      }
+    }
+    
+    logger.info('Stripe health check performed');
+    return res.status(200).json({
+      status: 'success',
+      healthy: stripeApiAccessible,
+      provider: 'stripe',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error checking Stripe health:', error);
+    return res.status(500).json({ 
+      status: 'error',
+      healthy: false,
+      provider: 'stripe',
+      error: 'Failed to check Stripe health',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Provider-specific health check endpoint for PayPal
+router.get('/providers/paypal/health', async (req, res) => {
+  try {
+    // Check if PayPal is configured
+    const paypalIsConfigured = !(!PAYPAL_CLIENT_ID || PAYPAL_CLIENT_ID === 'test_client_id');
+    
+    // Check if we can connect to PayPal API
+    let paypalApiAccessible = false;
+    if (paypalIsConfigured) {
+      try {
+        // Attempt to generate an access token to verify connectivity
+        const accessToken = await generateAccessToken();
+        paypalApiAccessible = !!accessToken;
+      } catch (paypalError) {
+        logger.error('PayPal API access error:', paypalError);
+        paypalApiAccessible = false;
+      }
+    }
+    
+    logger.info('PayPal health check performed');
+    return res.status(200).json({
+      status: 'success',
+      healthy: paypalApiAccessible,
+      provider: 'paypal',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error checking PayPal health:', error);
+    return res.status(500).json({ 
+      status: 'error',
+      healthy: false,
+      provider: 'paypal',
+      error: 'Failed to check PayPal health',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Provider-specific health check endpoint for SEPA
+router.get('/providers/sepa/health', async (req, res) => {
+  try {
+    // SEPA works through Stripe, so we check Stripe configuration
+    const stripeIsConfigured = !!process.env.STRIPE_SECRET_KEY;
+    
+    // Check if Stripe supports SEPA
+    let sepaSupported = false;
+    if (stripeIsConfigured) {
+      try {
+        // Try to access payment methods with SEPA capability
+        const paymentMethods = await stripe.paymentMethods.list({
+          limit: 1,
+          type: 'sepa_debit'
+        });
+        sepaSupported = true;
+      } catch (sepaError) {
+        // If this specific error occurs, Stripe is working but SEPA might not be enabled
+        if (sepaError.code === 'parameter_unknown') {
+          sepaSupported = false;
+          logger.warn('SEPA may not be enabled for this Stripe account:', sepaError);
+        } else {
+          // Other errors indicate potential connection issues
+          logger.error('SEPA API access error:', sepaError);
+          sepaSupported = false;
+        }
+      }
+    }
+    
+    logger.info('SEPA health check performed');
+    return res.status(200).json({
+      status: 'success',
+      healthy: sepaSupported,
+      provider: 'sepa',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error checking SEPA health:', error);
+    return res.status(500).json({ 
+      status: 'error',
+      healthy: false,
+      provider: 'sepa',
+      error: 'Failed to check SEPA health',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Stripe status endpoint
 router.get('/stripe-status', async (req, res) => {
   try {

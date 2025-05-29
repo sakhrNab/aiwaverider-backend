@@ -16,7 +16,6 @@ const recommendationsRoutes = require('./agents/recommendations');
 const aiToolsRoutes = require('./ai-tools/ai-tools');
 const adminRoutes = require('./admin/admin');
 const adminEmailRoutes = require('./admin/adminEmailRoutes');
-const chatRoutes = require('./chat/chatRoutes');
 const emailRoutes = require('./api/emailRoutes');
 const healthRoutes = require('./health');
 
