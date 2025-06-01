@@ -1274,12 +1274,361 @@ const deleteAgentReview_controller = async (req, res) => {
 
 
 // --- YOUR OTHER EXISTING FUNCTIONS (deleteAgent, combinedUpdate, etc. - KEEP AS IS) ---
-const deleteAgent = async (req, res) => { /* ... your existing code ... */ };
+/**
+ * Delete an agent
+ */
+const deleteAgent = async (req, res) => {
+  try {
+    // Check if user is an admin
+    const isAdmin = req.user && req.user.role === 'admin';
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Only administrators can delete agents' });
+    }
+
+    // Extract agentId from either req.params.agentId or req.params.id
+    let agentId = req.params.agentId || req.params.id;
+    
+    // Check if the ID contains extra path segments
+    if (agentId && agentId.includes('/')) {
+      // Extract just the agent ID part
+      agentId = agentId.split('/')[0];
+    }
+    
+    // Validate agent ID to prevent Firestore errors
+    if (!agentId || typeof agentId !== 'string' || agentId.trim() === '') {
+      console.error('Invalid agent ID for deletion:', agentId);
+      return res.status(400).json({ error: 'Invalid agent ID provided' });
+    }
+
+    const sanitizedAgentId = agentId.trim();
+    console.log('Processing agent deletion for ID:', sanitizedAgentId);
+    
+    // Check if agent exists
+    const agentDoc = await db.collection('agents').doc(sanitizedAgentId).get();
+    if (!agentDoc.exists) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+    
+    // Delete the agent
+    await db.collection('agents').doc(sanitizedAgentId).delete();
+    
+    // Delete associated prices
+    const priceQuery = await db.collection('prices').where('agentId', '==', sanitizedAgentId).get();
+    const batch = db.batch();
+    priceQuery.forEach(doc => {
+      batch.delete(doc.ref);
+    });
+    await batch.commit();
+    
+    return res.status(200).json({ 
+      success: true, 
+      message: 'Agent deleted successfully',
+      id: sanitizedAgentId
+    });
+  } catch (error) {
+    console.error('Error deleting agent:', error);
+    return res.status(500).json({ error: 'Failed to delete agent' });
+  }
+};
 const combinedUpdate = async (req, res) => { /* ... your existing code ... */ };
 const createAgentWithPrice = (req, res) => { /* ... your existing code ... */ };
 const getDownloadCount = async (req, res) => { /* ... your existing code ... */ };
 const incrementDownloadCount = async (req, res) => { /* ... your existing code ... */ };
-const getLatestAgents = async (limit = 5) => { /* ... your existing code ... */ };
+/**
+ * Get latest agents for email notifications
+ * @param {number} limit - Number of latest agents to return
+ * @returns {Array} Array of latest agents
+ */
+const getLatestAgents = async (limit = 5) => {
+  try {
+    console.log(`Fetching latest ${limit} agents for email notification`);
+    
+    // Create cache key for latest agents
+    const cacheKey = `${CACHE_KEYS.LATEST}:${limit}`;
+    
+    // Try to get real agents first
+    let agents = [];
+    
+    // Query agents sorted by createdAt (descending)
+    let query = db.collection('agents')
+      .orderBy('createdAt', 'desc')
+      .limit(parseInt(limit));
+    
+    const agentsSnapshot = await query.get();
+    
+    // Log what we found in the database
+    console.log(`Found ${agentsSnapshot.size} agents in the database by createdAt`);
+
+    agentsSnapshot.forEach(doc => {
+      const agentData = doc.data();
+      
+      // Ensure we have all the required fields for the email template
+      const formattedAgent = {
+        id: doc.id,
+        url: `${process.env.FRONTEND_URL || 'https://aiwaverider.com'}/agents/${doc.id}`,
+        name: agentData.name || agentData.title || 'AI Agent',
+        imageUrl: agentData.imageUrl || agentData.image || 'https://via.placeholder.com/300x200?text=AI+Agent',
+        description: agentData.description || 'An AI agent to help with your tasks',
+        price: agentData.price || 0,
+        creator: {
+          name: agentData.creator?.name || '',
+          username: agentData.creator?.username || agentData.creator?.name || 'AIWaverider',
+          role: agentData.creator?.role || 'Admin',
+          ...agentData.creator
+        },
+        rating: {
+          average: agentData.rating?.average || 4.5,
+          count: agentData.rating?.count || 0
+        },
+        ...agentData
+      };
+      
+      agents.push(formattedAgent);
+    });
+    
+    // If we don't have agents by createdAt, try by dateCreated
+    if (agents.length === 0) {
+      console.log('No agents found with createdAt, trying dateCreated field');
+      
+      query = db.collection('agents')
+        .orderBy('dateCreated', 'desc')
+        .limit(parseInt(limit));
+      
+      const dateCreatedSnapshot = await query.get();
+      console.log(`Found ${dateCreatedSnapshot.size} agents in the database by dateCreated`);
+      
+      dateCreatedSnapshot.forEach(doc => {
+        if (!agents.some(agent => agent.id === doc.id)) {
+          const agentData = doc.data();
+          
+          const formattedAgent = {
+            id: doc.id,
+            url: `${process.env.FRONTEND_URL || 'https://aiwaverider.com'}/agents/${doc.id}`,
+            name: agentData.name || agentData.title || 'AI Agent',
+            imageUrl: agentData.imageUrl || agentData.image || 'https://via.placeholder.com/300x200?text=AI+Agent',
+            description: agentData.description || 'An AI agent to help with your tasks',
+            price: agentData.price || 0,
+            creator: {
+              name: agentData.creator?.name || '',
+              username: agentData.creator?.username || agentData.creator?.name || 'AIWaverider',
+              role: agentData.creator?.role || 'Admin',
+              ...agentData.creator
+            },
+            rating: {
+              average: agentData.rating?.average || 4.5,
+              count: agentData.rating?.count || 0
+            },
+            ...agentData
+          };
+          
+          agents.push(formattedAgent);
+        }
+      });
+    }
+    
+    // If we still don't have agents, try to get featured/bestsellers
+    if (agents.length === 0) {
+      console.log('No agents found by date, trying featured/bestseller agents');
+      
+      query = db.collection('agents')
+        .where('isBestseller', '==', true)
+        .limit(parseInt(limit));
+      
+      const featuredSnapshot = await query.get();
+      console.log(`Found ${featuredSnapshot.size} featured agents in the database`);
+      
+      featuredSnapshot.forEach(doc => {
+        if (!agents.some(agent => agent.id === doc.id)) {
+          const agentData = doc.data();
+          
+          const formattedAgent = {
+            id: doc.id,
+            url: `${process.env.FRONTEND_URL || 'https://aiwaverider.com'}/agents/${doc.id}`,
+            name: agentData.name || agentData.title || 'AI Agent',
+            imageUrl: agentData.imageUrl || agentData.image || 'https://via.placeholder.com/300x200?text=AI+Agent',
+            description: agentData.description || 'An AI agent to help with your tasks',
+            price: agentData.price || 0,
+            creator: {
+              name: agentData.creator?.name || '',
+              username: agentData.creator?.username || agentData.creator?.name || 'AIWaverider',
+              role: agentData.creator?.role || 'Admin',
+              ...agentData.creator
+            },
+            rating: {
+              average: agentData.rating?.average || 4.5,
+              count: agentData.rating?.count || 0
+            },
+            ...agentData
+          };
+          
+          agents.push(formattedAgent);
+        }
+      });
+    }
+    
+    // If still no agents, try to get ANY agents without filtering
+    if (agents.length === 0) {
+      console.log('Still no agents found, trying to get any agents without filtering');
+      
+      query = db.collection('agents')
+        .limit(parseInt(limit));
+      
+      const anyAgentsSnapshot = await query.get();
+      console.log(`Found ${anyAgentsSnapshot.size} total agents in the database`);
+      
+      anyAgentsSnapshot.forEach(doc => {
+        if (!agents.some(agent => agent.id === doc.id)) {
+          const agentData = doc.data();
+          
+          const formattedAgent = {
+            id: doc.id,
+            url: `${process.env.FRONTEND_URL || 'https://aiwaverider.com'}/agents/${doc.id}`,
+            name: agentData.name || agentData.title || 'AI Agent',
+            imageUrl: agentData.imageUrl || agentData.image || 'https://via.placeholder.com/300x200?text=AI+Agent',
+            description: agentData.description || 'An AI agent to help with your tasks',
+            price: agentData.price || 0,
+            creator: {
+              name: agentData.creator?.name || '',
+              username: agentData.creator?.username || agentData.creator?.name || 'AIWaverider',
+              role: agentData.creator?.role || 'Admin',
+              ...agentData.creator
+            },
+            rating: {
+              average: agentData.rating?.average || 4.5,
+              count: agentData.rating?.count || 0
+            },
+            ...agentData
+          };
+          
+          agents.push(formattedAgent);
+        }
+      });
+    }
+    
+    // If still no real agents from the database, use the sample agents as a last resort
+    if (agents.length === 0) {
+      console.log('No real agents found in database, using sample agents');
+      
+      // Create a few sample agents
+      const sampleAgents = [
+        {
+          id: 'sample-agent-1',
+          url: `${process.env.FRONTEND_URL || 'https://aiwaverider.com'}/agents`,
+          name: 'Writing Assistant',
+          imageUrl: 'https://via.placeholder.com/300x200?text=Writing+Assistant',
+          description: 'AI assistant that helps with writing tasks',
+          price: 19.99,
+          priceDetails: {
+            originalPrice: 29.99,
+            discountedPrice: 19.99,
+            discountPercentage: 33
+          },
+          creator: { 
+            name: 'Colorland Studio',
+            username: 'Colorland',
+            role: 'Partner'
+          },
+          rating: { average: 4.8, count: 1578 },
+          location: 'Online'
+        },
+        {
+          id: 'sample-agent-2',
+          url: `${process.env.FRONTEND_URL || 'https://aiwaverider.com'}/agents`,
+          name: 'CLEAN CAR ONE',
+          imageUrl: 'https://via.placeholder.com/300x200?text=Clean+Car',
+          description: 'Interior & exterior cleaning service',
+          price: 29.90,
+          priceDetails: {
+            originalPrice: 69.90,
+            discountedPrice: 29.90,
+            discountPercentage: 57
+          },
+          promoCode: 'mit Code PROMO. Endet am 23.4',
+          creator: { 
+            name: 'Berlin Cleaning Services',
+            username: 'BerlinBERLIN',
+            role: 'Partner'
+          },
+          rating: { average: 4.5, count: 47 }
+        },
+        {
+          id: 'sample-agent-3',
+          url: `${process.env.FRONTEND_URL || 'https://aiwaverider.com'}/agents`,
+          name: 'Laser Hair Removal',
+          imageUrl: 'https://via.placeholder.com/300x200?text=Laser+Hair+Removal',
+          description: 'Professional laser hair removal',
+          price: 39.90,
+          priceDetails: {
+            originalPrice: 267.00,
+            discountedPrice: 39.90,
+            discountPercentage: 91
+          },
+          creator: { 
+            name: 'Flawless Medical Beauty Center',
+            username: 'FlawlessBeauty',
+            role: 'Partner'
+          },
+          location: 'Berlin',
+          rating: { average: 4.6, count: 83 }
+        },
+        {
+          id: 'sample-agent-4',
+          url: `${process.env.FRONTEND_URL || 'https://aiwaverider.com'}/agents`,
+          name: 'Full Body Massage',
+          imageUrl: 'https://via.placeholder.com/300x200?text=Body+Massage',
+          description: '30 or 70 min full body massage',
+          price: 27.19,
+          priceDetails: {
+            originalPrice: 45.90,
+            discountedPrice: 27.19,
+            discountPercentage: 40
+          },
+          promoCode: 'mit Code PROMO. Endet am 23.4',
+          creator: { 
+            name: 'Monique Martin Wellness',
+            username: 'MoniqueMartin',
+            role: 'Partner'
+          },
+          location: 'Berlin, BE',
+          rating: { average: 5.0, count: 14 }
+        },
+        {
+          id: 'sample-agent-5',
+          url: `${process.env.FRONTEND_URL || 'https://aiwaverider.com'}/agents`,
+          name: 'Code Generator Pro',
+          imageUrl: 'https://via.placeholder.com/300x200?text=Code+Generator',
+          description: 'Generate high-quality code snippets',
+          price: 19.99,
+          priceDetails: {
+            originalPrice: 39.99,
+            discountedPrice: 19.99,
+            discountPercentage: 50
+          },
+          creator: { 
+            name: 'AI Waverider Team',
+            username: 'AIWaverider',
+            role: 'Admin'
+          },
+          expiryDate: '05.05.2023',
+          rating: { average: 4.9, count: 156 }
+        }
+      ];
+      
+      // Add sample agents up to the requested limit
+      agents = sampleAgents.slice(0, limit);
+    }
+    
+    console.log(`Successfully retrieved ${agents.length} latest agents for email`);
+    
+    // Return the agents, limited to the requested number
+    return agents.slice(0, limit);
+  } catch (error) {
+    console.error('Error fetching latest agents for email:', error);
+    console.error(error.stack); // Log the full stack trace for debugging
+    return [];
+  }
+};
+
 const getLatestAgentsRoute = async (req, res) => { /* ... your existing code ... */ };
 // --- END OF OTHER EXISTING FUNCTIONS ---
 

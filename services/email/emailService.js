@@ -54,7 +54,7 @@ async function getCompiledTemplate(templateName) {
   
   try {
     // Define template path
-    let templatePath = path.join(__dirname, '..', 'templates', 'emails', `${templateName}.html`);
+    let templatePath = path.join(__dirname, '../../', 'templates', 'emails', `${templateName}.html`);
     logger.info(`Loading email template from: ${templatePath}`);
     
     // Check if file exists
@@ -74,7 +74,7 @@ async function getCompiledTemplate(templateName) {
       if (fallbacks[templateName]) {
         // Try each fallback in order
         for (const fallback of fallbacks[templateName]) {
-          const fallbackPath = path.join(__dirname, '..', 'templates', 'emails', `${fallback}.html`);
+          const fallbackPath = path.join(__dirname, '../../', 'templates', 'emails', `${fallback}.html`);
           try {
             await fs.access(fallbackPath);
             logger.info(`Template '${templateName}' not found, using fallback: ${fallback}`);
@@ -276,7 +276,7 @@ exports.sendUpdateEmail = async (emailData) => {
       case 'new_agents':
         templateName = 'new_agents'; // Try to use dedicated template
         try {
-          await fs.access(path.join(__dirname, '..', 'templates', 'emails', 'new_agents.html'));
+          await fs.access(path.join(__dirname, '../..', 'templates', 'emails', 'new_agents.html'));
         } catch (error) {
           // Fallback to weekly_update if new_agents template doesn't exist
           templateName = 'weekly_update';
@@ -287,7 +287,7 @@ exports.sendUpdateEmail = async (emailData) => {
       case 'new_tools':
         templateName = 'new_tools'; // Try to use dedicated template
         try {
-          await fs.access(path.join(__dirname, '..', 'templates', 'emails', 'new_tools.html'));
+          await fs.access(path.join(__dirname, '../../', 'templates', 'emails', 'new_tools.html'));
         } catch (error) {
           // Fallback to weekly_update if new_tools template doesn't exist
           templateName = 'weekly_update';
@@ -669,23 +669,34 @@ const sendAgentUpdateEmail = async (emailOrOptions, name, title, content, latest
     // Ensure all agents have absolute image URLs
     agents = agents.map(agent => {
       // Log the original image URL for debugging
-      console.log(`Processing agent ${agent.id} with original imageUrl: ${agent.imageUrl}`);
+      console.log(`Processing agent ${agent.id} with original imageUrl:`, agent.imageUrl);
       
       // Process agent image URL to ensure it will work in emails
-      if (agent.imageUrl) {
+      let imageUrl = agent.imageUrl;
+      
+      // Handle case where imageUrl is an object with a url property
+      if (imageUrl && typeof imageUrl === 'object' && imageUrl.url) {
+        imageUrl = imageUrl.url;
+      }
+      
+      // If we have an image URL, check if it's valid
+      if (imageUrl && typeof imageUrl === 'string') {
         // Check for invalid or problematic URLs
-        if (agent.imageUrl.includes('blob:') || 
-            agent.imageUrl.includes('data:') || 
-            agent.imageUrl.includes('localhost') ||
-            !agent.imageUrl.startsWith('http')) {
+        if (imageUrl.includes('blob:') || 
+            imageUrl.includes('data:') || 
+            imageUrl.includes('localhost') ||
+            !imageUrl.startsWith('http')) {
           // Replace with a placeholder image
           console.log(`Replacing problematic URL for agent ${agent.id}`);
-          agent.imageUrl = `https://via.placeholder.com/300x200/3498db/ffffff?text=${encodeURIComponent(agent.name || 'AI Agent')}`;
+          imageUrl = `https://via.placeholder.com/300x200/3498db/ffffff?text=${encodeURIComponent(agent.name || 'AI Agent')}`;
         }
       } else {
-        // If no imageUrl is provided, use a placeholder
-        agent.imageUrl = `https://via.placeholder.com/300x200/3498db/ffffff?text=${encodeURIComponent(agent.name || 'AI Agent')}`;
+        // If no valid imageUrl is provided, use a placeholder
+        imageUrl = `https://via.placeholder.com/300x200/3498db/ffffff?text=${encodeURIComponent(agent.name || 'AI Agent')}`;
       }
+      
+      // Update the agent with the processed image URL
+      agent.imageUrl = imageUrl;
       
       // Log the processed image URL
       console.log(`Processed imageUrl for agent ${agent.id}: ${agent.imageUrl}`);
