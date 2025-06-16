@@ -18,12 +18,15 @@ const adminRoutes = require('./admin/admin');
 const adminEmailRoutes = require('./admin/adminEmailRoutes');
 const emailRoutes = require('./api/emailRoutes');
 const healthRoutes = require('./health');
+const videosRoutes = require('./videos/videos');
 
 // Mount routes - these will all be under /api in the main app
+// IMPORTANT: Mount specific routes before catch-all routes
 router.use('/auth', authRoutes);
 router.use('/users', usersRoutes);
 router.use('/posts', postsRoutes);
 router.use('/profile', profileRoutes);
+router.use('/videos', videosRoutes); // Move videos before agents to prevent catch-all interference
 router.use('/agents', agentsRoutes);
 router.use('/agent', agentRoutes);
 router.use('/wishlists', wishlistsRoutes);
