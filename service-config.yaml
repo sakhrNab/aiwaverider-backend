@@ -90,3 +90,25 @@ spec:
           valueFrom: { secretKeyRef: { name: OPENAI_API_KEY, key: latest } }
         - name: SMTP_PASS
           valueFrom: { secretKeyRef: { name: SMTP_PASS, key: latest } }
+        - name: YOUTUBE_API_KEY
+          valueFrom: { secretKeyRef: { name: YOUTUBE_API_KEY, key: latest } }
+        - name: TIKTOK_API_KEY
+          valueFrom: { secretKeyRef: { name: TIKTOK_API_KEY, key: latest } }
+        - name: INSTAGRAM_ACCESS_TOKEN
+          valueFrom: { secretKeyRef: { name: INSTAGRAM_ACCESS_TOKEN, key: latest } }
+        - name: TIKTOK_RAPIDAPI_HOST
+          valueFrom: { secretKeyRef: { name: TIKTOK_RAPIDAPI_HOST, key: latest } }
+        - name: INSTAGRAM_BUSINESS_ACCOUNT_ID
+          valueFrom: { secretKeyRef: { name: INSTAGRAM_BUSINESS_ACCOUNT_ID, key: latest } }
+        - name: FACEBOOK_PAGE_ID
+          valueFrom: { secretKeyRef: { name: FACEBOOK_PAGE_ID, key: latest } }
+        - name: INSTAGRAM_APP_ID
+          valueFrom: { secretKeyRef: { name: INSTAGRAM_APP_ID, key: latest } }
+        - name: INSTAGRAM_APP_SECRET
+          valueFrom: { secretKeyRef: { name: INSTAGRAM_APP_SECRET, key: latest } }
+        - name: INSTAGRAM_REDIRECT_URI
+          valueFrom: { secretKeyRef: { name: INSTAGRAM_REDIRECT_URI, key: latest } }
+        - name: ADMIN_TOKEN
+          valueFrom: { secretKeyRef: { name: ADMIN_TOKEN, key: latest } }
+        - name: VIDEO_CACHE_TTL
+          value: "300"
