@@ -1,7 +1,3 @@
-const { Configuration, OpenAIApi } = require('openai');
-// Alternate import for newer versions of OpenAI SDK
-// const OpenAI = require('openai');
-
 // Import the newer OpenAI SDK
 const OpenAI = require('openai');
 
@@ -12,7 +8,7 @@ const OpenAI = require('openai');
  */
 exports.processChat = async (req, res) => {
   try {
-    console.log('Chat API request received');
+    
     const { messages } = req.body;
     
     if (!messages || !Array.isArray(messages)) {
@@ -22,9 +18,7 @@ exports.processChat = async (req, res) => {
         error: 'Invalid request format. Messages array is required.'
       });
     }
-    
-    console.log(`Processing ${messages.length} messages`);
-    
+        
     // Initial system message for the assistant to help with website navigation
     const systemMessage = {
       role: "system",
@@ -80,11 +74,7 @@ Remember to be friendly, helpful, and concise in your responses. If someone has 
       temperature: 0.7
     });
     
-    console.log('Received response from OpenAI API');
-    
     const assistantMessage = completion.choices[0].message.content;
-    
-    console.log('Sending successful response back to client');
     
     return res.status(200).json({
       success: true,

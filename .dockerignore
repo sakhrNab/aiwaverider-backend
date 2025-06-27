@@ -31,7 +31,7 @@ yarn-error.log
 Thumbs.db
 
 # Package files
-package-lock.json
+# package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
@@ -50,3 +50,5 @@ logs
 .nyc_output
 tests
 test
+
+server

@@ -53,31 +53,56 @@ router.get('/', async (req, res) => {
  */
 router.get('/:id', async (req, res) => {
   try {
+    console.log(`Fetching AI tool with ID: ${req.params.id}`);
     const id = req.params.id;
     
+    if (!id) {
+      console.error('Invalid ID provided:', id);
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid ID provided'
+      });
+    }
+    
     // Get the document
+    console.log(`Attempting to fetch document from collection: ${COLLECTION_NAME}, with ID: ${id}`);
     const doc = await admin.firestore().collection(COLLECTION_NAME).doc(id).get();
     
     // Check if the document exists
     if (!doc.exists) {
+      console.error(`Document with ID ${id} not found in collection ${COLLECTION_NAME}`);
       return res.status(404).json({
         success: false,
-        error: 'AI tool not found'
+        error: `AI tool with ID ${id} not found`
       });
     }
+    
+    // Log successful retrieval
+    console.log(`Successfully retrieved document with ID: ${id}`);
+    
+    // Get document data
+    const data = doc.data();
+    console.log(`Document data fields: ${Object.keys(data).join(', ')}`);
     
     return res.json({
       success: true,
       data: {
         id: doc.id,
-        ...doc.data()
+        ...data
       }
     });
   } catch (error) {
     console.error(`Error fetching AI tool ${req.params.id}:`, error);
+    console.error('Error stack:', error.stack);
+    
+    // Provide more detailed error information
     return res.status(500).json({
       success: false,
-      error: 'Server error while fetching AI tool'
+      error: 'Server error while fetching AI tool',
+      details: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        code: error.code || 'unknown'
+      } : undefined
     });
   }
 });
@@ -100,7 +125,7 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
     }
     
     // Extract fields from request body
-    const { title, description, link, keyword } = req.body;
+    const { title, description, link, keyword, category, additionalHTML } = req.body;
     
     // Handle tags which might be a string, array, or missing
     let tags = [];
@@ -117,22 +142,42 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
       }
     }
     
+    // Handle keywords which might be a string, array, or missing
+    let keywords = [];
+    if (keyword) {
+      if (Array.isArray(keyword)) {
+        keywords = keyword;
+      } else if (typeof keyword === 'string') {
+        // If it's a comma-separated string, split it
+        if (keyword.includes(',')) {
+          keywords = keyword.split(',').map(kw => kw.trim());
+        } else {
+          keywords = [keyword];
+        }
+      }
+    }
+    
     // Debug logging
     console.log('Extracted fields:');
     console.log('Title:', title);
     console.log('Description:', description);
     console.log('Link:', link);
     console.log('Keyword:', keyword);
+    console.log('Category:', category);
+    console.log('Additional HTML:', additionalHTML);
     console.log('Tags:', tags);
     console.log('Image file:', req.file);
     
     // Validate required fields
-    if (!title || !description || !link) {
+    if (!title || !description) {
       return res.status(400).json({
         success: false,
-        error: 'Title, description, and link are required fields'
+        error: 'Title and description are required fields'
       });
     }
+    
+    // Ensure link has a default value if empty
+    const safeLink = link || '';
     
     // Get image path if uploaded
     let imageUrl = '';
@@ -212,10 +257,12 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
     const newTool = {
       title,
       description,
-      link,
+      link: safeLink,
       image: imageUrl || '',
-      keyword: keyword || '',
+      keywords: keywords || [],  // Store as array of keywords
       tags: tags || [],
+      category: category || '',
+      additionalHTML: additionalHTML || '',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdBy: req.user.uid
@@ -259,7 +306,7 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
     }
     
     const id = req.params.id;
-    const { title, description, link, keyword } = req.body;
+    const { title, description, link, keyword, category, additionalHTML } = req.body;
     
     // Handle tags which might be a string, array, or missing
     let tags = undefined;
@@ -272,6 +319,21 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
           tags = req.body.tags.split(',').map(tag => tag.trim());
         } else {
           tags = [req.body.tags];
+        }
+      }
+    }
+    
+    // Handle keywords which might be a string, array, or missing
+    let keywords = undefined;
+    if (keyword) {
+      if (Array.isArray(keyword)) {
+        keywords = keyword;
+      } else if (typeof keyword === 'string') {
+        // If it's a comma-separated string, split it
+        if (keyword.includes(',')) {
+          keywords = keyword.split(',').map(kw => kw.trim());
+        } else {
+          keywords = [keyword];
         }
       }
     }
@@ -367,8 +429,10 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
       ...(description && { description }),
       ...(link && { link }),
       ...(imageUrl && { image: imageUrl }),
-      ...(keyword && { keyword }),
+      ...(keywords && { keywords }),  // Store as array of keywords
       ...(tags && { tags }),
+      ...(category && { category }),
+      ...(additionalHTML && { additionalHTML }),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedBy: req.user.uid
     };

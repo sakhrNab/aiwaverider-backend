@@ -359,7 +359,7 @@ router.get('/community', validateFirebaseToken, async (req, res) => {
     }
 
     return res.json({
-      discordLink: process.env.DISCORD_INVITE_LINK || 'https://discord.gg/your-invite-link',
+      discordLink: process.env.DISCORD_INVITE_LINK || 'https://discord.com/channels/1377544516579491891/1377544516579491894',
       paymentLink: process.env.PAYMENT_LINK || 'https://payment-provider.com/your-payment-link',
       communityBenefits: [
         'Access to exclusive content',

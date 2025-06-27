@@ -2,12 +2,20 @@ const Redis = require('ioredis');
 const { promisify } = require('util');
 
 // Redis client configuration
-const redis = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379,
-  password: process.env.REDIS_PASSWORD,
-  retryStrategy: (times) => Math.min(times * 50, 2000),
-});
+// Support for both Upstash Redis URL and traditional configuration
+let redis;
+if (process.env.REDIS_URL) {
+  // Use connection URL for Upstash Redis
+  redis = new Redis(process.env.REDIS_URL);
+} else {
+  // Fallback to traditional configuration for local development
+  redis = new Redis({
+    host: process.env.REDIS_HOST || 'localhost',
+    port: process.env.REDIS_PORT || 6379,
+    password: process.env.REDIS_PASSWORD,
+    retryStrategy: (times) => Math.min(times * 50, 2000),
+  });
+}
 
 // Default TTL (5 minutes)
 const DEFAULT_TTL = 300;
