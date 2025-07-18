@@ -32,10 +32,14 @@ const getFeaturedCacheDuration = () => {
   return process.env.NODE_ENV === 'development' ? 60 : 900; // 1 minute in dev, 15 minutes in production
 };
 
-// Public endpoints (cached)
+// Public endpoints (cached) - IMPORTANT: Specific routes must come before dynamic parameter routes
 router.get('/', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getAgents);
 router.get('/featured', publicCacheMiddleware({ duration: getFeaturedCacheDuration() }), agentsController.getFeaturedAgents);
 router.get('/latest', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getLatestAgentsRoute);
+router.get('/count', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getAgentCount);
+
+// Search count endpoint - matches frontend pattern: /api/agents/search/count?q=telegram&category=All
+router.get('/search/count', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getSearchResultsCount);
 
 // Cache busting route
 router.get('/refresh-cache', validateFirebaseToken, (req, res) => {
@@ -72,6 +76,7 @@ router.get('/agent-:numericId([0-9]+)', publicCacheMiddleware({ duration: getDef
   return agentsController.getAgentById(req, res);
 });
 
+// IMPORTANT: This dynamic route must come LAST to avoid catching specific routes like /count
 router.get('/:agentId', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getAgentById);
 
 // GET /api/agents/:agentId/downloads - Get download count for an agent

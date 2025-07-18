@@ -108,8 +108,23 @@ if (firebaseAdmin) {
   console.warn('Skipping Firestore initialization as Firebase Admin is not available');
 }
 
+// Initialize Storage with error handling
+let storage = null;
+if (firebaseAdmin) {
+  try {
+    console.log('Initializing Firebase Storage...');
+    storage = firebaseAdmin.storage();
+    console.log('Firebase Storage initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize Firebase Storage:', error);
+  }
+} else {
+  console.warn('Skipping Storage initialization as Firebase Admin is not available');
+}
+
 module.exports = {
   admin: firebaseAdmin,
   initializeFirebase,
-  db
+  db,
+  storage
 };

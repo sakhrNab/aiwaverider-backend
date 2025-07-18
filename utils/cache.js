@@ -133,6 +133,14 @@ const generateAgentCacheKey = (agentId) => {
 };
 
 /**
+ * Generates a cache key for agent count
+ * @returns {string} Cache key
+ */
+const generateAgentCountCacheKey = () => {
+  return `agents:count:total`;
+};
+
+/**
  * Retrieves data from cache
  * @param {string} key - Cache key
  * @returns {Promise<any>} Cached data or null if not found
@@ -218,5 +226,6 @@ module.exports = {
   generateAgentCategoryCacheKey,
   generateAgentSearchCacheKey,
   generateAgentCacheKey,
+  generateAgentCountCacheKey,
   DEFAULT_TTL
 }; 

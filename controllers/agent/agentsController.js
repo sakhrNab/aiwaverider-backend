@@ -5,7 +5,7 @@ const { db } = require('../../config/firebase');
 const admin = require('firebase-admin');
 // const axios = require('axios'); // Uncomment if used
 const logger = require('../../utils/logger');
-const { getCache, setCache, deleteCache, deleteCacheByPattern, generateAgentCategoryCacheKey, generateAgentSearchCacheKey, generateAgentCacheKey } = require('../../utils/cache');
+const { getCache, setCache, deleteCache, deleteCacheByPattern, generateAgentCategoryCacheKey, generateAgentSearchCacheKey, generateAgentCacheKey, generateAgentCountCacheKey } = require('../../utils/cache');
 // const { parseCustomFilters } = require('../utils/queryParser'); // Uncomment if used
 // const { restructureAgent } = require('../scripts/update-agent-structure'); // REMOVED/COMMENTED OUT
 
@@ -159,6 +159,7 @@ const getAgents = async (req, res) => {
           logger.info(`Cache HIT for category: ${category}`);
           return res.status(200).json({
             agents: cachedData,
+            totalCount: cachedData.length, // Add total count for category
             fromCache: true
           });
         }
@@ -189,6 +190,7 @@ const getAgents = async (req, res) => {
       
       return res.status(200).json({
         agents: agents,
+        totalCount: agents.length, // Add total count for category
         fromCache: false
       });
       
@@ -217,6 +219,7 @@ const getAgents = async (req, res) => {
             agents: cachedData.agents,
             lastVisibleId: cachedData.lastVisibleId,
             searchQuery: finalSearchQuery || null,
+            totalCount: cachedData.totalCount || 'unknown', // Add total count
             fromCache: true
           };
           logger.info(`Returning cached result with finalSearchQuery: "${finalSearchQuery}"`);
@@ -227,6 +230,28 @@ const getAgents = async (req, res) => {
         logger.info(`Cache MISS for ${finalSearchQuery ? 'search' : 'pagination'}, fetching from Firebase`);
       } catch (cacheError) {
         logger.error(`Cache error:`, cacheError);
+      }
+      
+      // Get total count for all agents (cached separately)
+      let totalCount = 'unknown';
+      try {
+        const countCacheKey = generateAgentCountCacheKey();
+        const cachedCount = await getCache(countCacheKey);
+        if (cachedCount !== null) {
+          totalCount = cachedCount;
+          logger.info(`Using cached total count: ${totalCount}`);
+        } else {
+          // Fetch total count from Firebase
+          const totalSnapshot = await db.collection('agents').get();
+          totalCount = totalSnapshot.size;
+          logger.info(`Fetched total count from Firebase: ${totalCount}`);
+          
+          // Cache the count for 24 hours
+          await setCache(countCacheKey, totalCount, 86400);
+        }
+      } catch (countError) {
+        logger.error('Error getting total count:', countError);
+        totalCount = 'unknown';
       }
       
       // Build paginated query
@@ -244,9 +269,9 @@ const getAgents = async (req, res) => {
         
         query = query.orderBy('createdAt', 'desc');
         
-        // Increase limit for search to get more candidates
-        const searchLimit = Math.max(parseInt(limit) * 3, 100); // 3x normal limit for search
-        logger.info(`Using expanded limit ${searchLimit} for search filtering`);
+        // OPTIMIZED: Reduce from 3x to 1.5x buffer for better performance
+        const searchLimit = Math.max(parseInt(limit) * 1.5, 50); // 1.5x normal limit for search (was 3x)
+        logger.info(`Using expanded limit ${searchLimit} for search filtering (optimized from 3x to 1.5x)`);
         
       } else {
         // No search query - normal pagination
@@ -273,7 +298,7 @@ const getAgents = async (req, res) => {
       // Apply limit - use expanded limit for search queries
       const hasSearchQuery = finalSearchQuery && finalSearchQuery.trim();
       const queryLimit = hasSearchQuery ? 
-        Math.max(parseInt(limit) * 3, 100) : // 3x limit for search 
+        Math.max(parseInt(limit) * 1.5, 50) : // 1.5x limit for search (optimized from 3x)
         (parseInt(limit) || 20); // Normal limit for pagination
         
       query = query.limit(queryLimit);
@@ -347,6 +372,7 @@ const getAgents = async (req, res) => {
         agents: agents,
         lastVisibleId: agents.length > 0 ? newLastVisibleId : null,
         searchQuery: finalSearchQuery || null, // Include search query for frontend filtering
+        totalCount: totalCount, // Add total count
         fromCache: false
       };
       
@@ -1014,6 +1040,14 @@ const createAgent = async (req, res) => {
       await deleteCacheByPattern('agents:all:*');
       logger.info('Invalidated all paginated search caches');
       
+      // Delete search count caches (new agent affects search counts)
+      await deleteCacheByPattern('agents:search:count:*');
+      logger.info('Invalidated all search count caches');
+      
+      // Delete agent count cache (new agent added, count changed)
+      await deleteCache(generateAgentCountCacheKey());
+      logger.info('Invalidated agent count cache');
+      
       logger.info(`Cache invalidation completed for new agent creation: ${agentRef.id} in category: ${newAgentCategory}`);
     } catch (cacheError) {
       logger.error('Error during cache invalidation in createAgent:', cacheError);
@@ -1173,6 +1207,12 @@ const updateAgent = async (req, res) => {
       await deleteCacheByPattern('agents:all:*');
       logger.info('Invalidated all paginated search caches');
       
+      // Delete search count caches (agent update affects search counts)
+      await deleteCacheByPattern('agents:search:count:*');
+      logger.info('Invalidated all search count caches');
+      
+      // Note: Agent count doesn't change on update, so no need to invalidate count cache
+      
       logger.info(`Cache invalidation completed for agent update: ${agentId}, categories: ${oldCategory} -> ${newCategory}`);
     } catch (cacheError) {
       logger.error('Error during cache invalidation in updateAgent:', cacheError);
@@ -1298,7 +1338,10 @@ const addAgentReview_controller = async (req, res) => {
       // Invalidate all search/pagination caches (reviews affect sorting)
       await deleteCacheByPattern('agents:all:*');
       
-      logger.info(`Cache invalidation completed for agent ${finalAgentIdUsed} due to new review - individual, category: ${agentData.category}, and search caches`);
+      // Invalidate search count caches (reviews might affect search results)
+      await deleteCacheByPattern('agents:search:count:*');
+      
+      logger.info(`Cache invalidation completed for agent ${finalAgentIdUsed} due to new review - individual, category: ${agentData.category}, search caches, and search counts`);
     } catch (cacheError) {
       logger.error('Error during cache invalidation in addAgentReview:', cacheError);
     }
@@ -1395,7 +1438,10 @@ const deleteAgentReview_controller = async (req, res) => {
       // Invalidate all search/pagination caches (reviews affect sorting)
       await deleteCacheByPattern('agents:all:*');
       
-      logger.info(`Cache invalidation completed for agent ${finalAgentIdUsed} due to review deletion - individual, category: ${agentData.category}, and search caches`);
+      // Invalidate search count caches (reviews might affect search results)
+      await deleteCacheByPattern('agents:search:count:*');
+      
+      logger.info(`Cache invalidation completed for agent ${finalAgentIdUsed} due to review deletion - individual, category: ${agentData.category}, search caches, and search counts`);
     } catch (cacheError) {
       logger.error('Error during cache invalidation in deleteAgentReview:', cacheError);
     }
@@ -1480,6 +1526,14 @@ const deleteAgent = async (req, res) => {
       // Delete all "All Categories" paginated caches using pattern
       await deleteCacheByPattern('agents:all:*');
       logger.info('Invalidated all paginated search caches');
+      
+      // Delete search count caches (agent deletion affects search counts)
+      await deleteCacheByPattern('agents:search:count:*');
+      logger.info('Invalidated all search count caches');
+      
+      // Delete agent count cache (agent deleted, count changed)
+      await deleteCache(generateAgentCountCacheKey());
+      logger.info('Invalidated agent count cache');
       
       logger.info(`Cache invalidation completed for agent deletion: ${sanitizedAgentId} from category: ${deletedAgentCategory}`);
     } catch (cacheError) {
@@ -1797,8 +1851,197 @@ const getLatestAgents = async (limit = 5) => {
 };
 
 const getLatestAgentsRoute = async (req, res) => { /* ... your existing code ... */ };
-// --- END OF OTHER EXISTING FUNCTIONS ---
 
+/**
+ * Get total count of agents with Redis caching
+ * Follows the same Redis-First architecture as other agent endpoints
+ */
+const getAgentCount = async (req, res) => {
+  try {
+    logger.info('getAgentCount called - checking cache first');
+    
+    // Generate cache key for total agent count
+    const cacheKey = generateAgentCountCacheKey();
+    logger.info(`Agent count cache key: ${cacheKey}`);
+    
+    // Redis-First approach: Try to get from cache first
+    try {
+      const cachedCount = await getCache(cacheKey);
+      if (cachedCount !== null) {
+        logger.info(`Cache HIT for agent count: ${cachedCount}`);
+        return res.status(200).json({
+          success: true,
+          totalCount: cachedCount,
+          fromCache: true
+        });
+      }
+      logger.info('Cache MISS for agent count, fetching from Firebase');
+    } catch (cacheError) {
+      logger.error('Cache error for agent count:', cacheError);
+    }
+    
+    // Cache miss - fetch from Firebase
+    const agentsSnapshot = await db.collection('agents').get();
+    const totalCount = agentsSnapshot.size;
+    
+    logger.info(`Fetched agent count from Firebase: ${totalCount}`);
+    
+    // Cache the result for 24 hours (86400 seconds) - same TTL as agents
+    try {
+      await setCache(cacheKey, totalCount, 86400);
+      logger.info(`Cached agent count: ${totalCount} for 24 hours`);
+    } catch (cacheError) {
+      logger.error('Error caching agent count:', cacheError);
+    }
+    
+    return res.status(200).json({
+      success: true,
+      totalCount: totalCount,
+      fromCache: false
+    });
+    
+  } catch (error) {
+    logger.error('Error in getAgentCount:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch agent count',
+      details: error.message
+    });
+  }
+};
+
+/**
+ * Get search results count for a specific query
+ * GET /api/agents/search/count?q=searchQuery&category=All
+ */
+const getSearchResultsCount = async (req, res) => {
+  try {
+    const {
+      q: searchQuery,
+      category = 'All'
+    } = req.query;
+
+    logger.info(`getSearchResultsCount called with: searchQuery=${searchQuery}, category=${category}`);
+
+    if (!searchQuery || !searchQuery.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Search query is required',
+        count: 0
+      });
+    }
+
+    const finalSearchQuery = searchQuery.trim();
+    
+    // Generate cache key for search count
+    const countCacheKey = `agents:search:count:${finalSearchQuery}:${category}`;
+    logger.info(`Search count cache key: ${countCacheKey}`);
+    
+    // Try to get from cache first (Redis-First approach)
+    try {
+      const cachedCount = await getCache(countCacheKey);
+      if (cachedCount !== null) {
+        logger.info(`Cache HIT for search count: ${finalSearchQuery} = ${cachedCount}`);
+        return res.status(200).json({
+          success: true,
+          count: cachedCount,
+          searchQuery: finalSearchQuery,
+          fromCache: true
+        });
+      }
+      logger.info(`Cache MISS for search count: ${finalSearchQuery}, fetching from Firebase`);
+    } catch (cacheError) {
+      logger.error(`Cache error for search count ${finalSearchQuery}:`, cacheError);
+    }
+
+    // Build query to get all matching agents
+    let query = db.collection('agents');
+    
+    if (category && category !== 'All') {
+      query = query.where('category', '==', category);
+    }
+    
+    // For search count, we need to fetch ALL agents and filter them
+    // This is because Firebase doesn't support complex text search queries
+    query = query.orderBy('createdAt', 'desc');
+    
+    // Execute the query to get all agents
+    const agentsSnapshot = await query.get();
+    
+    let allAgents = [];
+    agentsSnapshot.forEach(doc => {
+      allAgents.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+
+    // Server-side filtering for search count
+    const searchLower = finalSearchQuery.toLowerCase().trim();
+    logger.info(`Filtering ${allAgents.length} agents for search count: "${searchLower}"`);
+    
+    const matchingAgents = allAgents.filter((agent) => {
+      // Search in title
+      if (agent.title && agent.title.toLowerCase().includes(searchLower)) {
+        return true;
+      }
+      
+      // Search in description
+      if (agent.description && agent.description.toLowerCase().includes(searchLower)) {
+        return true;
+      }
+      
+      // Search in tags
+      if (agent.tags && Array.isArray(agent.tags)) {
+        if (agent.tags.some(tag => tag.toLowerCase().includes(searchLower))) {
+          return true;
+        }
+      }
+      
+      // Search in category
+      if (agent.category && agent.category.toLowerCase().includes(searchLower)) {
+        return true;
+      }
+      
+      // Search in name
+      if (agent.name && agent.name.toLowerCase().includes(searchLower)) {
+        return true;
+      }
+      
+      return false;
+    });
+
+    const searchResultsCount = matchingAgents.length;
+    logger.info(`Search count result: ${allAgents.length} → ${searchResultsCount} agents for "${finalSearchQuery}"`);
+
+    // Cache the count for 24 hours (86400 seconds)
+    try {
+      await setCache(countCacheKey, searchResultsCount, 86400);
+      logger.info(`Cached search count: ${searchResultsCount} for "${finalSearchQuery}"`);
+    } catch (cacheError) {
+      logger.error(`Error caching search count for ${finalSearchQuery}:`, cacheError);
+    }
+
+    return res.status(200).json({
+      success: true,
+      count: searchResultsCount,
+      searchQuery: finalSearchQuery,
+      totalAgents: allAgents.length,
+      fromCache: false
+    });
+
+  } catch (error) {
+    logger.error('Error in getSearchResultsCount:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get search results count',
+      details: error.message,
+      count: 0
+    });
+  }
+};
+
+// --- END OF OTHER EXISTING FUNCTIONS ---
 
 logger.info("Before export - function status check:");
 const functionsToExport = {
@@ -1808,7 +2051,10 @@ const functionsToExport = {
   getLatestAgents, getLatestAgentsRoute,
   // Add the new review handlers
   addAgentReview_controller,
-  deleteAgentReview_controller
+  deleteAgentReview_controller,
+  // Add the new count endpoints
+  getAgentCount,
+  getSearchResultsCount
 };
 for (const funcName in functionsToExport) {
   logger.info(`- ${funcName}: ${typeof functionsToExport[funcName] === 'function'}`);
