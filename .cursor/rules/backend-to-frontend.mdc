@@ -1,0 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+After you finish implementing whatever you did. You will write a TODO.md file with the steps to do in the frontend. For example, if you created new endpoints, you will list all of them and you will mention what they do, and how the request, response, header, and authorization look like. 
+You will write instructions for the frontend software developer of what to do or change in the frontend in-order to reflect to the backend changes. 
+

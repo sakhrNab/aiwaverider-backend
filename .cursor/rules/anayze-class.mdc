@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Analyze all methods and variables inside the class you are supposed to change to avoid any duplication of code. To avoid doing things twice. This is a must before you start the editing the code. 

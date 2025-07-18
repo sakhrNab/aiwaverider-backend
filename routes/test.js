@@ -32,4 +32,42 @@ router.post('/create-agent-price', (req, res) => {
   }
 });
 
+// Test route
+router.get('/', (req, res) => {
+    res.json({ message: 'Test route is working!' });
+});
+
+// Debug endpoint to test parameter extraction
+router.get('/debug-params', (req, res) => {
+  const {
+    category = 'All',
+    searchQuery,
+    search,
+    lastVisibleId,
+    limit = 20,
+    filter
+  } = req.query;
+
+  const finalSearchQuery = searchQuery || search;
+
+  const response = {
+    receivedParams: {
+      category,
+      searchQuery,
+      search,
+      lastVisibleId,
+      limit,
+      filter
+    },
+    finalSearchQuery,
+    finalSearchQueryType: typeof finalSearchQuery,
+    queryObject: req.query,
+    url: req.url
+  };
+
+  console.log('DEBUG PARAMS ENDPOINT:', JSON.stringify(response, null, 2));
+  
+  return res.status(200).json(response);
+});
+
 module.exports = router; 

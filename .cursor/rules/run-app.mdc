@@ -1,0 +1,16 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+After you've finished making all the editing. Run the application, make curl calls of all the new endpoints and all possiblities that could come by. See if they work, and if they do, everything is great, if not keep fixing until all scenarios work perfectly.
+
+Start running the commands in cmd
+Therefore in each console you start, type cmd then click Enter. 
+
+My application runs on localhost:4000. 
+
+The first thing you will do, check  if the port 4000 is running, if it is running, you won't start the application anymore. If not, you can either starting using:
+1. node index.js, or 
+2. npm run dev
+

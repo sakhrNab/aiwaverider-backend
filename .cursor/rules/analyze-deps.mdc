@@ -1,0 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+You will first check the imports in the class you're about to change. This will help you to gain insight what classes are already implemented and which dependencies exist. This will also help you to avoid creating new classes which already there, and any kind of duplications. 
+
+After checking the imports if one of them is relevant to the changes we want to do, you are going to analyze the class or component which will help you understand the implementation of this dependency to continue your implementation. You won't start with any step before doing this. 
