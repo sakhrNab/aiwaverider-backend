@@ -244,6 +244,45 @@ const isRedisHealthy = async () => {
 };
 
 /**
+ * Health check ping to keep Redis connection alive
+ * Runs every 2 minutes to prevent connection timeouts
+ */
+let healthCheckInterval = null;
+
+const startHealthCheck = () => {
+  // Clear any existing interval
+  if (healthCheckInterval) {
+    clearInterval(healthCheckInterval);
+  }
+  
+  // Start health check every 2 minutes (120000ms)
+  healthCheckInterval = setInterval(async () => {
+    try {
+      await redis.ping();
+      logger.info('💓 Redis health check passed');
+    } catch (error) {
+      logger.warn('⚠️ Redis health check failed, attempting reconnection...');
+      try {
+        await redis.connect();
+        logger.info('✅ Redis reconnected successfully');
+      } catch (reconnectError) {
+        logger.error('❌ Redis reconnection failed:', reconnectError);
+      }
+    }
+  }, 120000); // 2 minutes
+  
+  logger.info('🔄 Redis health check started (every 2 minutes)');
+};
+
+const stopHealthCheck = () => {
+  if (healthCheckInterval) {
+    clearInterval(healthCheckInterval);
+    healthCheckInterval = null;
+    logger.info('🛑 Redis health check stopped');
+  }
+};
+
+/**
  * Increment a counter in Redis (useful for rate limiting, stats)
  * @param {string} key - Counter key
  * @param {number} ttl - TTL for the counter
@@ -301,10 +340,18 @@ redis.on('error', (error) => {
 
 redis.on('connect', () => {
   logger.info('🔌 Connected to Redis successfully');
+  
+  // If Redis is already ready, start health check immediately
+  if (redis.status === 'ready') {
+    startHealthCheck();
+  }
 });
 
 redis.on('ready', () => {
   logger.info('✅ Redis is ready for operations');
+  
+  // Start health check ping to keep connection alive
+  startHealthCheck();
 });
 
 redis.on('close', () => {
@@ -318,6 +365,7 @@ redis.on('reconnecting', () => {
 // Graceful shutdown
 process.on('SIGINT', async () => {
   logger.info('🛑 Gracefully closing Redis connection...');
+  stopHealthCheck();
   await redis.quit();
   process.exit(0);
 });
@@ -335,6 +383,10 @@ module.exports = {
   isRedisHealthy,
   incrementCounter,
   cacheWithRefresh,
+  
+  // Health check functions
+  startHealthCheck,
+  stopHealthCheck,
   
   // NEW: Missing cache key generators
   generateAgentCountCacheKey,
