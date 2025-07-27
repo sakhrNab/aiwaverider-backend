@@ -33,6 +33,29 @@ const TTL = {
   VERY_LONG: 604800  // 7 days - for rarely changing data
 };
 
+// Optimized TTL configurations for agents (cost optimization)
+const AGENT_TTL = {
+  LISTINGS: TTL.LONG,           // 24 hours - agent listings
+  DETAILS: TTL.VERY_LONG,       // 7 days - individual agent details
+  SEARCH: 3600,                 // 1 hour - search results (unique)
+  COUNTS: TTL.LONG,             // 24 hours - category counts
+  FEATURED: 3600,               // 1 hour - featured agents (unique)
+  ADMIN: TTL.SHORT,             // 5 minutes - admin-specific data
+  CATEGORY: TTL.LONG,           // 24 hours - category listings
+  RECOMMENDATIONS: 3600         // 1 hour - recommendations (unique)
+};
+
+// Optimized TTL configurations for videos (cost optimization)
+const VIDEO_TTL = {
+  LISTINGS: TTL.LONG,           // 24 hours - video listings
+  METADATA: TTL.VERY_LONG,      // 7 days - video metadata (views, likes)
+  SEARCH: 3600,                 // 1 hour - search results
+  ADMIN: TTL.SHORT,             // 5 minutes - admin-specific data
+  INSTAGRAM: TTL.LONG * 4       // 20 minutes - Instagram (longer due to API limits)
+};
+
+
+
 /**
  * Generates a cache key for paginated post listings
  * @param {Object} params - Parameters for generating the cache key
@@ -118,6 +141,83 @@ const generateAgentCacheKey = (agentId) => {
 };
 
 /**
+ * Get optimized TTL based on cache key type
+ * @param {string} key - Cache key
+ * @returns {number} TTL in seconds
+ */
+const getOptimizedTTL = (key) => {
+  // Agent-specific TTLs for cost optimization
+  if (key.startsWith('agents:category:')) {
+    return AGENT_TTL.CATEGORY; // 24 hours
+  }
+  if (key.startsWith('agents:search:')) {
+    return AGENT_TTL.SEARCH; // 1 hour
+  }
+  if (key.startsWith('agents:count:')) {
+    return AGENT_TTL.COUNTS; // 24 hours
+  }
+  if (key.startsWith('agents:featured:')) {
+    return AGENT_TTL.FEATURED; // 1 hour
+  }
+  if (key.startsWith('agents:recommendations:')) {
+    return AGENT_TTL.RECOMMENDATIONS; // 1 hour
+  }
+  if (key.startsWith('agent:')) {
+    return AGENT_TTL.DETAILS; // 7 days
+  }
+  if (key.startsWith('agents:admin:')) {
+    return AGENT_TTL.ADMIN; // 5 minutes (admin data)
+  }
+  if (key.startsWith('agents:') && !key.includes(':')) {
+    return AGENT_TTL.LISTINGS; // 24 hours (general agent listings)
+  }
+  
+  // Video-specific TTLs for cost optimization
+  if (key.startsWith('video_list:')) {
+    return VIDEO_TTL.LISTINGS; // 24 hours
+  }
+  if (key.startsWith('video_meta:')) {
+    if (key.includes(':instagram:')) {
+      return VIDEO_TTL.INSTAGRAM; // 20 minutes (Instagram API limits)
+    }
+    return VIDEO_TTL.METADATA; // 7 days (YouTube/TikTok metadata)
+  }
+  if (key.startsWith('video_search:')) {
+    return VIDEO_TTL.SEARCH; // 1 hour
+  }
+  if (key.startsWith('video_admin:')) {
+    return VIDEO_TTL.ADMIN; // 5 minutes (admin data)
+  }
+  
+  // Default to original TTL for non-agent/video data
+  return TTL.SHORT;
+};
+
+/**
+ * Get TTL type description for logging
+ * @param {number} ttl - TTL in seconds
+ * @returns {string} TTL type description
+ */
+const getTTLType = (ttl) => {
+  // Agent-specific TTLs
+  if (ttl === AGENT_TTL.SEARCH || ttl === AGENT_TTL.FEATURED || ttl === AGENT_TTL.RECOMMENDATIONS) return '1-HOUR';
+  
+  // Video-specific TTLs
+  if (ttl === VIDEO_TTL.SEARCH) return '1-HOUR';
+  if (ttl === VIDEO_TTL.INSTAGRAM) return '20-MINUTES';
+  
+  // General TTLs (including agent/video TTLs that reference them)
+  if (ttl === TTL.SHORT) return '5-MINUTES';
+  if (ttl === TTL.MEDIUM) return '30-MINUTES';
+  if (ttl === TTL.LONG) return '24-HOURS';
+  if (ttl === TTL.VERY_LONG) return '7-DAYS';
+  
+  return `${ttl}s`;
+};
+
+
+
+/**
  * Retrieves data from Redis cache with error handling
  * @param {string} key - Cache key
  * @returns {Promise<any>} Cached data or null if not found
@@ -142,24 +242,29 @@ const getCache = async (key) => {
 };
 
 /**
- * Stores data in Redis cache with TTL
+ * Stores data in Redis cache with optimized TTL
  * @param {string} key - Cache key
  * @param {any} data - Data to cache
- * @param {number} ttl - Time to live in seconds
+ * @param {number} ttl - Time to live in seconds (optional, auto-detected for agents)
  * @returns {Promise<boolean>} Success status
  */
-const setCache = async (key, data, ttl = TTL.SHORT) => {
+const setCache = async (key, data, ttl = null) => {
   try {
     const start = Date.now();
     const serializedData = JSON.stringify(data);
     
+    // Use optimized TTL if not specified
+    const finalTTL = ttl || getOptimizedTTL(key);
+    
     // Log size for monitoring
     const sizeKB = Math.round(serializedData.length / 1024);
     
-    await redis.set(key, serializedData, 'EX', ttl);
+    await redis.set(key, serializedData, 'EX', finalTTL);
     const duration = Date.now() - start;
     
-    logger.info(`📤 Cache SET: ${key} (${sizeKB}KB, TTL:${ttl}s, ${duration}ms)`);
+    // Enhanced logging with TTL type
+    const ttlType = getTTLType(finalTTL);
+    logger.info(`📤 Cache SET: ${key} (${sizeKB}KB, TTL:${finalTTL}s [${ttlType}], ${duration}ms)`);
     return true;
   } catch (error) {
     logger.error(`❌ Cache SET error for key ${key}:`, error);
@@ -303,13 +408,13 @@ const incrementCounter = async (key, ttl = TTL.MEDIUM) => {
 };
 
 /**
- * Cache with automatic refresh capability
+ * Cache with automatic refresh capability and optimized TTL
  * @param {string} key - Cache key
  * @param {Function} fetchFunction - Function to fetch fresh data
- * @param {number} ttl - TTL in seconds
+ * @param {number} ttl - TTL in seconds (optional, auto-detected for agents)
  * @returns {Promise<any>} Cached or fresh data
  */
-const cacheWithRefresh = async (key, fetchFunction, ttl = TTL.SHORT) => {
+const cacheWithRefresh = async (key, fetchFunction, ttl = null) => {
   try {
     // Try to get from cache first
     let data = await getCache(key);
@@ -388,17 +493,21 @@ module.exports = {
   startHealthCheck,
   stopHealthCheck,
   
-  // NEW: Missing cache key generators
+  // TTL optimization functions
+  getOptimizedTTL,
+  getTTLType,
+  
+  // Cache key generators
   generateAgentCountCacheKey,
   generateAgentCategoryCacheKey,
   generateAgentSearchCacheKey,
   generateAgentCacheKey,
-
   generatePostsCacheKey,
-
   
   // TTL constants
   TTL,
+  AGENT_TTL,
+  VIDEO_TTL,
   
   // Redis instance (for advanced operations if needed)
   redis

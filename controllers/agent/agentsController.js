@@ -44,7 +44,7 @@ const refreshAgentsCache = async () => {
     logger.info(`✅ Loaded ${allAgentsCache.length} agents into memory cache in ${loadTime}ms`);
     
     // Also cache total count in Redis for API responses
-    await setCache('agents:total:count', allAgentsCache.length, 86400);
+    await setCache('agents:total:count', allAgentsCache.length);
     
     return true;
   } catch (error) {
@@ -437,8 +437,8 @@ const getAgents = async (req, res) => {
       lastVisibleId: paginatedResults.length > 0 ? paginatedResults[paginatedResults.length - 1].id : null,
     };
     
-    // 9. Cache the result for 5 minutes (frequently accessed queries)
-    await setCache(cacheKey, response, 300);
+    // 9. Cache the result (using optimized TTL)
+    await setCache(cacheKey, response);
     
     logger.info(`✅ Query processed successfully:`, {
       totalFound: totalCount,
@@ -492,8 +492,8 @@ const getFeaturedAgents = async (req, res) => {
       });
     });
     
-    // Cache for 1 hour
-    await setCache(cacheKey, agents, 3600);
+    // Cache using optimized TTL
+    await setCache(cacheKey, agents);
     
     return res.status(200).json({
       agents: agents,
@@ -631,7 +631,7 @@ const getAgentById = async (req, res) => {
     // Cache using the ID that successfully fetched the document (`finalIdUsedForAgent`)
     const effectiveCacheKey = `${CACHE_KEYS.AGENT}${finalIdUsedForAgent}`;
     try {
-      await setCache(effectiveCacheKey, agentData, 300); // 5 minutes TTL
+      await setCache(effectiveCacheKey, agentData); // Using optimized TTL
       logger.info(`Cached agent ${finalIdUsedForAgent} in Redis using key ${effectiveCacheKey}.`);
     } catch (cacheError) {
       logger.error(`Error caching agent ${finalIdUsedForAgent} in Redis:`, cacheError);
@@ -2029,7 +2029,7 @@ const getAgentCount = async (req, res) => {
     
     // Cache the result for 24 hours (86400 seconds) - same TTL as agents
     try {
-      await setCache(cacheKey, totalCount, 86400);
+      await setCache(cacheKey, totalCount);
       logger.info(`Cached agent count: ${totalCount} for 24 hours`);
     } catch (cacheError) {
       logger.error('Error caching agent count:', cacheError);
@@ -2122,7 +2122,7 @@ const getSearchResultsCount = async (req, res) => {
 
     // Cache the count for 5 minutes (300 seconds) - shorter TTL for search counts
     try {
-      await setCache(countCacheKey, searchResultsCount, 300);
+      await setCache(countCacheKey, searchResultsCount);
       logger.info(`Cached search count: ${searchResultsCount} for "${finalSearchQuery}"`);
     } catch (cacheError) {
       logger.error(`Error caching search count for ${finalSearchQuery}:`, cacheError);
