@@ -67,6 +67,16 @@ const VIDEO_TTL = {
 const generatePostsCacheKey = ({ category, limit, startAfter }) => {
   return `posts:${category || 'All'}:${limit}:${startAfter || 'start'}`;
 };
+
+/**
+ * Generates a cache key for a single post
+ * @param {string} postId - The post's unique identifier
+ * @returns {string} Cache key
+ */
+const generatePostCacheKey = (postId) => {
+  return `post:${postId}`;
+};
+
 /**
  * Enhanced cache key generation with consistent naming
  */
@@ -503,7 +513,7 @@ module.exports = {
   generateAgentSearchCacheKey,
   generateAgentCacheKey,
   generatePostsCacheKey,
-  
+  generatePostCacheKey,  
   // TTL constants
   TTL,
   AGENT_TTL,

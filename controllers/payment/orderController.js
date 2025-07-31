@@ -1,87 +1,94 @@
 /**
- * Order Controller
+ * Updated Order Controller - Enhanced for UniPay v3 Integration
  * 
- * Handles order processing, template delivery, and related functionalities
+ * Handles order processing, template delivery, and invoice creation
+ * for the corrected UniPay payment system and other providers
  */
 
 const admin = require('firebase-admin');
 const { v4: uuidv4 } = require('uuid');
 const emailService = require('../../services/email/emailService');
+const invoiceService = require('../../services/invoice/invoiceService');
 const logger = require('../../utils/logger');
 
 // Initialize Firestore
 const db = admin.firestore();
 
-/**
- * Get agent template content
- * @param {string} agentId - The agent ID
- * @returns {Promise<Object>} - The template content as an object with all agent data
- */
-const getAgentTemplate = async (agentId) => {
-  try {
-    // Get agent from database
-    const agentDoc = await db.collection('agents').doc(agentId).get();
-    
-    if (!agentDoc.exists) {
-      throw new Error(`Agent not found: ${agentId}`);
-    }
-    
-    const agent = agentDoc.data();
-    
-    // Prepare a full agent template object
-    const templateObject = {
-      id: agentId,
-      name: agent.title || agent.name || 'AI Agent',
-      description: agent.description || 'No description available',
-      version: "1.0",
-      created: new Date().toISOString(),
-      type: "agent_template",
-      category: agent.category || "AI Agent",
-      tags: agent.tags || [],
-      // Include all agent properties, removing any that are undefined
-      ...Object.fromEntries(
-        Object.entries(agent).filter(([_, value]) => value !== undefined)
-      ),
-    };
-    
-    // If agent has a template field, use that as the template content
-    if (agent.template) {
-      // If template is already JSON, parse it and include it
-      if (typeof agent.template === 'string' && agent.template.trim().startsWith('{')) {
-        try {
-          const parsedTemplate = JSON.parse(agent.template);
-          templateObject.templateContent = parsedTemplate;
-        } catch (e) {
-          // If parsing fails, use it as is
+class OrderController {
+  constructor() {
+    this.supportedProcessors = ['unipay', 'paypal', 'google_direct', 'apple_direct', 'stripe'];
+  }
+
+  /**
+   * Get agent template content
+   * @param {string} agentId - The agent ID
+   * @returns {Promise<Object>} - The template content as an object with all agent data
+   */
+  async getAgentTemplate(agentId) {
+    try {
+      // Get agent from database
+      const agentDoc = await db.collection('agents').doc(agentId).get();
+      
+      if (!agentDoc.exists) {
+        throw new Error(`Agent not found: ${agentId}`);
+      }
+      
+      const agent = agentDoc.data();
+      
+      // Prepare a full agent template object
+      const templateObject = {
+        id: agentId,
+        name: agent.title || agent.name || 'AI Agent',
+        description: agent.description || 'No description available',
+        version: "1.0",
+        created: new Date().toISOString(),
+        type: "agent_template",
+        category: agent.category || "AI Agent",
+        tags: agent.tags || [],
+        // Include all agent properties, removing any that are undefined
+        ...Object.fromEntries(
+          Object.entries(agent).filter(([_, value]) => value !== undefined)
+        ),
+      };
+      
+      // If agent has a template field, use that as the template content
+      if (agent.template) {
+        // If template is already JSON, parse it and include it
+        if (typeof agent.template === 'string' && agent.template.trim().startsWith('{')) {
+          try {
+            const parsedTemplate = JSON.parse(agent.template);
+            templateObject.templateContent = parsedTemplate;
+          } catch (e) {
+            // If parsing fails, use it as is
+            templateObject.templateContent = agent.template;
+          }
+        } else {
+          // Use the template string directly
           templateObject.templateContent = agent.template;
         }
+      } else if (agent.templateUrl) {
+        // Include the template URL if available
+        templateObject.templateUrl = agent.templateUrl;
       } else {
-        // Use the template string directly
-        templateObject.templateContent = agent.template;
+        // Generate a basic template only as last resort
+        templateObject.templateContent = this.generateBasicTemplate(agent);
+        templateObject.isGenerated = true;
       }
-    } else if (agent.templateUrl) {
-      // Include the template URL if available
-      templateObject.templateUrl = agent.templateUrl;
-    } else {
-      // Generate a basic template only as last resort
-      templateObject.templateContent = generateBasicTemplate(agent);
-      templateObject.isGenerated = true;
+      
+      return JSON.stringify(templateObject, null, 2);
+    } catch (error) {
+      logger.error(`Error getting agent template: ${error.message}`);
+      throw error;
     }
-    
-    return JSON.stringify(templateObject, null, 2);
-  } catch (error) {
-    logger.error(`Error getting agent template: ${error.message}`);
-    throw error;
   }
-};
 
-/**
- * Generate a basic template based on agent information
- * @param {Object} agent - The agent data
- * @returns {string} - A basic template
- */
-const generateBasicTemplate = (agent) => {
-  return `
+  /**
+   * Generate a basic template based on agent information
+   * @param {Object} agent - The agent data
+   * @returns {string} - A basic template
+   */
+  generateBasicTemplate(agent) {
+    return `
 # ${agent.title} - AI Agent Template
 
 ## Description
@@ -108,346 +115,656 @@ You can help users with:
 
 Remember to be respectful, maintain user privacy, and clarify when you're uncertain about something.
 `;
-};
-
-/**
- * Create a new order record
- * @param {Object} orderData - The order data
- * @returns {Promise<Object>} - The created order
- */
-const createOrder = async (orderData) => {
-  try {
-    // Generate order ID if not provided
-    const orderId = orderData.orderId || uuidv4();
-    
-    // Create order object
-    const order = {
-      id: orderId,
-      userId: orderData.userId,
-      userEmail: orderData.userEmail,
-      items: orderData.items || [],
-      total: orderData.total || 0,
-      currency: orderData.currency || 'USD',
-      status: orderData.status || 'pending',
-      paymentId: orderData.paymentId,
-      paymentMethod: orderData.paymentMethod,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      deliveryStatus: 'pending',
-      metadata: orderData.metadata || {}
-    };
-    
-    // Save order to database
-    await db.collection('orders').doc(orderId).set(order);
-    
-    return { ...order };
-  } catch (error) {
-    logger.error(`Error creating order: ${error.message}`);
-    throw error;
   }
-};
 
-/**
- * Process payment success and deliver templates
- * @param {Object} paymentData - Payment data from the payment provider
- * @returns {Promise<Object>} - Processing result
- */
-const processPaymentSuccess = async (paymentData) => {
-  try {
-    // Extract metadata from payment
-    const metadata = paymentData.metadata || {};
-    const items = Array.isArray(paymentData.items) ? paymentData.items : [];
-    
-    // Get customer info - prioritize customer email, then metadata email, never use hardcoded default
-    const email = paymentData.customer?.email || metadata.email || null;
-    
-    // Log email being used for confirmation
-    if (email) {
-      logger.info(`Using email address for order confirmation: ${email}`);
-    } else {
-      logger.warn(`No email address available for order confirmation - unable to send template`);
-    }
-    
-    const userId = paymentData.customer?.id || metadata.userId || null;
-    
-    // Check if this is a SEPA payment
-    const isSepaPayment = 
-      paymentData.payment_method_types?.includes('sepa_credit_transfer') || 
-      paymentData.payment_method_types?.includes('sepa_debit') ||
-      metadata.payment_method === 'sepa_credit_transfer';
-    
-    // Check for PayPal payments
-    const isPayPalPayment = 
-      paymentData.payment_method_types?.includes('paypal') || 
-      metadata.payment_method === 'paypal' ||
-      paymentData.payment_method === 'paypal';
-    
-    // Check if immediate delivery is requested
-    const immediateDelivery = (isSepaPayment && metadata.immediate_delivery === true) || 
-                             metadata.immediate_delivery === true || 
-                             isPayPalPayment || 
-                             !isSepaPayment; // Immediate delivery for all except pending SEPA
-    
-    // Extract order details
-    const orderData = {
-      orderId: metadata.order_id || uuidv4(),
-      userId: userId,
-      userEmail: email,
-      items: items,
-      total: paymentData.amount / 100, // Convert from cents
-      currency: paymentData.currency?.toUpperCase() || 'USD',
-      status: 'completed', // Use completed status for all payment types
-      paymentId: paymentData.id,
-      paymentMethod: paymentData.payment_method_types?.[0] || metadata.payment_method || 'card',
-      metadata
-    };
-    
-    // Create order record
-    const order = await createOrder(orderData);
-    
-    // If immediate delivery, generate download links for templates
-    const templates = [];
-    
-    if (immediateDelivery) {
-      logger.info(`Preparing templates for immediate delivery for order ${order.id}`);
+  /**
+   * Create a new order record
+   * @param {Object} orderData - The order data
+   * @returns {Promise<Object>} - The created order
+   */
+  async createOrder(orderData) {
+    try {
+      // Generate order ID if not provided
+      const orderId = orderData.orderId || uuidv4();
       
-      // Process each item to create template access
-      for (const item of items) {
-        try {
-          const agentId = item.id;
-          
-          // Get template content
-          const templateContent = await getAgentTemplate(agentId);
-          
-          // Get agent details
-          let agentName = item.title || 'AI Agent';
-          try {
-            const agentDoc = await db.collection('agents').doc(agentId).get();
-            if (agentDoc.exists) {
-              const agent = agentDoc.data();
-              agentName = agent.title || agent.name || agentName;
-            }
-          } catch (agentError) {
-            logger.warn(`Couldn't fetch agent details for ${agentId}: ${agentError.message}`);
-          }
+      // Create order object
+      const order = {
+        id: orderId,
+        userId: orderData.userId,
+        userEmail: orderData.userEmail,
+        items: orderData.items || [],
+        total: orderData.total || 0,
+        currency: orderData.currency || 'USD',
+        status: orderData.status || 'pending',
+        paymentId: orderData.paymentId,
+        paymentMethod: orderData.paymentMethod,
+        paymentProcessor: orderData.processor || 'unipay',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        deliveryStatus: 'pending',
+        metadata: orderData.metadata || {},
+        // Enhanced fields for new system
+        vatInfo: orderData.vatInfo || null,
+        invoiceId: null, // Will be set when invoice is created
+        templateAccessTokens: [],
+        
+        // UniPay specific fields (NEW)
+        uniPayOrderHashId: orderData.uniPayOrderHashId || null,
+        merchantOrderId: orderData.merchantOrderId || null,
+        conversionInfo: orderData.conversionInfo || null
+      };
+      
+      // Save order to database
+      await db.collection('orders').doc(orderId).set(order);
+      
+      logger.info(`Created order: ${orderId}`, {
+        processor: order.paymentProcessor,
+        amount: order.total,
+        currency: order.currency,
+        itemCount: order.items.length,
+        uniPayOrderHashId: order.uniPayOrderHashId
+      });
+      
+      return { ...order };
+    } catch (error) {
+      logger.error(`Error creating order: ${error.message}`);
+      throw error;
+    }
+  }
 
-          // Generate a secure token for template access
-          const accessToken = uuidv4();
-          
-          // Store the template access token in the database
-          await db.collection('templateAccess').doc(accessToken).set({
-            orderId: order.id,
-            agentId,
-            userId,
-            email,
-            createdAt: new Date().toISOString(),
-            expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days expiry
-            used: false
-          });
-          
-          // Add template to list
-          templates.push({
-            agentId,
-            agentName,
-            accessToken,
-            downloadUrl: `/api/templates/download/${agentId}?orderId=${order.id}&token=${accessToken}`
-          });
-          
-          logger.info(`Template access created for agent ${agentId} in order ${order.id}`);
-        } catch (templateError) {
-          logger.error(`Error preparing template for agent ${item.id}: ${templateError.message}`);
+  /**
+   * Process payment success and deliver templates
+   * @param {Object} paymentData - Payment data from the payment provider
+   * @returns {Promise<Object>} - Processing result
+   */
+  async processPaymentSuccess(paymentData) {
+    try {
+      // Extract metadata from payment
+      const metadata = paymentData.metadata || {};
+      const items = Array.isArray(paymentData.items) ? paymentData.items : [];
+      const processor = paymentData.processor || 'unipay';
+      
+      // Get customer info - prioritize customer email, then metadata email
+      const email = paymentData.customer?.email || metadata.email || null;
+      
+      // Enhanced email validation and logging
+      if (email && this.isValidEmail(email)) {
+        logger.info(`Processing order with email: ${email} (processor: ${processor})`);
+      } else if (email) {
+        logger.warn(`Invalid email format provided: ${email} (processor: ${processor})`);
+      } else {
+        logger.warn(`No email address available for order confirmation (processor: ${processor})`);
+      }
+      
+      const userId = paymentData.customer?.id || metadata.userId || null;
+      
+      // Determine payment characteristics
+      const paymentInfo = this.analyzePaymentMethod(paymentData, processor);
+      
+      // Extract order details with UniPay specific handling
+      const orderData = {
+        orderId: metadata.order_id || uuidv4(),
+        userId: userId,
+        userEmail: email,
+        items: items,
+        total: paymentData.amount / 100, // Convert from cents
+        currency: paymentData.currency?.toUpperCase() || 'USD',
+        status: 'completed',
+        paymentId: paymentData.id,
+        paymentMethod: paymentInfo.method,
+        processor: processor,
+        metadata: {
+          ...metadata,
+          processor,
+          originalPaymentData: {
+            id: paymentData.id,
+            session_id: paymentData.session_id || null,
+            transaction_id: paymentData.transaction_id || null,
+            order_hash_id: metadata.order_hash_id || null // UniPay specific
+          }
+        },
+        vatInfo: paymentData.vatInfo || null,
+        
+        // UniPay specific fields (NEW)
+        uniPayOrderHashId: metadata.order_hash_id || paymentData.orderHashId || null,
+        merchantOrderId: metadata.merchant_order_id || paymentData.merchantOrderId || null,
+        conversionInfo: paymentData.conversionInfo || null
+      };
+      
+      // Create order record
+      const order = await this.createOrder(orderData);
+      
+      // Create invoice immediately for all successful payments
+      let invoice = null;
+      try {
+        invoice = await invoiceService.createInvoice(
+          {
+            ...paymentData,
+            processor,
+            paymentMethod: paymentInfo.method
+          },
+          orderData,
+          this.extractCustomerInfo(paymentData, metadata)
+        );
+        
+        // Update order with invoice ID
+        await db.collection('orders').doc(order.id).update({
+          invoiceId: invoice.invoiceId,
+          invoiceNumber: invoice.invoiceNumber,
+          updatedAt: new Date().toISOString()
+        });
+        
+        logger.info(`Invoice created for order: ${order.id}`, {
+          invoiceId: invoice.invoiceId,
+          invoiceNumber: invoice.invoiceNumber,
+          processor
+        });
+      } catch (invoiceError) {
+        logger.error(`Failed to create invoice for order ${order.id}:`, invoiceError);
+        // Continue processing even if invoice creation fails
+      }
+      
+      // Generate download links for templates (immediate delivery for most payment methods)
+      const templates = [];
+      const shouldDeliverImmediately = paymentInfo.immediateDelivery;
+      
+      if (shouldDeliverImmediately) {
+        logger.info(`Preparing templates for immediate delivery for order ${order.id}`);
+        
+        // Process each item to create template access
+        for (const item of items) {
+          try {
+            const templateResult = await this.createTemplateAccess(item, order, email, userId);
+            if (templateResult) {
+              templates.push(templateResult);
+            }
+          } catch (templateError) {
+            logger.error(`Error preparing template for agent ${item.id}: ${templateError.message}`);
+          }
         }
       }
+      
+      // Handle email delivery
+      const deliveryResult = await this.handleEmailDelivery(
+        order, 
+        templates, 
+        email, 
+        userId, 
+        paymentInfo,
+        metadata
+      );
+      
+      // Update order with final delivery status
+      await db.collection('orders').doc(order.id).update({
+        deliveryStatus: deliveryResult.status,
+        deliveryResults: deliveryResult.results || [],
+        templateAccessTokens: templates.map(t => t.accessToken),
+        updatedAt: new Date().toISOString()
+      });
+      
+      const result = {
+        success: true,
+        orderId: order.id,
+        invoiceId: invoice?.invoiceId || null,
+        deliveryStatus: deliveryResult.status,
+        deliveryResults: deliveryResult.results || [],
+        templates: shouldDeliverImmediately ? templates : [],
+        paymentProcessor: processor,
+        paymentMethod: paymentInfo.method,
+        // UniPay specific fields
+        uniPayOrderHashId: order.uniPayOrderHashId,
+        merchantOrderId: order.merchantOrderId
+      };
+      
+      logger.info(`Order processing completed: ${order.id}`, {
+        deliveryStatus: result.deliveryStatus,
+        templateCount: templates.length,
+        processor,
+        invoiceCreated: !!invoice,
+        uniPayOrderHashId: order.uniPayOrderHashId
+      });
+      
+      return result;
+    } catch (error) {
+      logger.error(`Error processing payment success: ${error.message}`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Analyze payment method and determine characteristics (Updated for UniPay)
+   */
+  analyzePaymentMethod(paymentData, processor) {
+    const paymentTypes = paymentData.payment_method_types || [];
+    const metadata = paymentData.metadata || {};
+    
+    // Determine method name
+    let method = 'unknown';
+    
+    // UniPay handling (NEW)
+    if (processor === 'unipay' || metadata.processor === 'unipay') {
+      method = 'unipay';
+    } else if (paymentTypes.includes('sepa_debit') || paymentTypes.includes('sepa_credit_transfer')) {
+      method = 'sepa';
+    } else if (paymentTypes.includes('paypal') || metadata.payment_method === 'paypal' || processor === 'paypal') {
+      method = 'paypal';
+    } else if (metadata.payment_method === 'google_pay_direct' || processor === 'google_direct') {
+      method = 'google_pay';
+    } else if (metadata.payment_method === 'apple_pay_direct' || processor === 'apple_direct') {
+      method = 'apple_pay';
+    } else if (paymentTypes.includes('card') || processor === 'stripe') {
+      method = 'card';
+    } else if (processor === 'stripe') {
+      method = paymentTypes[0] || 'card';
     }
     
-    // If we have a notification service, send a success notification
+    // Determine if immediate delivery should happen
+    const immediateDelivery = 
+      metadata.immediate_delivery === true ||
+      processor === 'paypal' ||
+      processor === 'google_direct' ||
+      processor === 'apple_direct' ||
+      processor === 'unipay' ||  // UniPay payments are typically immediate
+      (processor === 'stripe' && method !== 'sepa_debit');
+    
+    return {
+      method,
+      immediateDelivery,
+      processor,
+      isAsynchronous: method === 'sepa' && !metadata.immediate_delivery
+    };
+  }
+
+  /**
+   * Create template access for an item
+   */
+  async createTemplateAccess(item, order, email, userId) {
     try {
-      // Check if we should skip email sending (used to prevent duplicates)
+      const agentId = item.id;
+      
+      // Get template content
+      const templateContent = await this.getAgentTemplate(agentId);
+      
+      // Get agent details
+      let agentName = item.title || 'AI Agent';
+      try {
+        const agentDoc = await db.collection('agents').doc(agentId).get();
+        if (agentDoc.exists) {
+          const agent = agentDoc.data();
+          agentName = agent.title || agent.name || agentName;
+        }
+      } catch (agentError) {
+        logger.warn(`Couldn't fetch agent details for ${agentId}: ${agentError.message}`);
+      }
+
+      // Generate a secure token for template access
+      const accessToken = uuidv4();
+      
+      // Store the template access token in the database
+      await db.collection('templateAccess').doc(accessToken).set({
+        orderId: order.id,
+        agentId,
+        userId,
+        email,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days expiry
+        used: false,
+        invoiceId: order.invoiceId || null,
+        // UniPay specific tracking
+        uniPayOrderHashId: order.uniPayOrderHashId || null,
+        merchantOrderId: order.merchantOrderId || null
+      });
+      
+      const result = {
+        agentId,
+        agentName,
+        accessToken,
+        downloadUrl: `/api/templates/download/${agentId}?orderId=${order.id}&token=${accessToken}`,
+        templateContent
+      };
+      
+      logger.info(`Template access created for agent ${agentId} in order ${order.id}`, {
+        uniPayOrderHashId: order.uniPayOrderHashId
+      });
+      return result;
+    } catch (error) {
+      logger.error(`Error creating template access for agent ${item.id}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Handle email delivery for order
+   */
+  async handleEmailDelivery(order, templates, email, userId, paymentInfo, metadata) {
+    try {
+      // Check if we should skip email sending
       const skipEmailSending = metadata.skipEmailSending === true;
       
       if (skipEmailSending) {
         logger.info(`Skipping email sending for order ${order.id} due to skipEmailSending flag`);
-        
         return {
-          success: true,
-          orderId: order.id,
-          deliveryStatus: 'skipped_by_flag',
-          message: 'Order created but email skipped due to skipEmailSending flag',
-          templates: immediateDelivery ? templates : []
+          status: 'skipped_by_flag',
+          message: 'Email skipped due to skipEmailSending flag'
         };
       }
       
-      // Skip template delivery if no email is provided
-      if (!email) {
-        logger.warn(`Cannot deliver templates: No email provided for order ${order.id}`);
-        
+      // Skip if no valid email
+      if (!email || !this.isValidEmail(email)) {
+        logger.warn(`Cannot deliver templates: No valid email for order ${order.id}`);
         return {
-          success: true,
-          orderId: order.id,
-          deliveryStatus: 'skipped',
-          message: 'Order created but templates not delivered (no email)',
-          templates: immediateDelivery ? templates : []
+          status: 'skipped',
+          message: 'No valid email provided'
         };
       }
       
       // Deliver templates for each item
       const deliveryResults = [];
       
-      for (const item of items) {
+      for (const item of order.items) {
         try {
-          // Get agent details
-          const agentId = item.id;
-          const agentDoc = await db.collection('agents').doc(agentId).get();
+          const result = await this.deliverTemplateByEmail(
+            item, 
+            order, 
+            templates, 
+            email, 
+            userId, 
+            paymentInfo
+          );
           
-          if (!agentDoc.exists) {
-            deliveryResults.push({
-              agentId,
-              success: false,
-              error: 'Agent not found'
-            });
-            continue;
-          }
-          
-          const agent = agentDoc.data();
-          
-          // Get template content
-          const templateContent = await getAgentTemplate(agentId);
-          
-          // Get user's name if available
-          let userName = 'Valued Customer';
-          if (userId) {
-            const userDoc = await db.collection('users').doc(userId).get();
-            if (userDoc.exists) {
-              const userData = userDoc.data();
-              userName = userData.displayName || userData.firstName || 'Valued Customer';
-            }
-          }
-          
-          // Send email with template
-          let emailSubject = 'Your AI Agent Purchase';
-          let receiptUrl = '';
-          
-          // Add payment reference to receipt URL if available
-          if (paymentData.id) {
-            receiptUrl = `/account/orders/${orderData.orderId}?payment_ref=${paymentData.id}`;
-          }
-          
-          // Find template download link if available
-          const templateLink = templates.find(t => t.agentId === agentId)?.downloadUrl || '';
-          
-          // Send email with template
-          const emailResult = await emailService.sendAgentPurchaseEmail({
-            email: email,
-            firstName: userName,
-            agentName: agent.title || 'AI Agent',
-            agentDescription: agent.description || 'Your new AI agent',
-            price: item.price || 0,
-            currency: orderData.currency || 'USD',
-            receiptUrl: receiptUrl,
-            orderId: orderData.orderId,
-            orderDate: new Date().toLocaleDateString(), 
-            paymentMethod: orderData.paymentMethod,
-            paymentStatus: 'successful', // Always use successful status
-            isSepaPayment: true, // Always use the same email structure for all payment types
-            immediateDownload: immediateDelivery,
-            downloadUrl: templateLink,
-            templateContent: templateContent, // Pass the template content
-            agentId: agentId // Pass the agent ID
-          });
-          
-          // Record delivery result
           deliveryResults.push({
-            agentId,
-            success: true,
-            messageId: emailResult.messageId
+            agentId: item.id,
+            success: result.success,
+            messageId: result.messageId || null,
+            error: result.error || null
           });
-          
-        } catch (error) {
-          logger.error(`Error delivering template for agent ${item.id}: ${error.message}`);
+        } catch (deliveryError) {
+          logger.error(`Error delivering template for agent ${item.id}:`, deliveryError);
           
           deliveryResults.push({
             agentId: item.id,
             success: false,
-            error: error.message
+            error: deliveryError.message
           });
         }
       }
       
-      // Update order with delivery results
+      // Determine overall delivery status
       const deliveryStatus = deliveryResults.every(r => r.success) ? 'completed' : 
                             deliveryResults.some(r => r.success) ? 'partial' : 'failed';
       
-      await db.collection('orders').doc(order.id).update({
-        deliveryStatus,
-        deliveryResults,
-        updatedAt: new Date().toISOString()
+      return {
+        status: deliveryStatus,
+        results: deliveryResults
+      };
+    } catch (error) {
+      logger.error(`Error handling email delivery for order ${order.id}:`, error);
+      return {
+        status: 'failed',
+        message: error.message
+      };
+    }
+  }
+
+  /**
+   * Deliver template by email (Enhanced for UniPay)
+   */
+  async deliverTemplateByEmail(item, order, templates, email, userId, paymentInfo) {
+    try {
+      // Get agent details
+      const agentId = item.id;
+      const agentDoc = await db.collection('agents').doc(agentId).get();
+      
+      if (!agentDoc.exists) {
+        throw new Error('Agent not found');
+      }
+      
+      const agent = agentDoc.data();
+      
+      // Get template content
+      const templateContent = await this.getAgentTemplate(agentId);
+      
+      // Get user's name if available
+      let userName = 'Valued Customer';
+      if (userId) {
+        try {
+          const userDoc = await db.collection('users').doc(userId).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            userName = userData.displayName || userData.firstName || userData.name || 'Valued Customer';
+          }
+        } catch (userError) {
+          logger.debug(`Could not fetch user data for ${userId}:`, userError.message);
+        }
+      }
+      
+      // Create receipt URL
+      const receiptUrl = order.invoiceId 
+        ? `/account/orders/${order.id}?invoice=${order.invoiceId}`
+        : `/account/orders/${order.id}`;
+      
+      // Find template download link if available
+      const templateLink = templates.find(t => t.agentId === agentId)?.downloadUrl || '';
+      
+      // Enhanced email data for new system (Updated for UniPay)
+      const emailData = {
+        email: email,
+        firstName: userName,
+        agentName: agent.title || 'AI Agent',
+        agentDescription: agent.description || 'Your new AI agent',
+        price: item.price || 0,
+        currency: order.currency || 'USD',
+        receiptUrl: receiptUrl,
+        orderId: order.id,
+        orderDate: new Date().toLocaleDateString(),
+        paymentMethod: paymentInfo.method,
+        paymentProcessor: paymentInfo.processor,
+        paymentStatus: 'successful',
+        isSepaPayment: paymentInfo.method === 'sepa',
+        immediateDownload: paymentInfo.immediateDelivery,
+        downloadUrl: templateLink,
+        templateContent: templateContent,
+        agentId: agentId,
+        // Enhanced fields
+        invoiceNumber: order.invoiceNumber || null,
+        vatInfo: order.vatInfo || null,
+        // UniPay specific fields
+        uniPayOrderHashId: order.uniPayOrderHashId || null,
+        merchantOrderId: order.merchantOrderId || null,
+        conversionInfo: order.conversionInfo || null
+      };
+      
+      // Send email with template
+      const emailResult = await emailService.sendAgentPurchaseEmail(emailData);
+      
+      logger.info(`Template delivery email sent for agent ${agentId} in order ${order.id}`, {
+        email,
+        messageId: emailResult.messageId,
+        paymentProcessor: paymentInfo.processor,
+        uniPayOrderHashId: order.uniPayOrderHashId
       });
       
       return {
         success: true,
-        orderId: order.id,
-        deliveryStatus,
-        deliveryResults,
-        templates: immediateDelivery ? templates : []
+        messageId: emailResult.messageId
       };
     } catch (error) {
-      logger.error(`Error processing payment success: ${error.message}`);
+      logger.error(`Error delivering template by email for agent ${item.id}:`, error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Extract customer information from payment data (Enhanced for UniPay)
+   */
+  extractCustomerInfo(paymentData, metadata) {
+    return {
+      userId: paymentData.customer?.id || metadata.userId || null,
+      email: paymentData.customer?.email || metadata.email || null,
+      name: paymentData.customer?.name || metadata.customerName || null,
+      phone: paymentData.customer?.phone || metadata.customerPhone || null,
+      country: metadata.customerCountry || metadata.country || null,
+      address: metadata.customerAddress || null,
+      city: metadata.customerCity || null,
+      postalCode: metadata.customerPostalCode || null,
+      // UniPay specific fields
+      uniPayOrderHashId: metadata.order_hash_id || paymentData.orderHashId || null,
+      merchantOrderId: metadata.merchant_order_id || paymentData.merchantOrderId || null
+    };
+  }
+
+  /**
+   * Validate email format
+   */
+  isValidEmail(email) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  }
+
+  /**
+   * Get order by ID
+   * @param {string} orderId - The order ID
+   * @returns {Promise<Object>} - The order
+   */
+  async getOrderById(orderId) {
+    try {
+      const orderDoc = await db.collection('orders').doc(orderId).get();
+      
+      if (!orderDoc.exists) {
+        throw new Error(`Order not found: ${orderId}`);
+      }
+      
+      return orderDoc.data();
+    } catch (error) {
+      logger.error(`Error getting order: ${error.message}`);
       throw error;
     }
-  } catch (error) {
-    logger.error(`Error processing payment success: ${error.message}`);
-    throw error;
   }
-};
 
-/**
- * Get order by ID
- * @param {string} orderId - The order ID
- * @returns {Promise<Object>} - The order
- */
-const getOrderById = async (orderId) => {
-  try {
-    const orderDoc = await db.collection('orders').doc(orderId).get();
-    
-    if (!orderDoc.exists) {
-      throw new Error(`Order not found: ${orderId}`);
+  /**
+   * Get orders for a user
+   * @param {string} userId - The user ID
+   * @returns {Promise<Array>} - Array of orders
+   */
+  async getUserOrders(userId) {
+    try {
+      const ordersSnapshot = await db.collection('orders')
+        .where('userId', '==', userId)
+        .orderBy('createdAt', 'desc')
+        .get();
+      
+      const orders = [];
+      ordersSnapshot.forEach(doc => {
+        orders.push(doc.data());
+      });
+      
+      return orders;
+    } catch (error) {
+      logger.error(`Error getting user orders: ${error.message}`);
+      throw error;
     }
-    
-    return orderDoc.data();
-  } catch (error) {
-    logger.error(`Error getting order: ${error.message}`);
-    throw error;
   }
-};
 
-/**
- * Get orders for a user
- * @param {string} userId - The user ID
- * @returns {Promise<Array>} - Array of orders
- */
-const getUserOrders = async (userId) => {
-  try {
-    const ordersSnapshot = await db.collection('orders')
-      .where('userId', '==', userId)
-      .orderBy('createdAt', 'desc')
-      .get();
-    
-    const orders = [];
-    ordersSnapshot.forEach(doc => {
-      orders.push(doc.data());
-    });
-    
-    return orders;
-  } catch (error) {
-    logger.error(`Error getting user orders: ${error.message}`);
-    throw error;
+  /**
+   * Update order status
+   */
+  async updateOrderStatus(orderId, status, metadata = {}) {
+    try {
+      const updateData = {
+        status,
+        updatedAt: new Date().toISOString(),
+        ...metadata
+      };
+
+      await db.collection('orders').doc(orderId).update(updateData);
+      
+      logger.info(`Updated order status: ${orderId} -> ${status}`);
+
+      return {
+        success: true,
+        orderId,
+        status
+      };
+    } catch (error) {
+      logger.error(`Error updating order status for ${orderId}:`, error);
+      throw error;
+    }
   }
-};
 
-module.exports = {
-  processPaymentSuccess,
-  createOrder,
-  getOrderById,
-  getUserOrders,
-  getAgentTemplate
-}; 
+  /**
+   * Process refund for order (Enhanced for UniPay)
+   */
+  async processOrderRefund(orderId, refundData) {
+    try {
+      const order = await this.getOrderById(orderId);
+      
+      // Update order status
+      await this.updateOrderStatus(orderId, 'refunded', {
+        refundId: refundData.refund_id,
+        refundAmount: refundData.amount,
+        refundedAt: new Date().toISOString(),
+        refundReason: refundData.reason || null
+      });
+
+      // Update invoice if exists
+      if (order.invoiceId) {
+        await invoiceService.updateInvoiceStatus(order.invoiceId, 'refunded', {
+          refundId: refundData.refund_id,
+          refundedAt: new Date().toISOString()
+        });
+      }
+
+      // Update UniPay order if exists (NEW)
+      if (order.uniPayOrderHashId) {
+        try {
+          await db.collection('uniPayOrders').doc(order.uniPayOrderHashId).update({
+            status: 'refunded',
+            refundedAt: new Date().toISOString(),
+            refundAmount: refundData.amount,
+            refundReason: refundData.reason || null
+          });
+        } catch (uniPayError) {
+          logger.error(`Error updating UniPay order ${order.uniPayOrderHashId} for refund:`, uniPayError);
+        }
+      }
+
+      // Revoke template access tokens
+      if (order.templateAccessTokens && order.templateAccessTokens.length > 0) {
+        const batch = db.batch();
+        
+        for (const token of order.templateAccessTokens) {
+          const tokenRef = db.collection('templateAccess').doc(token);
+          batch.update(tokenRef, {
+            revoked: true,
+            revokedAt: new Date().toISOString(),
+            revokedReason: 'order_refunded'
+          });
+        }
+        
+        await batch.commit();
+      }
+
+      logger.info(`Processed refund for order: ${orderId}`, {
+        refundId: refundData.refund_id,
+        amount: refundData.amount,
+        uniPayOrderHashId: order.uniPayOrderHashId
+      });
+
+      return {
+        success: true,
+        orderId,
+        refundId: refundData.refund_id,
+        uniPayOrderHashId: order.uniPayOrderHashId
+      };
+    } catch (error) {
+      logger.error(`Error processing refund for order ${orderId}:`, error);
+      throw error;
+    }
+  }
+}
+
+// Export singleton instance
+module.exports = new OrderController();
