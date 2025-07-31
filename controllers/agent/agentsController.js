@@ -5,7 +5,7 @@ const { db } = require('../../config/firebase');
 const admin = require('firebase-admin');
 // const axios = require('axios'); // Uncomment if used
 const logger = require('../../utils/logger');
-const { getCache, setCache, deleteCache } = require('../../utils/cache');
+const { getCache, setCache, deleteCache, deleteCacheByPattern, generateAgentCategoryCacheKey, generateAgentSearchCacheKey, generateAgentCacheKey, generateAgentCountCacheKey } = require('../../utils/cache');
 // const { parseCustomFilters } = require('../utils/queryParser'); // Uncomment if used
 // const { restructureAgent } = require('../scripts/update-agent-structure'); // REMOVED/COMMENTED OUT
 
@@ -120,198 +120,291 @@ const _getFileMetadataFromRequest = (fieldValue, fieldName) => {
 
 // --- START OF YOUR EXISTING FUNCTIONS (Keep them as they are) ---
 /**
- * Get all agents with optional filtering
+ * Dual-Mode Agent API with Redis-First Architecture
+ * Mode 1: Category View - Fetch ALL agents in a category (for front-end filtering)
+ * Mode 2: All Categories/Search View - Server-side search and pagination
  */
 const getAgents = async (req, res) => {
   try {
     const {
       category = 'All',
-      filter = 'Hot & Now',
-      priceMin,
-      priceMax,
-      rating,
-      tags,
-      features,
+      searchQuery,
       search,
-      page = 1,
-      limit = 20
+      lastVisibleId,
+      limit = 20,
+      filter
     } = req.query;
 
-    // Create cache key based on request parameters
-    // const cacheKey = `${CACHE_KEYS.AGENTS}:${category}:${filter}:${priceMin || 0}:${priceMax || 'max'}:${rating || 0}:${tags || ''}:${features || ''}:${search || ''}:${page}:${limit}`;
-    
-    // Build query
-    let query = db.collection('agents');
-    
-    // Apply category filter
+    // Handle both searchQuery and search parameters (frontend might send either)
+    const finalSearchQuery = searchQuery || search;
+
+    logger.info(`getAgents called with: category=${category}, searchQuery=${searchQuery}, search=${search}, finalSearchQuery=${finalSearchQuery}, lastVisibleId=${lastVisibleId}, limit=${limit}, filter=${filter}`);
+    logger.info(`finalSearchQuery type: ${typeof finalSearchQuery}, value: "${finalSearchQuery}"`);
+
+    // DUAL-MODE LOGIC: Check if this is a specific category request
     if (category && category !== 'All') {
-      query = query.where('category', '==', category);
-    }
-
-    // Get documents
-    let agentsSnapshot = await query.get();
-    let agents = [];
-
-    agentsSnapshot.forEach(doc => {
-      agents.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
-
-    // Apply other filters in-memory (since Firestore has limitations with complex queries)
-    
-    // If the filter is 'Free', only return free agents
-    if (filter === 'Free') {
-      agents = agents.filter(agent => {
-          // Check structured isFree flag first
-          if (typeof agent.isFree === 'boolean') {
-              return agent.isFree;
-          }
-          // Fallback to older price checks if isFree is not present
-          if (agent.priceDetails && typeof agent.priceDetails.basePrice === 'number') {
-              return agent.priceDetails.basePrice === 0;
-          }
-        if (typeof agent.price === 'number') {
-          return agent.price === 0;
-        }
-        if (typeof agent.price === 'string') {
-          const lowerPrice = agent.price.toLowerCase();
-          return lowerPrice === 'free' || lowerPrice === '$0' || lowerPrice === '0';
-        }
-        return false;
-      });
-    }
-    
-    // Apply price filter
-    if (priceMin !== undefined || priceMax !== undefined) {
-      const min = priceMin ? parseFloat(priceMin) : 0;
-      const max = priceMax ? parseFloat(priceMax) : Infinity;
+      // =========================================
+      // MODE 1: CATEGORY VIEW
+      // =========================================
+      logger.info(`MODE 1: Category View for category: ${category}`);
       
-      agents = agents.filter(agent => {
-        let priceToCompare = agent.price; // Fallback
-        if (agent.priceDetails && typeof agent.priceDetails.discountedPrice === 'number') {
-            priceToCompare = agent.priceDetails.discountedPrice;
-        } else if (typeof agent.price === 'string') {
-          const numValue = parseFloat(agent.price.replace(/[^0-9.]/g, ''));
-          if (!isNaN(numValue)) {
-            priceToCompare = numValue;
-          }
-        } else if (typeof agent.price !== 'number') {
-            priceToCompare = Infinity; // Treat non-numeric, non-string prices as non-matching
+      // Generate cache key for this category
+      const cacheKey = generateAgentCategoryCacheKey(category);
+      logger.info(`Cache key: ${cacheKey}`);
+      
+      // Try to get from cache first (Redis-First approach)
+      try {
+        const cachedData = await getCache(cacheKey);
+        if (cachedData) {
+          logger.info(`Cache HIT for category: ${category}`);
+          return res.status(200).json({
+            agents: cachedData,
+            totalCount: cachedData.length, // Add total count for category
+            fromCache: true
+          });
         }
-        return priceToCompare >= min && priceToCompare <= max;
+        logger.info(`Cache MISS for category: ${category}, fetching from Firebase`);
+      } catch (cacheError) {
+        logger.error(`Cache error for category ${category}:`, cacheError);
+      }
+      
+      // Fetch ALL agents in this category from Firebase
+      let query = db.collection('agents').where('category', '==', category);
+      const agentsSnapshot = await query.get();
+      
+      const agents = [];
+      agentsSnapshot.forEach(doc => {
+        agents.push({
+          id: doc.id,
+          ...doc.data()
+        });
       });
-    }
-
-    // Apply rating filter
-    if (rating) {
-      const minRating = parseFloat(rating);
-      agents = agents.filter(agent => {
-        const agentRating = agent.rating?.average ? parseFloat(agent.rating.average) : 0;
-        return agentRating >= minRating;
+      
+      // Cache the result for 24 hours (86400 seconds)
+      try {
+        await setCache(cacheKey, agents, 86400);
+        logger.info(`Cached ${agents.length} agents for category: ${category}`);
+      } catch (cacheError) {
+        logger.error(`Error caching category ${category}:`, cacheError);
+      }
+      
+      return res.status(200).json({
+        agents: agents,
+        totalCount: agents.length, // Add total count for category
+        fromCache: false
       });
-    }
-
-    // Apply tag filters
-    if (tags) {
-      const tagsList = tags.split(',');
-      agents = agents.filter(agent => {
-        if (agent.category && tagsList.includes(agent.category)) {
-          return true;
+      
+    } else {
+      // =========================================
+      // MODE 2: ALL CATEGORIES / SEARCH VIEW
+      // =========================================
+      logger.info(`MODE 2: All Categories/Search View`);
+      
+      // Generate cache key for this specific search/pagination combination
+      // This includes search query so each unique search gets its own cache entry
+      const cacheKey = generateAgentSearchCacheKey({
+        searchQuery: finalSearchQuery,
+        limit: parseInt(limit),
+        lastVisibleId
+      });
+      
+      logger.info(`Cache key: ${cacheKey}`);
+      
+      // ALWAYS try cache first - whether search query or not
+      try {
+        const cachedData = await getCache(cacheKey);
+        if (cachedData) {
+          logger.info(`Cache HIT for ${finalSearchQuery ? 'search' : 'pagination'}`);
+          const response = {
+            agents: cachedData.agents,
+            lastVisibleId: cachedData.lastVisibleId,
+            searchQuery: finalSearchQuery || null,
+            totalCount: cachedData.totalCount || 'unknown', // Add total count
+            fromCache: true
+          };
+          logger.info(`Returning cached result with finalSearchQuery: "${finalSearchQuery}"`);
+          logger.info(`Response searchQuery field: "${response.searchQuery}"`);
+          logger.info(`CACHE: JSON.stringify(response): ${JSON.stringify(response)}`);
+          return res.status(200).json(response);
         }
-        if (agent.tags && Array.isArray(agent.tags)) {
-          return agent.tags.some(tag => tagsList.includes(tag));
+        logger.info(`Cache MISS for ${finalSearchQuery ? 'search' : 'pagination'}, fetching from Firebase`);
+      } catch (cacheError) {
+        logger.error(`Cache error:`, cacheError);
+      }
+      
+      // Get total count for all agents (cached separately)
+      let totalCount = 'unknown';
+      try {
+        const countCacheKey = generateAgentCountCacheKey();
+        const cachedCount = await getCache(countCacheKey);
+        if (cachedCount !== null) {
+          totalCount = cachedCount;
+          logger.info(`Using cached total count: ${totalCount}`);
+        } else {
+          // Fetch total count from Firebase
+          const totalSnapshot = await db.collection('agents').get();
+          totalCount = totalSnapshot.size;
+          logger.info(`Fetched total count from Firebase: ${totalCount}`);
+          
+          // Cache the count for 24 hours
+          await setCache(countCacheKey, totalCount, 86400);
         }
-        return false;
+      } catch (countError) {
+        logger.error('Error getting total count:', countError);
+        totalCount = 'unknown';
+      }
+      
+      // Build paginated query
+      let query = db.collection('agents');
+      
+      if (finalSearchQuery && finalSearchQuery.trim()) {
+        const searchLower = finalSearchQuery.toLowerCase().trim();
+        logger.info(`Search query detected: "${searchLower}" - Using hybrid approach`);
+        
+        // HYBRID SEARCH STRATEGY:
+        // 1. Load more agents from Firebase (increase limit for search)
+        // 2. Filter results on server-side by title, description, tags
+        // 3. Return filtered + paginated results
+        // This works immediately without new indexes and searches all text fields
+        
+        query = query.orderBy('createdAt', 'desc');
+        
+        // OPTIMIZED: Reduce from 3x to 1.5x buffer for better performance
+        const searchLimit = Math.max(parseInt(limit) * 1.5, 50); // 1.5x normal limit for search (was 3x)
+        logger.info(`Using expanded limit ${searchLimit} for search filtering (optimized from 3x to 1.5x)`);
+        
+      } else {
+        // No search query - normal pagination
+        query = query.orderBy('createdAt', 'desc');
+      }
+      
+      // Implement server-side pagination
+      if (lastVisibleId && lastVisibleId !== 'start') {
+        logger.info(`Implementing pagination starting after: ${lastVisibleId}`);
+        try {
+          // Get the last document to use as cursor
+          const lastDoc = await db.collection('agents').doc(lastVisibleId).get();
+          if (lastDoc.exists) {
+            query = query.startAfter(lastDoc);
+          } else {
+            logger.warn(`Last visible document ${lastVisibleId} not found, ignoring pagination`);
+          }
+        } catch (paginationError) {
+          logger.error(`Error with pagination cursor ${lastVisibleId}:`, paginationError);
+          // Continue without pagination if there's an error
+        }
+      }
+      
+      // Apply limit - use expanded limit for search queries
+      const hasSearchQuery = finalSearchQuery && finalSearchQuery.trim();
+      const queryLimit = hasSearchQuery ? 
+        Math.max(parseInt(limit) * 1.5, 50) : // 1.5x limit for search (optimized from 3x)
+        (parseInt(limit) || 20); // Normal limit for pagination
+        
+      query = query.limit(queryLimit);
+      
+      // Execute the query
+      const agentsSnapshot = await query.get();
+      
+      let allAgents = [];
+      agentsSnapshot.forEach(doc => {
+        allAgents.push({
+          id: doc.id,
+          ...doc.data()
+        });
       });
-    }
-
-    // Apply feature filters
-    if (features) {
-      const featuresList = features.split(',');
-      agents = agents.filter(agent => {
-          let matches = false;
-          if (featuresList.includes('Free') && agent.isFree === true) {
-            matches = true;
+      
+      // Server-side filtering for search queries
+      let agents = allAgents;
+      if (hasSearchQuery) {
+        const searchLower = finalSearchQuery.toLowerCase().trim();
+        logger.info(`Filtering ${allAgents.length} agents for search term: "${searchLower}"`);
+        
+        agents = allAgents.filter((agent, index) => {
+          // Debug first few agents
+          if (index < 3) {
+            logger.info(`Checking agent ${index}: ${agent.id}`);
+            logger.info(`  Title: ${agent.title ? agent.title.substring(0, 50) + '...' : 'No title'}`);
+            logger.info(`  Contains "${searchLower}" in title: ${agent.title ? agent.title.toLowerCase().includes(searchLower) : false}`);
           }
-          if (!matches && featuresList.includes('Subscription') && agent.isSubscription === true) {
-            matches = true;
+          
+          // Search in title
+          if (agent.title && agent.title.toLowerCase().includes(searchLower)) {
+            logger.info(`MATCH found in title: ${agent.id} - ${agent.title.substring(0, 60)}`);
+            return true;
           }
-          if (!matches && agent.features && Array.isArray(agent.features)) {
-            if (agent.features.some(feature => featuresList.includes(feature))) {
-                matches = true;
+          
+          // Search in description
+          if (agent.description && agent.description.toLowerCase().includes(searchLower)) {
+            logger.info(`MATCH found in description: ${agent.id}`);
+            return true;
+          }
+          
+          // Search in tags
+          if (agent.tags && Array.isArray(agent.tags)) {
+            if (agent.tags.some(tag => tag.toLowerCase().includes(searchLower))) {
+              logger.info(`MATCH found in tags: ${agent.id} - [${agent.tags.join(', ')}]`);
+              return true;
             }
           }
-          return matches;
-      });
-    }
-
-    // Apply search filter
-    if (search) {
-      const searchQuery = search.toLowerCase().trim();
-      agents = agents.filter(agent => 
-        (agent.name && agent.name.toLowerCase().includes(searchQuery)) ||
-        (agent.title && agent.title.toLowerCase().includes(searchQuery)) ||
-        (agent.description && agent.description.toLowerCase().includes(searchQuery)) ||
-        (agent.creator && agent.creator.name && 
-         agent.creator.name.toLowerCase().includes(searchQuery))
-      );
-    }
-
-    // Apply sorting based on filter type
-    if (filter === 'Hot & Now') {
-      agents.sort((a, b) => {
-        const now = new Date();
-        const aDate = a.createdAt ? new Date(a.createdAt) : (a.dateCreated ? new Date(a.dateCreated) : null);
-        const bDate = b.createdAt ? new Date(b.createdAt) : (b.dateCreated ? new Date(b.dateCreated) : null);
-                     
-        if (aDate && bDate) {
-          const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-          const aIsRecent = aDate > weekAgo;
-          const bIsRecent = bDate > weekAgo;
           
-          if (aIsRecent && !bIsRecent) return -1;
-          if (!aIsRecent && bIsRecent) return 1;
-          if (aIsRecent && bIsRecent) return bDate.getTime() - aDate.getTime();
-        } else if (aDate) { return -1; }
-          else if (bDate) { return 1; }
+          // Search in category
+          if (agent.category && agent.category.toLowerCase().includes(searchLower)) {
+            logger.info(`MATCH found in category: ${agent.id} - ${agent.category}`);
+            return true;
+          }
+          
+          return false;
+        });
         
-        return (b.popularity || 0) - (a.popularity || 0);
-      });
-    } else if (filter === 'Top Rated') {
-      agents.sort((a, b) => {
-        const ratingA = a.rating?.average ? parseFloat(a.rating.average) : 0;
-        const ratingB = b.rating?.average ? parseFloat(b.rating.average) : 0;
-        if (ratingB === ratingA) { // Secondary sort by review count
-            return (b.rating?.count || 0) - (a.rating?.count || 0);
-        }
-        return ratingB - ratingA;
-      });
-    } else if (filter === 'Newest') {
-      agents.sort((a, b) => {
-        const dateA = a.createdAt ? new Date(a.createdAt) : (a.dateCreated ? new Date(a.dateCreated) : new Date(0));
-        const dateB = b.createdAt ? new Date(b.createdAt) : (b.dateCreated ? new Date(b.dateCreated) : new Date(0));
-        return dateB.getTime() - dateA.getTime();
-      });
+        logger.info(`Search filtering: ${allAgents.length} → ${agents.length} agents`);
+        
+        // Apply the requested limit to filtered results
+        const requestedLimit = parseInt(limit) || 20;
+        agents = agents.slice(0, requestedLimit);
+      }
+      
+      // Set lastVisibleId for pagination
+      const newLastVisibleId = agents.length > 0 ? agents[agents.length - 1].id : null;
+      
+      // Prepare response with pagination info
+      const result = {
+        agents: agents,
+        lastVisibleId: agents.length > 0 ? newLastVisibleId : null,
+        searchQuery: finalSearchQuery || null, // Include search query for frontend filtering
+        totalCount: totalCount, // Add total count
+        fromCache: false
+      };
+      
+      logger.info(`Preparing response with searchQuery: "${result.searchQuery}" (type: ${typeof result.searchQuery})`);
+      logger.info(`DEBUG: finalSearchQuery value: "${finalSearchQuery}", type: ${typeof finalSearchQuery}`);
+      logger.info(`DEBUG: result object keys: ${Object.keys(result)}`);
+      logger.info(`DEBUG: result.searchQuery: ${JSON.stringify(result.searchQuery)}`);
+      
+      // Cache ALL results (search and non-search) for 24 hours (86400 seconds)
+      try {
+        const cacheKey = generateAgentSearchCacheKey({
+          searchQuery: finalSearchQuery,
+          limit: parseInt(limit),
+          lastVisibleId
+        });
+        await setCache(cacheKey, result, 86400);
+        logger.info(`Cached ${finalSearchQuery ? 'search' : 'pagination'} result with ${agents.length} agents`);
+      } catch (cacheError) {
+        logger.error(`Error caching result:`, cacheError);
+      }
+      
+      logger.info(`FINAL: About to return JSON with keys: ${Object.keys(result)}`);
+      logger.info(`FINAL: JSON.stringify(result): ${JSON.stringify(result)}`);
+      return res.status(200).json(result);
     }
-
-    // Apply pagination
-    const startIndex = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-    const paginatedAgents = agents.slice(startIndex, startIndex + parseInt(limit, 10));
-
-    const result = {
-      agents: paginatedAgents,
-      total: agents.length,
-      page: parseInt(page, 10),
-      limit: parseInt(limit, 10),
-      totalPages: Math.ceil(agents.length / parseInt(limit, 10))
-    };
-
-    return res.status(200).json(result);
+    
   } catch (error) {
-    logger.error('Error fetching agents:', error);
-    return res.status(500).json({ error: 'Failed to fetch agents', details: error.message });
+    logger.error('Error in getAgents:', error);
+    return res.status(500).json({ 
+      error: 'Failed to fetch agents', 
+      details: error.message 
+    });
   }
 };
 
@@ -933,6 +1026,34 @@ const createAgent = async (req, res) => {
     const agentRef = await db.collection('agents').add(finalAgentData);
     const newAgent = { id: agentRef.id, ...finalAgentData }; // Return the data as it was saved
     
+    // =========================================
+    // CACHE INVALIDATION - CREATEAGENT
+    // =========================================
+    try {
+      const newAgentCategory = finalAgentData.category;
+      
+      // Delete the specific category cache
+      await deleteCache(generateAgentCategoryCacheKey(newAgentCategory));
+      logger.info(`Invalidated category cache for: ${newAgentCategory}`);
+      
+      // Delete all "All Categories" paginated caches using pattern
+      await deleteCacheByPattern('agents:all:*');
+      logger.info('Invalidated all paginated search caches');
+      
+      // Delete search count caches (new agent affects search counts)
+      await deleteCacheByPattern('agents:search:count:*');
+      logger.info('Invalidated all search count caches');
+      
+      // Delete agent count cache (new agent added, count changed)
+      await deleteCache(generateAgentCountCacheKey());
+      logger.info('Invalidated agent count cache');
+      
+      logger.info(`Cache invalidation completed for new agent creation: ${agentRef.id} in category: ${newAgentCategory}`);
+    } catch (cacheError) {
+      logger.error('Error during cache invalidation in createAgent:', cacheError);
+      // Continue execution as cache invalidation failure shouldn't block the response
+    }
+    
     return res.status(201).json(newAgent);
   } catch (error) {
     logger.error('Error creating agent:', error);
@@ -1042,7 +1163,7 @@ const updateAgent = async (req, res) => {
         }
     }
     
-    const finalAgentData = _shapeAgentDataForSave(dataToShape, currentAgentData, req.user); // Pass currentAgentData for context
+    const finalAgentData = _shapeAgentDataForSave(dataToShape, currentAgentData, req.user);
 
     if (!finalAgentData.name || !finalAgentData.category) {
       logger.warn('Update Agent: Missing name or category after shaping.', { name: finalAgentData.name, category: finalAgentData.category });
@@ -1060,6 +1181,43 @@ const updateAgent = async (req, res) => {
     await agentRef.update(finalAgentData);
     const updatedAgentDoc = await agentRef.get(); // Fetch again to get the truly persisted state
     const updatedAgent = { id: agentId, ...updatedAgentDoc.data() };
+    
+    // =========================================
+    // CACHE INVALIDATION - UPDATEAGENT
+    // =========================================
+    try {
+      const oldCategory = currentAgentData.category;
+      const newCategory = finalAgentData.category;
+      
+      // Delete the specific agent's individual cache key
+      await deleteCache(generateAgentCacheKey(agentId));
+      logger.info(`Invalidated individual agent cache for: ${agentId}`);
+      
+      // Delete the cache for the old category
+      await deleteCache(generateAgentCategoryCacheKey(oldCategory));
+      logger.info(`Invalidated category cache for old category: ${oldCategory}`);
+      
+      // If category was changed, also delete the cache for the new category
+      if (oldCategory !== newCategory) {
+        await deleteCache(generateAgentCategoryCacheKey(newCategory));
+        logger.info(`Invalidated category cache for new category: ${newCategory}`);
+      }
+      
+      // Delete all "All Categories" paginated caches using pattern
+      await deleteCacheByPattern('agents:all:*');
+      logger.info('Invalidated all paginated search caches');
+      
+      // Delete search count caches (agent update affects search counts)
+      await deleteCacheByPattern('agents:search:count:*');
+      logger.info('Invalidated all search count caches');
+      
+      // Note: Agent count doesn't change on update, so no need to invalidate count cache
+      
+      logger.info(`Cache invalidation completed for agent update: ${agentId}, categories: ${oldCategory} -> ${newCategory}`);
+    } catch (cacheError) {
+      logger.error('Error during cache invalidation in updateAgent:', cacheError);
+      // Continue execution as cache invalidation failure shouldn't block the response
+    }
     
     return res.status(200).json(updatedAgent);
 
@@ -1165,14 +1323,28 @@ const addAgentReview_controller = async (req, res) => {
     });
 
     // --- CACHE INVALIDATION ---
-    // Invalidate cache for both potential ID forms
-    const cacheKey1 = `${CACHE_KEYS.AGENT}${resolvedAgentId}`;
-    const cacheKey2 = `${CACHE_KEYS.AGENT}${originalAgentId}`;
-    await deleteCache(cacheKey1);
-    if (resolvedAgentId !== originalAgentId) {
-        await deleteCache(cacheKey2);
+    try {
+      // Invalidate individual agent cache for both potential ID forms
+      const cacheKey1 = generateAgentCacheKey(resolvedAgentId);
+      const cacheKey2 = generateAgentCacheKey(originalAgentId);
+      await deleteCache(cacheKey1);
+      if (resolvedAgentId !== originalAgentId) {
+          await deleteCache(cacheKey2);
+      }
+      
+      // Invalidate category cache (reviews affect category listings)
+      await deleteCache(generateAgentCategoryCacheKey(agentData.category));
+      
+      // Invalidate all search/pagination caches (reviews affect sorting)
+      await deleteCacheByPattern('agents:all:*');
+      
+      // Invalidate search count caches (reviews might affect search results)
+      await deleteCacheByPattern('agents:search:count:*');
+      
+      logger.info(`Cache invalidation completed for agent ${finalAgentIdUsed} due to new review - individual, category: ${agentData.category}, search caches, and search counts`);
+    } catch (cacheError) {
+      logger.error('Error during cache invalidation in addAgentReview:', cacheError);
     }
-    logger.info(`Invalidated Redis cache for agent ${finalAgentIdUsed} (keys: ${cacheKey1}, ${cacheKey2}) due to new review.`);
     // --- END CACHE INVALIDATION ---
 
     return res.status(201).json({
@@ -1251,13 +1423,28 @@ const deleteAgentReview_controller = async (req, res) => {
     });
 
     // --- CACHE INVALIDATION ---
-    const cacheKey1 = `${CACHE_KEYS.AGENT}${resolvedAgentId}`;
-    const cacheKey2 = `${CACHE_KEYS.AGENT}${originalAgentId}`;
-    await deleteCache(cacheKey1);
-    if (resolvedAgentId !== originalAgentId) {
-        await deleteCache(cacheKey2);
+    try {
+      // Invalidate individual agent cache for both potential ID forms
+      const cacheKey1 = generateAgentCacheKey(resolvedAgentId);
+      const cacheKey2 = generateAgentCacheKey(originalAgentId);
+      await deleteCache(cacheKey1);
+      if (resolvedAgentId !== originalAgentId) {
+          await deleteCache(cacheKey2);
+      }
+      
+      // Invalidate category cache (reviews affect category listings)
+      await deleteCache(generateAgentCategoryCacheKey(agentData.category));
+      
+      // Invalidate all search/pagination caches (reviews affect sorting)
+      await deleteCacheByPattern('agents:all:*');
+      
+      // Invalidate search count caches (reviews might affect search results)
+      await deleteCacheByPattern('agents:search:count:*');
+      
+      logger.info(`Cache invalidation completed for agent ${finalAgentIdUsed} due to review deletion - individual, category: ${agentData.category}, search caches, and search counts`);
+    } catch (cacheError) {
+      logger.error('Error during cache invalidation in deleteAgentReview:', cacheError);
     }
-    logger.info(`Invalidated Redis cache for agent ${finalAgentIdUsed} (keys: ${cacheKey1}, ${cacheKey2}) due to review deletion.`);
     // --- END CACHE INVALIDATION ---
 
     return res.status(200).json({ 
@@ -1309,6 +1496,10 @@ const deleteAgent = async (req, res) => {
       return res.status(404).json({ error: 'Agent not found' });
     }
     
+    // Get agent data before deletion (needed for cache invalidation)
+    const agentData = agentDoc.data();
+    const deletedAgentCategory = agentData.category;
+    
     // Delete the agent
     await db.collection('agents').doc(sanitizedAgentId).delete();
     
@@ -1319,6 +1510,36 @@ const deleteAgent = async (req, res) => {
       batch.delete(doc.ref);
     });
     await batch.commit();
+    
+    // =========================================
+    // CACHE INVALIDATION - DELETEAGENT
+    // =========================================
+    try {
+      // Delete the specific agent's individual cache key (if it exists)
+      await deleteCache(generateAgentCacheKey(sanitizedAgentId));
+      logger.info(`Invalidated individual agent cache for: ${sanitizedAgentId}`);
+      
+      // Delete the cache for the category the agent belonged to
+      await deleteCache(generateAgentCategoryCacheKey(deletedAgentCategory));
+      logger.info(`Invalidated category cache for: ${deletedAgentCategory}`);
+      
+      // Delete all "All Categories" paginated caches using pattern
+      await deleteCacheByPattern('agents:all:*');
+      logger.info('Invalidated all paginated search caches');
+      
+      // Delete search count caches (agent deletion affects search counts)
+      await deleteCacheByPattern('agents:search:count:*');
+      logger.info('Invalidated all search count caches');
+      
+      // Delete agent count cache (agent deleted, count changed)
+      await deleteCache(generateAgentCountCacheKey());
+      logger.info('Invalidated agent count cache');
+      
+      logger.info(`Cache invalidation completed for agent deletion: ${sanitizedAgentId} from category: ${deletedAgentCategory}`);
+    } catch (cacheError) {
+      logger.error('Error during cache invalidation in deleteAgent:', cacheError);
+      // Continue execution as cache invalidation failure shouldn't block the response
+    }
     
     return res.status(200).json({ 
       success: true, 
@@ -1630,8 +1851,197 @@ const getLatestAgents = async (limit = 5) => {
 };
 
 const getLatestAgentsRoute = async (req, res) => { /* ... your existing code ... */ };
-// --- END OF OTHER EXISTING FUNCTIONS ---
 
+/**
+ * Get total count of agents with Redis caching
+ * Follows the same Redis-First architecture as other agent endpoints
+ */
+const getAgentCount = async (req, res) => {
+  try {
+    logger.info('getAgentCount called - checking cache first');
+    
+    // Generate cache key for total agent count
+    const cacheKey = generateAgentCountCacheKey();
+    logger.info(`Agent count cache key: ${cacheKey}`);
+    
+    // Redis-First approach: Try to get from cache first
+    try {
+      const cachedCount = await getCache(cacheKey);
+      if (cachedCount !== null) {
+        logger.info(`Cache HIT for agent count: ${cachedCount}`);
+        return res.status(200).json({
+          success: true,
+          totalCount: cachedCount,
+          fromCache: true
+        });
+      }
+      logger.info('Cache MISS for agent count, fetching from Firebase');
+    } catch (cacheError) {
+      logger.error('Cache error for agent count:', cacheError);
+    }
+    
+    // Cache miss - fetch from Firebase
+    const agentsSnapshot = await db.collection('agents').get();
+    const totalCount = agentsSnapshot.size;
+    
+    logger.info(`Fetched agent count from Firebase: ${totalCount}`);
+    
+    // Cache the result for 24 hours (86400 seconds) - same TTL as agents
+    try {
+      await setCache(cacheKey, totalCount, 86400);
+      logger.info(`Cached agent count: ${totalCount} for 24 hours`);
+    } catch (cacheError) {
+      logger.error('Error caching agent count:', cacheError);
+    }
+    
+    return res.status(200).json({
+      success: true,
+      totalCount: totalCount,
+      fromCache: false
+    });
+    
+  } catch (error) {
+    logger.error('Error in getAgentCount:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch agent count',
+      details: error.message
+    });
+  }
+};
+
+/**
+ * Get search results count for a specific query
+ * GET /api/agents/search/count?q=searchQuery&category=All
+ */
+const getSearchResultsCount = async (req, res) => {
+  try {
+    const {
+      q: searchQuery,
+      category = 'All'
+    } = req.query;
+
+    logger.info(`getSearchResultsCount called with: searchQuery=${searchQuery}, category=${category}`);
+
+    if (!searchQuery || !searchQuery.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Search query is required',
+        count: 0
+      });
+    }
+
+    const finalSearchQuery = searchQuery.trim();
+    
+    // Generate cache key for search count
+    const countCacheKey = `agents:search:count:${finalSearchQuery}:${category}`;
+    logger.info(`Search count cache key: ${countCacheKey}`);
+    
+    // Try to get from cache first (Redis-First approach)
+    try {
+      const cachedCount = await getCache(countCacheKey);
+      if (cachedCount !== null) {
+        logger.info(`Cache HIT for search count: ${finalSearchQuery} = ${cachedCount}`);
+        return res.status(200).json({
+          success: true,
+          count: cachedCount,
+          searchQuery: finalSearchQuery,
+          fromCache: true
+        });
+      }
+      logger.info(`Cache MISS for search count: ${finalSearchQuery}, fetching from Firebase`);
+    } catch (cacheError) {
+      logger.error(`Cache error for search count ${finalSearchQuery}:`, cacheError);
+    }
+
+    // Build query to get all matching agents
+    let query = db.collection('agents');
+    
+    if (category && category !== 'All') {
+      query = query.where('category', '==', category);
+    }
+    
+    // For search count, we need to fetch ALL agents and filter them
+    // This is because Firebase doesn't support complex text search queries
+    query = query.orderBy('createdAt', 'desc');
+    
+    // Execute the query to get all agents
+    const agentsSnapshot = await query.get();
+    
+    let allAgents = [];
+    agentsSnapshot.forEach(doc => {
+      allAgents.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+
+    // Server-side filtering for search count
+    const searchLower = finalSearchQuery.toLowerCase().trim();
+    logger.info(`Filtering ${allAgents.length} agents for search count: "${searchLower}"`);
+    
+    const matchingAgents = allAgents.filter((agent) => {
+      // Search in title
+      if (agent.title && agent.title.toLowerCase().includes(searchLower)) {
+        return true;
+      }
+      
+      // Search in description
+      if (agent.description && agent.description.toLowerCase().includes(searchLower)) {
+        return true;
+      }
+      
+      // Search in tags
+      if (agent.tags && Array.isArray(agent.tags)) {
+        if (agent.tags.some(tag => tag.toLowerCase().includes(searchLower))) {
+          return true;
+        }
+      }
+      
+      // Search in category
+      if (agent.category && agent.category.toLowerCase().includes(searchLower)) {
+        return true;
+      }
+      
+      // Search in name
+      if (agent.name && agent.name.toLowerCase().includes(searchLower)) {
+        return true;
+      }
+      
+      return false;
+    });
+
+    const searchResultsCount = matchingAgents.length;
+    logger.info(`Search count result: ${allAgents.length} → ${searchResultsCount} agents for "${finalSearchQuery}"`);
+
+    // Cache the count for 24 hours (86400 seconds)
+    try {
+      await setCache(countCacheKey, searchResultsCount, 86400);
+      logger.info(`Cached search count: ${searchResultsCount} for "${finalSearchQuery}"`);
+    } catch (cacheError) {
+      logger.error(`Error caching search count for ${finalSearchQuery}:`, cacheError);
+    }
+
+    return res.status(200).json({
+      success: true,
+      count: searchResultsCount,
+      searchQuery: finalSearchQuery,
+      totalAgents: allAgents.length,
+      fromCache: false
+    });
+
+  } catch (error) {
+    logger.error('Error in getSearchResultsCount:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get search results count',
+      details: error.message,
+      count: 0
+    });
+  }
+};
+
+// --- END OF OTHER EXISTING FUNCTIONS ---
 
 logger.info("Before export - function status check:");
 const functionsToExport = {
@@ -1641,7 +2051,10 @@ const functionsToExport = {
   getLatestAgents, getLatestAgentsRoute,
   // Add the new review handlers
   addAgentReview_controller,
-  deleteAgentReview_controller
+  deleteAgentReview_controller,
+  // Add the new count endpoints
+  getAgentCount,
+  getSearchResultsCount
 };
 for (const funcName in functionsToExport) {
   logger.info(`- ${funcName}: ${typeof functionsToExport[funcName] === 'function'}`);

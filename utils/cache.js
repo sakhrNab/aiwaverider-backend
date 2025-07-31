@@ -50,10 +50,17 @@ const DEFAULT_TTL = 300;
  *    - Example: profile:user123
  *    - Used for: User profile data
  * 
+ * 6. Agent Cache Keys (Redis-First Architecture):
+ *    - Category View: agents:category:{categoryName}
+ *    - All/Search View: agents:all:search_{searchQuery}:limit_{limit}:after_{lastVisibleId}
+ *    - Individual Agent: agent:{agentId}
+ *    - TTL: 24 hours (86400 seconds) for long-term caching
+ * 
  * Cache Invalidation Strategy:
  * - Post updates: Invalidate both the specific post cache and any category listings
  * - Comment updates: Invalidate the post's comments cache and any batch caches
  * - Profile updates: Invalidate only the specific user's profile cache
+ * - Agent updates: Invalidate specific agent, category cache, and all paginated caches
  */
 
 /**
@@ -93,6 +100,44 @@ const generateCommentsCacheKey = (postId) => {
  */
 const generateProfileCacheKey = (userId) => {
   return `profile:${userId}`;
+};
+
+/**
+ * Generates a cache key for category-based agent listings (Mode 1)
+ * @param {string} category - The agent category
+ * @returns {string} Cache key
+ */
+const generateAgentCategoryCacheKey = (category) => {
+  return `agents:category:${category}`;
+};
+
+/**
+ * Generates a cache key for all/search agent listings (Mode 2)
+ * @param {Object} params - Parameters for generating the cache key
+ * @param {string} params.searchQuery - Search query (optional)
+ * @param {number} params.limit - Number of agents per page
+ * @param {string} params.lastVisibleId - Cursor for pagination
+ * @returns {string} Cache key
+ */
+const generateAgentSearchCacheKey = ({ searchQuery, limit, lastVisibleId }) => {
+  return `agents:all:search_${searchQuery || 'none'}:limit_${limit}:after_${lastVisibleId || 'start'}`;
+};
+
+/**
+ * Generates a cache key for an individual agent
+ * @param {string} agentId - The agent's unique identifier
+ * @returns {string} Cache key
+ */
+const generateAgentCacheKey = (agentId) => {
+  return `agent:${agentId}`;
+};
+
+/**
+ * Generates a cache key for agent count
+ * @returns {string} Cache key
+ */
+const generateAgentCountCacheKey = () => {
+  return `agents:count:total`;
 };
 
 /**
@@ -178,5 +223,9 @@ module.exports = {
   generatePostCacheKey,
   generateCommentsCacheKey,
   generateProfileCacheKey,
+  generateAgentCategoryCacheKey,
+  generateAgentSearchCacheKey,
+  generateAgentCacheKey,
+  generateAgentCountCacheKey,
   DEFAULT_TTL
 }; 
