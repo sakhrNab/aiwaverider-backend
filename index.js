@@ -230,6 +230,8 @@ app.use('/api/*', (req, res) => {
       '/api/agents',
       '/api/payments',
       '/api/wishlists',
+      '/api/ai-tools',
+      '/api/prompts',
       '/api-test/recommendations'
     ]
   });
@@ -285,18 +287,58 @@ if (!isProduction) {
     }
   };
   
+  // NEW: Check if prompts collection exists and initialize cache
+  const checkPromptsCollection = async () => {
+    try {
+      console.log('Checking if prompts collection exists...');
+      const promptsSnapshot = await db.collection('prompts').limit(1).get();
+      if (promptsSnapshot.empty) {
+        console.log('⚠️ Prompts collection is empty or does not exist.');
+        console.log('Prompts collection will be created when you add your first prompt via the API.');
+      } else {
+        console.log('✅ Prompts collection exists with data.');
+      }
+      
+      // Initialize prompts cache
+      console.log('🔄 Initializing prompts cache...');
+      try {
+        const { initializePromptsCache } = require('./routes/ai-tools/prompts');
+        await initializePromptsCache();
+        console.log('✅ Prompts cache initialized successfully.');
+      } catch (cacheError) {
+        console.error('❌ Failed to initialize prompts cache:', cacheError.message);
+      }
+      
+    } catch (error) {
+      console.error('Error checking prompts collection:', error);
+    }
+  };
+  
   // Run the checks
   checkAgentsCollection();
+  checkPromptsCollection();
 }
 
 // ------------------ Start the Server ------------------
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, async () => {
   console.log(`Server is running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV}`);
   console.log(`Firebase credentials available: ${!!process.env.FIREBASE_SERVICE_ACCOUNT_JSON}`);
   console.log(`CORS origins: ${allowedOrigins.join(', ')}`);
   console.log(`Storage bucket: ${process.env.FIREBASE_STORAGE_BUCKET}`);
   console.log(`Firestore database available: ${!!db}`);
+  
+  // Initialize prompts cache on production startup
+  if (isProduction) {
+    try {
+      console.log('🔄 Initializing prompts cache on production startup...');
+      const { initializePromptsCache } = require('./routes/ai-tools/prompts');
+      await initializePromptsCache();
+      console.log('✅ Prompts cache initialized successfully on production startup.');
+    } catch (error) {
+      console.error('❌ Failed to initialize prompts cache on production startup:', error);
+    }
+  }
 });
 
 // Add error handler for the server

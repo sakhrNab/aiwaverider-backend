@@ -1,8 +1,6 @@
-// backend/utils/cache.js - ADD THESE MISSING FUNCTIONS
+// backend/utils/cache.js - UPDATED WITH PROMPT SUPPORT
 const Redis = require('ioredis');
 const logger = require('./logger'); // Assuming you have a logger
-
-// ... existing Redis setup code ...
 
 // Redis client configuration
 let redis;
@@ -54,7 +52,18 @@ const VIDEO_TTL = {
   INSTAGRAM: TTL.LONG * 4       // 20 minutes - Instagram (longer due to API limits)
 };
 
-
+// NEW: Optimized TTL configurations for prompts
+const PROMPT_TTL = {
+  LISTINGS: TTL.LONG,           // 24 hours - prompt listings
+  DETAILS: TTL.VERY_LONG,       // 7 days - individual prompt details
+  SEARCH: 3600,                 // 1 hour - search results
+  COUNTS: TTL.LONG,             // 24 hours - category counts
+  FEATURED: 3600,               // 1 hour - featured prompts
+  ADMIN: TTL.SHORT,             // 5 minutes - admin-specific data
+  CATEGORY: TTL.LONG,           // 24 hours - category listings
+  LIKES: TTL.MEDIUM,            // 30 minutes - like data (more dynamic)
+  USER_LIKES: TTL.MEDIUM        // 30 minutes - user's liked prompts
+};
 
 /**
  * Generates a cache key for paginated post listings
@@ -97,7 +106,7 @@ const generateCacheKey = (prefix, params = {}) => {
 };
 
 // ==========================================
-// MISSING CACHE KEY GENERATORS - ADD THESE
+// AGENT CACHE KEY GENERATORS (EXISTING)
 // ==========================================
 
 /**
@@ -150,13 +159,135 @@ const generateAgentCacheKey = (agentId) => {
   return `agent:${agentId}`;
 };
 
+// ==========================================
+// NEW: PROMPT CACHE KEY GENERATORS
+// ==========================================
+
+/**
+ * Generate cache key for prompt count
+ * @param {string} category - Optional category filter
+ * @returns {string} Cache key
+ */
+const generatePromptCountCacheKey = (category = null) => {
+  if (category && category !== 'All') {
+    return `prompts:count:category:${category}`;
+  }
+  return 'prompts:count:total';
+};
+
+/**
+ * Generate cache key for prompt category
+ * @param {string} category - Prompt category
+ * @returns {string} Cache key
+ */
+const generatePromptCategoryCacheKey = (category) => {
+  if (!category || category === 'All') {
+    return 'prompts:category:all';
+  }
+  return `prompts:category:${category}`;
+};
+
+/**
+ * Generate cache key for prompt search results
+ * @param {string} searchQuery - Search query
+ * @param {Object} filters - Filter parameters
+ * @returns {string} Cache key
+ */
+const generatePromptSearchCacheKey = (searchQuery, filters = {}) => {
+  const parts = ['prompts:search'];
+  
+  if (searchQuery) {
+    parts.push(`q:${searchQuery}`);
+  }
+  
+  // Add filter parameters
+  if (filters.category && filters.category !== 'All') {
+    parts.push(`cat:${filters.category}`);
+  }
+  if (filters.tags) {
+    const tagsString = Array.isArray(filters.tags) ? filters.tags.join(',') : filters.tags;
+    parts.push(`tags:${tagsString}`);
+  }
+  if (filters.featured) parts.push(`featured:${filters.featured}`);
+  if (filters.createdBy) parts.push(`creator:${filters.createdBy}`);
+  
+  return parts.join(':');
+};
+
+/**
+ * Generate cache key for individual prompt
+ * @param {string} promptId - Prompt ID
+ * @returns {string} Cache key
+ */
+const generatePromptCacheKey = (promptId) => {
+  return `prompt:${promptId}`;
+};
+
+/**
+ * Generate cache key for user's liked prompts
+ * @param {string} userId - User ID
+ * @returns {string} Cache key
+ */
+const generateUserLikedPromptsCacheKey = (userId) => {
+  return `prompts:user:${userId}:liked`;
+};
+
+/**
+ * Generate cache key for featured prompts
+ * @param {number} limit - Number of featured prompts
+ * @returns {string} Cache key
+ */
+const generateFeaturedPromptsCacheKey = (limit = 10) => {
+  return `prompts:featured:${limit}`;
+};
+
+/**
+ * Generate cache key for prompt categories with counts
+ * @returns {string} Cache key
+ */
+const generatePromptCategoriesCountCacheKey = () => {
+  return 'prompts:categories:counts';
+};
+
 /**
  * Get optimized TTL based on cache key type
  * @param {string} key - Cache key
  * @returns {number} TTL in seconds
  */
 const getOptimizedTTL = (key) => {
-  // Agent-specific TTLs for cost optimization
+  // Prompt-specific TTLs (NEW)
+  if (key.startsWith('prompts:category:')) {
+    return PROMPT_TTL.CATEGORY; // 24 hours
+  }
+  if (key.startsWith('prompts:search:')) {
+    return PROMPT_TTL.SEARCH; // 1 hour
+  }
+  if (key.startsWith('prompts:count:')) {
+    return PROMPT_TTL.COUNTS; // 24 hours
+  }
+  if (key.startsWith('prompts:featured:')) {
+    return PROMPT_TTL.FEATURED; // 1 hour
+  }
+  if (key.startsWith('prompts:user:') && key.includes(':liked')) {
+    return PROMPT_TTL.USER_LIKES; // 30 minutes
+  }
+  if (key.startsWith('prompts:categories:counts')) {
+    return PROMPT_TTL.CATEGORY; // 24 hours
+  }
+  if (key.startsWith('prompt:')) {
+    return PROMPT_TTL.DETAILS; // 7 days
+  }
+  if (key.startsWith('prompts:admin:')) {
+    return PROMPT_TTL.ADMIN; // 5 minutes (admin data)
+  }
+  if (key.startsWith('prompts:results:')) {
+    return PROMPT_TTL.SEARCH; // 1 hour (search results)
+  }
+  if (key.startsWith('prompts:') && !key.includes(':')) {
+    return PROMPT_TTL.LISTINGS; // 24 hours (general prompt listings)
+  }
+
+  // Agent-specific TTLs (EXISTING)
   if (key.startsWith('agents:category:')) {
     return AGENT_TTL.CATEGORY; // 24 hours
   }
@@ -178,11 +309,14 @@ const getOptimizedTTL = (key) => {
   if (key.startsWith('agents:admin:')) {
     return AGENT_TTL.ADMIN; // 5 minutes (admin data)
   }
+  if (key.startsWith('agents:results:')) {
+    return AGENT_TTL.SEARCH; // 1 hour (search results)
+  }
   if (key.startsWith('agents:') && !key.includes(':')) {
     return AGENT_TTL.LISTINGS; // 24 hours (general agent listings)
   }
   
-  // Video-specific TTLs for cost optimization
+  // Video-specific TTLs (EXISTING)
   if (key.startsWith('video_list:')) {
     return VIDEO_TTL.LISTINGS; // 24 hours
   }
@@ -199,7 +333,7 @@ const getOptimizedTTL = (key) => {
     return VIDEO_TTL.ADMIN; // 5 minutes (admin data)
   }
   
-  // Default to original TTL for non-agent/video data
+  // Default to original TTL for non-agent/video/prompt data
   return TTL.SHORT;
 };
 
@@ -209,14 +343,18 @@ const getOptimizedTTL = (key) => {
  * @returns {string} TTL type description
  */
 const getTTLType = (ttl) => {
-  // Agent-specific TTLs
+  // Prompt-specific TTLs (NEW)
+  if (ttl === PROMPT_TTL.SEARCH || ttl === PROMPT_TTL.FEATURED) return '1-HOUR';
+  if (ttl === PROMPT_TTL.LIKES || ttl === PROMPT_TTL.USER_LIKES) return '30-MINUTES';
+  
+  // Agent-specific TTLs (EXISTING)
   if (ttl === AGENT_TTL.SEARCH || ttl === AGENT_TTL.FEATURED || ttl === AGENT_TTL.RECOMMENDATIONS) return '1-HOUR';
   
-  // Video-specific TTLs
+  // Video-specific TTLs (EXISTING)
   if (ttl === VIDEO_TTL.SEARCH) return '1-HOUR';
   if (ttl === VIDEO_TTL.INSTAGRAM) return '20-MINUTES';
   
-  // General TTLs (including agent/video TTLs that reference them)
+  // General TTLs (including agent/video/prompt TTLs that reference them)
   if (ttl === TTL.SHORT) return '5-MINUTES';
   if (ttl === TTL.MEDIUM) return '30-MINUTES';
   if (ttl === TTL.LONG) return '24-HOURS';
@@ -224,8 +362,6 @@ const getTTLType = (ttl) => {
   
   return `${ttl}s`;
 };
-
-
 
 /**
  * Retrieves data from Redis cache with error handling
@@ -255,7 +391,7 @@ const getCache = async (key) => {
  * Stores data in Redis cache with optimized TTL
  * @param {string} key - Cache key
  * @param {any} data - Data to cache
- * @param {number} ttl - Time to live in seconds (optional, auto-detected for agents)
+ * @param {number} ttl - Time to live in seconds (optional, auto-detected for agents/prompts)
  * @returns {Promise<boolean>} Success status
  */
 const setCache = async (key, data, ttl = null) => {
@@ -421,7 +557,7 @@ const incrementCounter = async (key, ttl = TTL.MEDIUM) => {
  * Cache with automatic refresh capability and optimized TTL
  * @param {string} key - Cache key
  * @param {Function} fetchFunction - Function to fetch fresh data
- * @param {number} ttl - TTL in seconds (optional, auto-detected for agents)
+ * @param {number} ttl - TTL in seconds (optional, auto-detected for agents/prompts)
  * @returns {Promise<any>} Cached or fresh data
  */
 const cacheWithRefresh = async (key, fetchFunction, ttl = null) => {
@@ -507,17 +643,30 @@ module.exports = {
   getOptimizedTTL,
   getTTLType,
   
-  // Cache key generators
+  // Agent cache key generators (EXISTING)
   generateAgentCountCacheKey,
   generateAgentCategoryCacheKey,
   generateAgentSearchCacheKey,
   generateAgentCacheKey,
+  
+  // Prompt cache key generators (NEW)
+  generatePromptCountCacheKey,
+  generatePromptCategoryCacheKey,
+  generatePromptSearchCacheKey,
+  generatePromptCacheKey,
+  generateUserLikedPromptsCacheKey,
+  generateFeaturedPromptsCacheKey,
+  generatePromptCategoriesCountCacheKey,
+  
+  // Post cache key generators (EXISTING)
   generatePostsCacheKey,
-  generatePostCacheKey,  
+  generatePostCacheKey,
+  
   // TTL constants
   TTL,
   AGENT_TTL,
   VIDEO_TTL,
+  PROMPT_TTL, // NEW
   
   // Redis instance (for advanced operations if needed)
   redis

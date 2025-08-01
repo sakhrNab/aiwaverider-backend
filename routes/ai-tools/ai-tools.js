@@ -7,7 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 
-// Collection reference
+// Collection reference - AI Tools only (exactly as before)
 const COLLECTION_NAME = 'ai_tools';
 
 /**
@@ -179,17 +179,15 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
     // Ensure link has a default value if empty
     const safeLink = link || '';
     
-    // Get image path if uploaded
+    // Get image path if uploaded (same logic as before)
     let imageUrl = '';
     if (req.file) {
       console.log('File received:', req.file.originalname, req.file.mimetype, req.file.size);
       
-      // Generate a unique filename
       const timestamp = Date.now();
       const filename = `${timestamp}-${req.file.originalname.replace(/\s+/g, '-')}`;
       
       try {
-        // Try Firebase Storage first
         const storage = admin.storage();
         const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
         
@@ -197,57 +195,39 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
           console.log('Using Firebase Storage bucket:', bucketName);
           
           const bucket = storage.bucket(bucketName);
-          
-          // Create a file reference
           const fileName = `ai-tools/${filename}`;
           const fileRef = bucket.file(fileName);
           
-          // Upload file
           await fileRef.save(req.file.buffer, {
             metadata: {
               contentType: req.file.mimetype,
             },
           });
           
-          // Make file public
           await fileRef.makePublic();
-          
-          // Get public URL
           imageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
           console.log('Firebase Storage URL:', imageUrl);
         } else {
-          // Fallback to local storage
           console.log('Firebase Storage bucket not configured. Using local storage.');
           
-          // Ensure uploads directory exists
           const uploadsDir = path.join(__dirname, '../../uploads');
           if (!fs.existsSync(uploadsDir)) {
             fs.mkdirSync(uploadsDir, { recursive: true });
           }
           
-          // Save file locally
           fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
-          
-          // Set the URL to the local path
           imageUrl = `/uploads/${filename}`;
           console.log('Local storage URL:', imageUrl);
         }
       } catch (error) {
         console.error('Error uploading image:', error);
         
-        // Fallback to local storage on error
-        console.log('Falling back to local storage');
-        
-        // Ensure uploads directory exists
         const uploadsDir = path.join(__dirname, '../../uploads');
         if (!fs.existsSync(uploadsDir)) {
           fs.mkdirSync(uploadsDir, { recursive: true });
         }
         
-        // Save file locally
         fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
-        
-        // Set the URL to the local path
         imageUrl = `/uploads/${filename}`;
         console.log('Local storage URL:', imageUrl);
       }
@@ -349,17 +329,15 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
       });
     }
     
-    // Get image URL if uploaded
+    // Handle image upload (same logic as POST)
     let imageUrl = undefined;
     if (req.file) {
       console.log('File received:', req.file.originalname, req.file.mimetype, req.file.size);
       
-      // Generate a unique filename
       const timestamp = Date.now();
       const filename = `${timestamp}-${req.file.originalname.replace(/\s+/g, '-')}`;
       
       try {
-        // Try Firebase Storage first
         const storage = admin.storage();
         const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
         
@@ -367,57 +345,39 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
           console.log('Using Firebase Storage bucket:', bucketName);
           
           const bucket = storage.bucket(bucketName);
-          
-          // Create a file reference
           const fileName = `ai-tools/${filename}`;
           const fileRef = bucket.file(fileName);
           
-          // Upload file
           await fileRef.save(req.file.buffer, {
             metadata: {
               contentType: req.file.mimetype,
             },
           });
           
-          // Make file public
           await fileRef.makePublic();
-          
-          // Get public URL
           imageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
           console.log('Firebase Storage URL:', imageUrl);
         } else {
-          // Fallback to local storage
           console.log('Firebase Storage bucket not configured. Using local storage.');
           
-          // Ensure uploads directory exists
           const uploadsDir = path.join(__dirname, '../../uploads');
           if (!fs.existsSync(uploadsDir)) {
             fs.mkdirSync(uploadsDir, { recursive: true });
           }
           
-          // Save file locally
           fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
-          
-          // Set the URL to the local path
           imageUrl = `/uploads/${filename}`;
           console.log('Local storage URL:', imageUrl);
         }
       } catch (error) {
         console.error('Error uploading image:', error);
         
-        // Fallback to local storage on error
-        console.log('Falling back to local storage');
-        
-        // Ensure uploads directory exists
         const uploadsDir = path.join(__dirname, '../../uploads');
         if (!fs.existsSync(uploadsDir)) {
           fs.mkdirSync(uploadsDir, { recursive: true });
         }
         
-        // Save file locally
         fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
-        
-        // Set the URL to the local path
         imageUrl = `/uploads/${filename}`;
         console.log('Local storage URL:', imageUrl);
       }
@@ -503,4 +463,4 @@ router.delete('/:id', auth, async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;

@@ -20,6 +20,10 @@ const templateRoutes = require('./template/templateRoutes'); // New template dow
 
 const recommendationsRoutes = require('./agents/recommendations');
 const aiToolsRoutes = require('./ai-tools/ai-tools');
+
+// NEW: Import prompts routes - destructure the router from the exported object
+const { router: promptsRoutes } = require('./ai-tools/prompts');
+
 const adminRoutes = require('./admin/admin');
 const adminEmailRoutes = require('./admin/adminEmailRoutes');
 const emailRoutes = require('./api/emailRoutes');
@@ -49,6 +53,10 @@ router.use('/templates', templateRoutes);   // Secure template downloads
 
 router.use('/recommendations', recommendationsRoutes);
 router.use('/ai-tools', aiToolsRoutes);
+
+// NEW: Mount prompts routes - completely separate from ai-tools
+router.use('/prompts', promptsRoutes);
+
 router.use('/admin', adminRoutes);
 router.use('/admin/email', adminEmailRoutes);
 // Note: /api/chat is mounted separately in the main app file
