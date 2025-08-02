@@ -1,3 +1,4 @@
+// backend/middleware/publicCacheMiddleware.js
 const { cacheControl, etagCache, varyHeader, conditionalGet } = require('./cache');
 
 /**
@@ -23,19 +24,62 @@ const publicCacheMiddleware = (options = {}) => {
   return (req, res, next) => {
     // Skip for non-GET requests or authenticated routes
     if (req.method !== 'GET' || req.headers.authorization) {
-      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       return next();
     }
 
-    // Skip for specific endpoints that shouldn't be cached
+    // Comprehensive list of endpoints that shouldn't be cached
     const noCacheEndpoints = [
       '/api/auth',
       '/api/profile',
-      '/api/users/me'
+      '/api/users/me',
+      '/api/users/',
+      '/api/user/',
+      '/api/wishlists',
+      '/api/cart',
+      '/api/checkout',
+      '/api/payments',
+      '/api/admin',
+      '/api/chat',
+      '/api/upload',
+      '/api/session',
+      '/api/tokens',
+      '/api/email'
     ];
 
-    if (noCacheEndpoints.some(endpoint => req.path.startsWith(endpoint))) {
-      res.setHeader('Cache-Control', 'no-store');
+    // Check if the request path matches any no-cache endpoint
+    const shouldNotCache = noCacheEndpoints.some(endpoint => {
+      // Check both exact match and starts with for broader coverage
+      return req.path === endpoint || req.path.startsWith(endpoint);
+    });
+
+    if (shouldNotCache) {
+      console.log(`[Cache] Skipping cache for protected endpoint: ${req.path}`);
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      return next();
+    }
+
+    // Additional check for any paths containing user-specific data
+    const userSpecificPatterns = [
+      /\/users?\/[^\/]+/,  // /user/123 or /users/123
+      /\/profile/,         // any profile routes
+      /\/account/,         // any account routes
+      /\/dashboard/,       // any dashboard routes
+      /\/admin/,           // any admin routes
+      /\/api\/.*\/me$/,    // any "me" endpoints
+    ];
+
+    const isUserSpecific = userSpecificPatterns.some(pattern => pattern.test(req.path));
+    
+    if (isUserSpecific) {
+      console.log(`[Cache] Skipping cache for user-specific endpoint: ${req.path}`);
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       return next();
     }
 
@@ -56,6 +100,8 @@ const publicCacheMiddleware = (options = {}) => {
       return originalSetHeader.apply(this, arguments);
     };
 
+    console.log(`[Cache] Applying cache headers for public endpoint: ${req.path}`);
+
     // Chain the middleware functions
     cacheControl(maxAge)(req, res, () => {
       if (enableEtag) {
@@ -75,4 +121,4 @@ const publicCacheMiddleware = (options = {}) => {
   };
 };
 
-module.exports = publicCacheMiddleware; 
+module.exports = publicCacheMiddleware;

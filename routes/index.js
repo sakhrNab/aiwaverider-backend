@@ -38,39 +38,53 @@ const simpleTokenRoutes = require('./api/simpleTokenRoutes');
 
 // Mount routes - these will all be under /api in the main app
 // IMPORTANT: Mount specific routes before catch-all routes
+
+// Auth routes should be first for proper authentication handling
 router.use('/auth', authRoutes);
-router.use('/users', usersRoutes);
-router.use('/posts', postsRoutes);
+
+// Profile routes should be mounted early and separately to ensure they're accessible
 router.use('/profile', profileRoutes);
+
+// User routes
+router.use('/users', usersRoutes);
+
+// Content routes
+router.use('/posts', postsRoutes);
 router.use('/videos', videosRoutes); // Move videos before agents to prevent catch-all interference
+
+// Product/Agent routes
 router.use('/agents', agentsRoutes);
 router.use('/agent', agentRoutes);
 router.use('/wishlists', wishlistsRoutes);
 router.use('/agent-prices', pricesRoutes);
-router.use('/test', testRoutes);
+router.use('/recommendations', recommendationsRoutes);
+
+// AI Tools and Prompts
+router.use('/ai-tools', aiToolsRoutes);
+// NEW: Mount prompts routes - completely separate from ai-tools
+router.use('/prompts', promptsRoutes);
 
 // Payment system routes (updated)
 router.use('/payments', paymentsRoutes);    // Main payment endpoints + UniPay subroutes
 router.use('/invoices', invoiceRoutes);     // Invoice management API
 router.use('/templates', templateRoutes);   // Secure template downloads
 
-router.use('/recommendations', recommendationsRoutes);
-router.use('/ai-tools', aiToolsRoutes);
-
-// NEW: Mount prompts routes - completely separate from ai-tools
-router.use('/prompts', promptsRoutes);
-
-// NEW: Mount cache management routes
-router.use('/cache', cacheRoutes);
-
+// Admin routes
 router.use('/admin', adminRoutes);
 router.use('/admin/email', adminEmailRoutes);
-// Note: /api/chat is mounted separately in the main app file
+
+// Utility routes
 router.use('/email', emailRoutes);
 router.use('/health', healthRoutes);
 router.use('/tokens', tokenRoutes);
 router.use('/test-auth', testAuthRoutes);
 router.use('/simple-tokens', simpleTokenRoutes);
+router.use('/test', testRoutes);
+
+// NEW: Mount cache management routes
+router.use('/cache', cacheRoutes);
+
+// Note: /api/chat is mounted separately in the main app file
 
 // Add redirect for product routes to the agents routes
 // This handles legacy or alternative product URLs
@@ -88,5 +102,38 @@ router.get('/product/:productId', (req, res) => {
   req.url = `/agents/${productId}`;
   router.handle(req, res);
 });
+
+// Debug route to list all registered routes (development only)
+if (process.env.NODE_ENV === 'development') {
+  router.get('/debug/routes', (req, res) => {
+    const routes = [];
+    
+    function extractRoutes(stack, basePath = '') {
+      stack.forEach(layer => {
+        if (layer.route) {
+          // Direct route
+          const methods = Object.keys(layer.route.methods).join(', ').toUpperCase();
+          routes.push(`${methods} ${basePath}${layer.route.path}`);
+        } else if (layer.name === 'router' && layer.handle.stack) {
+          // Nested router
+          const path = layer.regexp.source
+            .replace('\\', '')
+            .replace('(?=\\/|$)', '')
+            .replace('^', '')
+            .replace('$', '');
+          extractRoutes(layer.handle.stack, basePath + path);
+        }
+      });
+    }
+    
+    extractRoutes(router.stack, '/api');
+    
+    res.json({
+      message: 'Registered API routes',
+      routes: routes.sort(),
+      totalRoutes: routes.length
+    });
+  });
+}
 
 module.exports = router;

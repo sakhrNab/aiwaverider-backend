@@ -38,12 +38,14 @@ exports.signup = async (req, res) => {
       userDoc = await usersCollection.doc(uid).get();
       if (userDoc.exists) {
         console.log('User already exists in Firestore:', uid);
+        const existingUser = userDoc.data();
         return res.json({
           message: 'Welcome back! Your account already exists.',
           user: {
             uid,
-            ...userDoc.data()
-          }
+            ...existingUser
+          },
+          profile: existingUser // Include profile data in response
         });
       }
       console.log('User does not exist in Firestore, creating new document');
@@ -128,7 +130,20 @@ exports.signup = async (req, res) => {
     console.log('Creating user document in Firestore:', uid);
     
     try {
-      await usersCollection.doc(uid).set(userData);
+      // Use a transaction to ensure data consistency
+      await db.runTransaction(async (transaction) => {
+        const userRef = usersCollection.doc(uid);
+        
+        // Double-check user doesn't exist within transaction
+        const existingUser = await transaction.get(userRef);
+        if (existingUser.exists) {
+          throw new Error('User already exists');
+        }
+        
+        // Create the user document
+        transaction.set(userRef, userData);
+      });
+      
       console.log('User document created successfully in Firestore:', uid);
     } catch (createError) {
       console.error('Error creating user document in Firestore:', createError);
@@ -181,19 +196,27 @@ exports.signup = async (req, res) => {
       ? 'Account created successfully with social login!'
       : 'Account created successfully! Welcome to our platform!';
     
+    // IMPORTANT: Include both user and profile data in response
+    const responseData = {
+      uid,
+      username: finalUsername,
+      email: email.toLowerCase(),
+      firstName: finalFirstName,
+      lastName: finalLastName,
+      displayName: finalDisplayName,
+      role: 'authenticated',
+      photoURL: photoURL || firebaseUser.photoURL || '',
+      onboarding: userData.onboarding,
+      phoneNumber: phoneNumber || '',
+      emailPreferences: userData.emailPreferences,
+      status: userData.status,
+      createdAt: new Date().toISOString() // Convert timestamp for JSON response
+    };
+    
     return res.json({
       message: successMessage,
-      user: {
-        uid,
-        username: finalUsername,
-        email: email.toLowerCase(),
-        firstName: finalFirstName,
-        lastName: finalLastName,
-        displayName: finalDisplayName,
-        role: 'authenticated',
-        photoURL: photoURL || firebaseUser.photoURL || '',
-        onboarding: userData.onboarding
-      }
+      user: responseData,
+      profile: responseData // Include profile data for immediate use
     });
   } catch (err) {
     console.error('Error in /api/auth/signup:', err);
