@@ -1,3 +1,5 @@
+// backend/controllers/auth/authController.js
+
 const { admin, db } = require('../../config/firebase');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
@@ -37,7 +39,7 @@ exports.signup = async (req, res) => {
       if (userDoc.exists) {
         console.log('User already exists in Firestore:', uid);
         return res.json({
-          message: 'User already exists',
+          message: 'Welcome back! Your account already exists.',
           user: {
             uid,
             ...userDoc.data()
@@ -50,17 +52,19 @@ exports.signup = async (req, res) => {
       return res.status(500).json({ error: `Firestore error: ${firestoreError.message}` });
     }
 
-    // Check if username already exists
-    try {
-      const usernameQuery = await usersCollection.where('username', '==', username).get();
-      if (!usernameQuery.empty) {
-        console.log('Username already taken:', username);
-        return res.status(400).json({ error: 'Username is already taken.' });
+    // Check if username already exists (only if username provided)
+    if (username) {
+      try {
+        const usernameQuery = await usersCollection.where('username', '==', username).get();
+        if (!usernameQuery.empty) {
+          console.log('Username already taken:', username);
+          return res.status(400).json({ error: 'Username is already taken.' });
+        }
+        console.log('Username is available:', username);
+      } catch (usernameError) {
+        console.error('Error checking username:', usernameError);
+        return res.status(500).json({ error: `Username check error: ${usernameError.message}` });
       }
-      console.log('Username is available:', username);
-    } catch (usernameError) {
-      console.error('Error checking username:', usernameError);
-      return res.status(500).json({ error: `Username check error: ${usernameError.message}` });
     }
 
     // Check if email already exists in Firestore (separate from Firebase Auth)
@@ -76,31 +80,47 @@ exports.signup = async (req, res) => {
       return res.status(500).json({ error: `Email check error: ${emailError.message}` });
     }
 
-    // Create searchable field for better querying
-    const searchField = `${username.toLowerCase()} ${email.toLowerCase()} ${firstName ? firstName.toLowerCase() : ''} ${lastName ? lastName.toLowerCase() : ''}`;
+    // Generate fallback values for missing fields
+    const finalFirstName = firstName || displayName?.split(' ')[0] || email.split('@')[0];
+    const finalLastName = lastName || displayName?.split(' ').slice(1).join(' ') || '';
+    const finalUsername = username || `user_${email.split('@')[0]}_${Date.now().toString().slice(-4)}`;
+    const finalDisplayName = displayName || `${finalFirstName} ${finalLastName}`.trim();
 
-    // Set default email preferences
+    // Create searchable field for better querying
+    const searchField = `${finalUsername.toLowerCase()} ${email.toLowerCase()} ${finalFirstName.toLowerCase()} ${finalLastName.toLowerCase()}`.trim();
+
+    // Set optimized email preferences for better conversion
     const emailPreferences = {
-      weeklyUpdates: true,
-      announcements: true,
-      newAgents: true,
-      newTools: true,
-      marketingEmails: true
+      weeklyUpdates: false, // Default to false to reduce email fatigue
+      announcements: true, // Keep important announcements
+      newAgents: false, // Default to false, user can enable later
+      newTools: false, // Default to false, user can enable later
+      marketingEmails: false // Default to false for better user experience
     };
 
-    // Create user document in Firestore with profile image if available
+    // Create user document in Firestore
     const userData = {
-      username,
-      firstName: firstName || '',
-      lastName: lastName || '',
+      username: finalUsername,
+      firstName: finalFirstName,
+      lastName: finalLastName,
       email: email.toLowerCase(),
       phoneNumber: phoneNumber || '',
       role: 'authenticated',
-      displayName: displayName || '',
+      displayName: finalDisplayName,
       photoURL: photoURL || firebaseUser.photoURL || '',
       searchField,
       status: 'active',
       emailPreferences,
+      // Add onboarding status for progressive data collection
+      onboarding: {
+        completed: false,
+        currentStep: 'welcome',
+        profileComplete: false,
+        phoneNumberAdded: false,
+        profileImageAdded: !!photoURL
+      },
+      // Add signup method tracking for analytics
+      signupMethod: photoURL ? 'social' : 'email',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     };
@@ -115,14 +135,15 @@ exports.signup = async (req, res) => {
       return res.status(500).json({ error: `Failed to create user document: ${createError.message}` });
     }
 
-    // Send welcome email
+    // Send welcome email (optimized for conversion)
     try {
       const emailData = {
         uid,
         email,
-        firstName,
-        lastName,
-        displayName
+        firstName: finalFirstName,
+        lastName: finalLastName,
+        displayName: finalDisplayName,
+        signupMethod: userData.signupMethod
       };
       
       // Use await to properly handle the promise
@@ -155,14 +176,23 @@ exports.signup = async (req, res) => {
 
     console.log('Signup process completed successfully for:', uid);
     
+    // Return success message optimized for user experience
+    const successMessage = userData.signupMethod === 'social' 
+      ? 'Account created successfully with social login!'
+      : 'Account created successfully! Welcome to our platform!';
+    
     return res.json({
-      message: 'User created successfully',
+      message: successMessage,
       user: {
         uid,
-        username,
+        username: finalUsername,
         email: email.toLowerCase(),
+        firstName: finalFirstName,
+        lastName: finalLastName,
+        displayName: finalDisplayName,
         role: 'authenticated',
-        photoURL: photoURL || firebaseUser.photoURL || ''
+        photoURL: photoURL || firebaseUser.photoURL || '',
+        onboarding: userData.onboarding
       }
     });
   } catch (err) {
@@ -232,7 +262,8 @@ exports.createSession = async (req, res) => {
         displayName: userData.displayName || null,
         firstName: userData.firstName || '',
         lastName: userData.lastName || '',
-        phoneNumber: userData.phoneNumber || ''
+        phoneNumber: userData.phoneNumber || '',
+        onboarding: userData.onboarding || { completed: false }
       }
     });
   } catch (err) {
@@ -391,4 +422,4 @@ exports.refreshToken = async (req, res) => {
     console.error('Error in refreshToken:', err);
     return res.status(401).json({ error: 'Invalid refresh token', user: null });
   }
-}; 
+};
