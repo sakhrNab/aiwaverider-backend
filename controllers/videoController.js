@@ -220,8 +220,8 @@ const listVideos = async (req, res) => {
       hasPreviousPage: pageNum > 1
     };
 
-    // Cache the response
-    await setCache(cacheKey, response, VIDEO_CACHE_TTL);
+    // Cache the response (using optimized TTL)
+    await setCache(cacheKey, response);
     console.log(`Cached video list for ${platform}, page ${pageNum}`);
 
     res.json(response);

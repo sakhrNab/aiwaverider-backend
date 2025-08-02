@@ -19,6 +19,9 @@ const adminEmailRoutes = require('./admin/adminEmailRoutes');
 const emailRoutes = require('./api/emailRoutes');
 const healthRoutes = require('./health');
 const videosRoutes = require('./videos/videos');
+const tokenRoutes = require('./api/tokenRoutes');
+const testAuthRoutes = require('./api/testAuthRoutes');
+const simpleTokenRoutes = require('./api/simpleTokenRoutes');
 
 // Mount routes - these will all be under /api in the main app
 // IMPORTANT: Mount specific routes before catch-all routes
@@ -40,6 +43,9 @@ router.use('/admin/email', adminEmailRoutes);
 // Note: /api/chat is mounted separately in the main app file
 router.use('/email', emailRoutes);
 router.use('/health', healthRoutes);
+router.use('/tokens', tokenRoutes);
+router.use('/test-auth', testAuthRoutes);
+router.use('/simple-tokens', simpleTokenRoutes);
 
 // Add redirect for product routes to the agents routes
 // This handles legacy or alternative product URLs

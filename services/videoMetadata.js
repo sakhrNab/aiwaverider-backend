@@ -105,8 +105,8 @@ const fetchYouTubeMetadata = async (videoId) => {
       embedUrl: generateEmbedUrl.youtube(videoId)
     };
 
-    // Cache the metadata
-    await setCache(cacheKey, metadata, VIDEO_CACHE_TTL);
+    // Cache the metadata (using optimized TTL)
+    await setCache(cacheKey, metadata);
     console.log(`Cached YouTube metadata for video: ${videoId}`);
     
     return metadata;
@@ -169,8 +169,8 @@ const fetchTikTokMetadata = async (videoId) => {
       embedUrl: generateEmbedUrl.tiktok(videoId)
     };
 
-    // Cache the metadata
-    await setCache(cacheKey, metadata, VIDEO_CACHE_TTL);
+    // Cache the metadata (using optimized TTL)
+    await setCache(cacheKey, metadata);
     console.log(`Cached TikTok metadata for video: ${videoId}`);
     
     return metadata;
@@ -272,8 +272,8 @@ const fetchInstagramMetadata = async (videoId, originalUrl) => {
       category: 'Tech' // Add default category for filtering
     };
 
-    // Cache the metadata for a longer time since it's mostly static
-    await setCache(cacheKey, metadata, VIDEO_CACHE_TTL * 4); // 20 minutes cache
+    // Cache the metadata (using optimized TTL)
+    await setCache(cacheKey, metadata);
     console.log(`Cached Instagram metadata for video: ${videoId} with author: ${authorName}`);
     
     return metadata;
