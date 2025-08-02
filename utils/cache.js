@@ -87,6 +87,14 @@ const generatePostCacheKey = (postId) => {
 };
 
 /**
+ * Generates a cache key for a post's comments
+ * @param {string} postId - The post's unique identifier
+ * @returns {string} Cache key
+ */
+const generateCommentsCacheKey = (postId) => {
+  return `comments:${postId}`;
+};
+/**
  * Enhanced cache key generation with consistent naming
  */
 const generateCacheKey = (prefix, params = {}) => {
@@ -661,7 +669,7 @@ module.exports = {
   // Post cache key generators (EXISTING)
   generatePostsCacheKey,
   generatePostCacheKey,
-  
+  generateCommentsCacheKey,
   // TTL constants
   TTL,
   AGENT_TTL,

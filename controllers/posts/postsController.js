@@ -29,6 +29,12 @@ const createPost = async (req, res) => {
     if (!user?.uid) {
       return res.status(401).json({ error: 'Authentication required' });
     }
+    
+    // Check if user is admin
+    if (user.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin privileges required to create posts.' });
+    }
+    
     // Validate required fields
     if (!title || !description || !category) {
       return res.status(400).json({ error: 'Title, description, and category are required.' });
@@ -255,9 +261,10 @@ const updatePost = async (req, res) => {
   }
 };
 
-const deletePost = async (req, res, user) => {
+const deletePost = async (req, res) => {
   try {
     const { postId } = req.params;
+    const user = req.user;
 
     // Validate user and post ownership
     const postDoc = await postsCollection.doc(postId).get();
