@@ -24,6 +24,9 @@ const aiToolsRoutes = require('./ai-tools/ai-tools');
 // NEW: Import prompts routes - destructure the router from the exported object
 const { router: promptsRoutes } = require('./ai-tools/prompts');
 
+// NEW: Import cache management routes
+const cacheRoutes = require('./api/cacheRoutes');
+
 const adminRoutes = require('./admin/admin');
 const adminEmailRoutes = require('./admin/adminEmailRoutes');
 const emailRoutes = require('./api/emailRoutes');
@@ -56,6 +59,9 @@ router.use('/ai-tools', aiToolsRoutes);
 
 // NEW: Mount prompts routes - completely separate from ai-tools
 router.use('/prompts', promptsRoutes);
+
+// NEW: Mount cache management routes
+router.use('/cache', cacheRoutes);
 
 router.use('/admin', adminRoutes);
 router.use('/admin/email', adminEmailRoutes);
