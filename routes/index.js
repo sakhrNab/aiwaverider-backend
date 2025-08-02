@@ -1,3 +1,4 @@
+// backend/routes/index.js
 const express = require('express');
 const router = express.Router();
 
@@ -11,9 +12,21 @@ const agentRoutes = require('./agents/agent');
 const wishlistsRoutes = require('./agents/wishlists');
 const pricesRoutes = require('./agents/prices');
 const testRoutes = require('./test');
-const paymentsRoutes = require('./payments/payments');
+
+// Updated payment system routes
+const paymentsRoutes = require('./payments/payments'); // Your updated main payment routes
+const invoiceRoutes = require('./invoice/invoiceRoutes'); // New invoice management
+const templateRoutes = require('./template/templateRoutes'); // New template downloads
+
 const recommendationsRoutes = require('./agents/recommendations');
 const aiToolsRoutes = require('./ai-tools/ai-tools');
+
+// NEW: Import prompts routes - destructure the router from the exported object
+const { router: promptsRoutes } = require('./ai-tools/prompts');
+
+// NEW: Import cache management routes
+const cacheRoutes = require('./api/cacheRoutes');
+
 const adminRoutes = require('./admin/admin');
 const adminEmailRoutes = require('./admin/adminEmailRoutes');
 const emailRoutes = require('./api/emailRoutes');
@@ -35,9 +48,21 @@ router.use('/agent', agentRoutes);
 router.use('/wishlists', wishlistsRoutes);
 router.use('/agent-prices', pricesRoutes);
 router.use('/test', testRoutes);
-router.use('/payments', paymentsRoutes);
+
+// Payment system routes (updated)
+router.use('/payments', paymentsRoutes);    // Main payment endpoints + UniPay subroutes
+router.use('/invoices', invoiceRoutes);     // Invoice management API
+router.use('/templates', templateRoutes);   // Secure template downloads
+
 router.use('/recommendations', recommendationsRoutes);
 router.use('/ai-tools', aiToolsRoutes);
+
+// NEW: Mount prompts routes - completely separate from ai-tools
+router.use('/prompts', promptsRoutes);
+
+// NEW: Mount cache management routes
+router.use('/cache', cacheRoutes);
+
 router.use('/admin', adminRoutes);
 router.use('/admin/email', adminEmailRoutes);
 // Note: /api/chat is mounted separately in the main app file
@@ -64,4 +89,4 @@ router.get('/product/:productId', (req, res) => {
   router.handle(req, res);
 });
 
-module.exports = router; 
+module.exports = router;

@@ -3,6 +3,7 @@
  * 
  * Handles email sending functionality for various types of emails.
  * Uses Nodemailer for email delivery and Handlebars for template rendering.
+ * Enhanced for UniPay payment system integration.
  */
 
 const nodemailer = require('nodemailer');
@@ -116,7 +117,7 @@ async function getCompiledTemplate(templateName) {
  * @returns {Object} - Nodemailer transporter
  */
 function createTransport() {
-  return nodemailer.createTransport({
+  return nodemailer.createTransporter({
     host: config.host,
     port: config.port,
     secure: config.secure, // true for 465, false for other ports
@@ -373,7 +374,7 @@ exports.sendGlobalEmail = async (emailData) => {
 };
 
 /**
- * Sends an agent purchase confirmation email
+ * Sends an agent purchase confirmation email (ENHANCED for UniPay system)
  * @param {Object} purchaseData - Purchase and user data
  * @returns {Promise<Object>} - Email send result
  */
@@ -382,12 +383,25 @@ exports.sendAgentPurchaseEmail = async (purchaseData) => {
     // Get the agent purchase template
     const template = await getCompiledTemplate('agent_purchase');
     
-    // Set consistent email subject and headers
+    // Enhanced payment method detection and display
+    const paymentMethodInfo = getPaymentMethodDisplayInfo(
+      purchaseData.paymentMethod, 
+      purchaseData.paymentProcessor
+    );
+    
+    // Determine email title and headers based on payment status and method
     let emailTitle = 'Your AI Agent Purchase: ' + purchaseData.agentName;
     let headerTitle = 'Your AI Agent Template is Ready!';
     let headerSubtitle = 'Thank you for your purchase';
     
-    // Prepare the data
+    // Adjust messaging for pending payments (like SEPA)
+    if (purchaseData.paymentStatus === 'pending' || purchaseData.isSepaPayment) {
+      emailTitle = `Payment Received - ${purchaseData.agentName} (${paymentMethodInfo.displayName} Processing)`;
+      headerTitle = 'Payment Received!';
+      headerSubtitle = 'Your payment is being processed';
+    }
+    
+    // Enhanced template data with new payment system features
     const data = {
       name: purchaseData.firstName ? `${purchaseData.firstName}` : 'there',
       agentName: purchaseData.agentName,
@@ -409,10 +423,37 @@ exports.sendAgentPurchaseEmail = async (purchaseData) => {
         month: 'long',
         day: 'numeric'
       }),
-      paymentStatus: 'successful',
+      
+      // Enhanced payment information
+      paymentStatus: purchaseData.paymentStatus || 'successful',
+      paymentMethod: paymentMethodInfo.displayName,
+      paymentProcessor: paymentMethodInfo.processorName,
+      isPending: purchaseData.paymentStatus === 'pending' || purchaseData.isSepaPayment,
+      isSepaPayment: purchaseData.isSepaPayment || false,
+      
+      // Enhanced header information
       headerTitle: headerTitle,
-      headerSubtitle: headerSubtitle
+      headerSubtitle: headerSubtitle,
+      
+      // Download information
+      immediateDownload: purchaseData.immediateDownload !== false && !purchaseData.isSepaPayment,
+      downloadUrl: purchaseData.downloadUrl || null,
+      
+      // Invoice information (new feature)
+      invoiceNumber: purchaseData.invoiceNumber || null,
+      vatInfo: purchaseData.vatInfo || null,
+      
+      // Template for display in email
+      showTemplatePreview: !!purchaseData.templateContent
     };
+    
+    // Add VAT breakdown if applicable
+    if (purchaseData.vatInfo && purchaseData.vatInfo.vatAmount > 0) {
+      data.subtotal = (purchaseData.price - purchaseData.vatInfo.vatAmount).toFixed(2);
+      data.vatAmount = purchaseData.vatInfo.vatAmount.toFixed(2);
+      data.vatRate = (purchaseData.vatInfo.vatRate * 100).toFixed(1);
+      data.hasVat = true;
+    }
     
     // Render the HTML
     const html = template(data);
@@ -421,11 +462,17 @@ exports.sendAgentPurchaseEmail = async (purchaseData) => {
     const mailOptions = {
       to: purchaseData.email,
       subject: emailTitle,
-      html
+      html,
+      headers: {
+        'X-Order-ID': purchaseData.orderId,
+        'X-Agent-ID': purchaseData.agentId,
+        'X-Payment-Processor': purchaseData.paymentProcessor || 'unknown',
+        'X-Payment-Method': purchaseData.paymentMethod || 'unknown'
+      }
     };
     
-    // Add attachment for the template file
-    if (purchaseData.templateContent) {
+    // Add attachment for the template file (enhanced logic)
+    if (purchaseData.templateContent && !purchaseData.isSepaPayment) {
       try {
         // Prepare filename
         const filename = `${purchaseData.agentName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_template.json`;
@@ -441,7 +488,7 @@ exports.sendAgentPurchaseEmail = async (purchaseData) => {
           // It's already valid JSON
         } catch (jsonError) {
           // If it's not valid JSON, try to structure it
-          console.log("Template content is not valid JSON, structuring it");
+          logger.info("Template content is not valid JSON, structuring it");
           const jsonContent = {
             name: purchaseData.agentName,
             description: purchaseData.agentDescription || '',
@@ -468,7 +515,7 @@ exports.sendAgentPurchaseEmail = async (purchaseData) => {
           content: purchaseData.templateContent
         }];
       }
-    } else if (purchaseData.agentId) {
+    } else if (purchaseData.agentId && !purchaseData.isSepaPayment) {
       try {
         // Try to get the template content from the agents collection
         const { db } = require('../../config/firebase');
@@ -497,10 +544,143 @@ exports.sendAgentPurchaseEmail = async (purchaseData) => {
     }
     
     // Send the email
-    logger.info(`Sending purchase confirmation email to: ${purchaseData.email}`);
+    logger.info(`Sending purchase confirmation email to: ${purchaseData.email} (${paymentMethodInfo.displayName})`);
     return await sendEmail(mailOptions);
   } catch (error) {
     logger.error(`Failed to send agent purchase email: ${error.message}`);
+    throw error;
+  }
+};
+
+/**
+ * Enhanced helper function to get payment method display information
+ * @param {string} paymentMethod - The payment method type
+ * @param {string} paymentProcessor - The payment processor
+ * @returns {Object} - Display information for the payment method
+ */
+function getPaymentMethodDisplayInfo(paymentMethod, paymentProcessor) {
+  const methodMap = {
+    'card': {
+      displayName: 'Credit/Debit Card',
+      processorName: paymentProcessor === 'unipay' ? 'UniPay' : 'Stripe',
+      note: null
+    },
+    'paypal': {
+      displayName: 'PayPal',
+      processorName: 'PayPal',
+      note: 'Payment processed securely through PayPal.'
+    },
+    'google_pay': {
+      displayName: 'Google Pay',
+      processorName: paymentProcessor === 'google_direct' ? 'Google Pay Direct' : 'UniPay',
+      note: 'Payment processed through your Google Pay wallet.'
+    },
+    'apple_pay': {
+      displayName: 'Apple Pay',
+      processorName: paymentProcessor === 'apple_direct' ? 'Apple Pay Direct' : 'UniPay',
+      note: 'Payment processed through your Apple Pay wallet.'
+    },
+    'sepa': {
+      displayName: 'SEPA Bank Transfer',
+      processorName: paymentProcessor === 'unipay' ? 'UniPay' : 'Stripe',
+      note: 'Bank transfer processed through the SEPA network.'
+    },
+    'sepa_debit': {
+      displayName: 'SEPA Direct Debit',
+      processorName: paymentProcessor === 'unipay' ? 'UniPay' : 'Stripe',
+      note: 'Direct debit from your bank account.'
+    },
+    'sepa_credit_transfer': {
+      displayName: 'SEPA Credit Transfer',
+      processorName: paymentProcessor === 'unipay' ? 'UniPay' : 'Manual',
+      note: 'Bank transfer will be processed within 1-2 business days.'
+    }
+  };
+
+  return methodMap[paymentMethod] || {
+    displayName: 'Payment',
+    processorName: paymentProcessor || 'Unknown',
+    note: null
+  };
+}
+
+/**
+ * Send refund notification email (NEW for UniPay system)
+ * @param {Object} refundData - Refund information
+ * @returns {Promise<Object>} - Email send result
+ */
+exports.sendRefundNotification = async (refundData) => {
+  try {
+    const {
+      email,
+      firstName,
+      orderId,
+      refundAmount,
+      originalAmount,
+      currency,
+      refundReason,
+      agentName
+    } = refundData;
+
+    if (!email || !orderId) {
+      throw new Error('Email and order ID are required for refund notification');
+    }
+
+    const subject = `Refund Processed - Order ${orderId}`;
+    
+    // Try to use a refund template if it exists, otherwise use inline HTML
+    let html;
+    try {
+      const template = await getCompiledTemplate('refund');
+      html = template({
+        name: firstName || 'Valued Customer',
+        orderId,
+        refundAmount: refundAmount ? refundAmount.toFixed(2) : originalAmount.toFixed(2),
+        originalAmount: originalAmount.toFixed(2),
+        currency: currency || 'USD',
+        agentName: agentName || 'AI Agent',
+        refundReason: refundReason || 'Customer request',
+        websiteUrl: config.websiteUrl,
+        supportEmail: config.supportEmail,
+        currentYear: new Date().getFullYear()
+      });
+    } catch (templateError) {
+      // Fallback to inline HTML if template doesn't exist
+      html = `
+        <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto;">
+          <h2>Refund Processed</h2>
+          <p>Hello ${firstName || 'Valued Customer'},</p>
+          <p>Your refund has been processed for order ${orderId}.</p>
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0;">
+            <p><strong>Refund Amount:</strong> ${refundAmount ? refundAmount.toFixed(2) : originalAmount.toFixed(2)} ${currency || 'USD'}</p>
+            <p><strong>Original Amount:</strong> ${originalAmount.toFixed(2)} ${currency || 'USD'}</p>
+            ${agentName ? `<p><strong>Product:</strong> ${agentName}</p>` : ''}
+            ${refundReason ? `<p><strong>Reason:</strong> ${refundReason}</p>` : ''}
+          </div>
+          <p>The refund will appear in your account within 3-5 business days.</p>
+          <p>If you have any questions, please contact us at ${config.supportEmail}.</p>
+          <hr>
+          <p style="font-size: 12px; color: #777;">
+            This is an automated message from AI Waverider.
+          </p>
+        </div>
+      `;
+    }
+
+    const result = await sendEmail({
+      to: email,
+      subject,
+      html,
+      headers: {
+        'X-Order-ID': orderId,
+        'X-Refund-Notification': 'true'
+      }
+    });
+
+    logger.info(`Refund notification sent to ${email}`, { orderId, messageId: result.messageId });
+    return result;
+  } catch (error) {
+    logger.error(`Failed to send refund notification:`, error);
     throw error;
   }
 };
@@ -876,5 +1056,32 @@ const getSampleAgentsForEmail = () => {
   ];
 };
 
+/**
+ * Validate email format
+ * @param {string} email - Email address to validate
+ * @returns {boolean} - True if valid email format
+ */
+function isValidEmail(email) {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+/**
+ * Test email configuration (enhanced for UniPay system)
+ * @returns {Promise<Object>} - Test result
+ */
+exports.testEmailConfiguration = async () => {
+  try {
+    const transporter = createTransport();
+    const testResult = await transporter.verify();
+    
+    logger.info('Email configuration test successful');
+    return { success: true, configured: testResult };
+  } catch (error) {
+    logger.error('Email configuration test failed:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // Export the sendAgentUpdateEmail function
-exports.sendAgentUpdateEmail = sendAgentUpdateEmail; 
+exports.sendAgentUpdateEmail = sendAgentUpdateEmail;
