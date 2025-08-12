@@ -64,8 +64,8 @@ router.use('/ai-tools', aiToolsRoutes);
 // NEW: Mount prompts routes - completely separate from ai-tools
 router.use('/prompts', promptsRoutes);
 
-// Payment system routes (updated)
-router.use('/payments', paymentsRoutes);    // Main payment endpoints + UniPay subroutes
+// Payment system routes (PayPal only)
+router.use('/payments', paymentsRoutes);
 router.use('/invoices', invoiceRoutes);     // Invoice management API
 router.use('/templates', templateRoutes);   // Secure template downloads
 

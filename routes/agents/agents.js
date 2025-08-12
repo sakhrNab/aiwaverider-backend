@@ -165,13 +165,9 @@ router.put('/:agentId', validateFirebaseToken, isAdmin, upload.fields([
 router.delete('/:agentId', validateFirebaseToken, isAdmin, agentsController.deleteAgent);
 
 // ==========================================
-// REVIEW ENDPOINTS - UPDATED
+// REVIEW ENDPOINTS
 // ==========================================
-
-// Add a review to an agent
 router.post('/:agentId/reviews', validateFirebaseToken, agentsController.addAgentReview_controller);
-
-// Delete a review (admin only or review owner)
 router.delete('/:agentId/reviews/:reviewId', validateFirebaseToken, agentsController.deleteAgentReview_controller);
 
 // ==========================================
@@ -523,88 +519,7 @@ router.get('/:id/download-file', async (req, res) => {
 // REVIEW ELIGIBILITY ENDPOINTS
 // ==========================================
 
-// Check if user can review an agent
-router.get('/:id/can-review', validateFirebaseToken, async (req, res) => {
-  try {
-    const agentId = req.params.id;
-    const userId = req.user.uid;
-    
-    // Get user data
-    const userDoc = await db.collection('users').doc(userId).get();
-    
-    if (!userDoc.exists) {
-      return res.status(404).json({ 
-        canReview: false, 
-        reason: 'User not found' 
-      });
-    }
-    
-    const userData = userDoc.data();
-    
-    // Check if user is admin
-    if (userData.role === 'admin') {
-      return res.json({ 
-        canReview: true, 
-        reason: 'Admin user' 
-      });
-    }
-    
-    // Check if user has purchased the agent
-    if (userData.purchases && Array.isArray(userData.purchases)) {
-      const hasPurchased = userData.purchases.some(
-        purchase => purchase.agentId === agentId || purchase.productId === agentId
-      );
-      
-      if (hasPurchased) {
-        return res.json({ 
-          canReview: true, 
-          reason: 'Verified purchase' 
-        });
-      }
-    }
-    
-    // Check if user has downloaded the agent
-    if (userData.downloads && Array.isArray(userData.downloads)) {
-      const hasDownloaded = userData.downloads.some(
-        download => download.agentId === agentId || download.id === agentId
-      );
-      
-      if (hasDownloaded) {
-        return res.json({ 
-          canReview: true, 
-          reason: 'Downloaded agent' 
-        });
-      }
-    }
-    
-    // Check downloads collection as backup
-    const downloadsQuery = await db.collection('agent_downloads')
-      .where('agentId', '==', agentId)
-      .where('userId', '==', userId)
-      .limit(1)
-      .get();
-    
-    if (!downloadsQuery.empty) {
-      return res.json({ 
-        canReview: true, 
-        reason: 'Downloaded agent' 
-      });
-    }
-    
-    // User hasn't purchased or downloaded
-    return res.json({ 
-      canReview: false, 
-      reason: 'You must purchase or download this agent before reviewing' 
-    });
-    
-  } catch (error) {
-    console.error('Error checking review eligibility:', error);
-    res.status(500).json({ 
-      canReview: false, 
-      reason: 'Error checking eligibility' 
-    });
-  }
-});
+// Remove deprecated can-review endpoint (eligibility handled client-side and enforced on submission)
 
 // ==========================================
 // UTILITY/ADMIN ENDPOINTS

@@ -16,7 +16,7 @@ const db = admin.firestore();
 
 class OrderController {
   constructor() {
-    this.supportedProcessors = ['unipay', 'paypal', 'google_direct', 'apple_direct', 'stripe'];
+    this.supportedProcessors = ['paypal', 'google_direct'];
   }
 
   /**
@@ -342,36 +342,20 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
     let method = 'unknown';
     
     // UniPay handling (NEW)
-    if (processor === 'unipay' || metadata.processor === 'unipay') {
-      method = 'unipay';
-    } else if (paymentTypes.includes('sepa_debit') || paymentTypes.includes('sepa_credit_transfer')) {
-      method = 'sepa';
-    } else if (paymentTypes.includes('paypal') || metadata.payment_method === 'paypal' || processor === 'paypal') {
+    if (metadata.payment_method === 'paypal' || processor === 'paypal' || paymentTypes.includes('paypal')) {
       method = 'paypal';
-    } else if (metadata.payment_method === 'google_pay_direct' || processor === 'google_direct') {
-      method = 'google_pay';
-    } else if (metadata.payment_method === 'apple_pay_direct' || processor === 'apple_direct') {
-      method = 'apple_pay';
-    } else if (paymentTypes.includes('card') || processor === 'stripe') {
-      method = 'card';
-    } else if (processor === 'stripe') {
-      method = paymentTypes[0] || 'card';
+    } else if (metadata.payment_method === 'google_direct' || processor === 'google_direct' || paymentTypes.includes('google_direct')) {
+      method = 'google_direct';
     }
     
     // Determine if immediate delivery should happen
-    const immediateDelivery = 
-      metadata.immediate_delivery === true ||
-      processor === 'paypal' ||
-      processor === 'google_direct' ||
-      processor === 'apple_direct' ||
-      processor === 'unipay' ||  // UniPay payments are typically immediate
-      (processor === 'stripe' && method !== 'sepa_debit');
+    const immediateDelivery = true;
     
     return {
       method,
       immediateDelivery,
       processor,
-      isAsynchronous: method === 'sepa' && !metadata.immediate_delivery
+      isAsynchronous: false
     };
   }
 

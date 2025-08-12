@@ -10,14 +10,14 @@ const router = express.Router();
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 
-// Import UniPay routes
-const unipayRoutes = require('./unipay');
+// Import UniPay routes (removed)
+// const unipayRoutes = null;
 
 // Services and Controllers
 const logger = require('../../utils/logger');
 const orderController = require('../../controllers/payment/orderController');
 const invoiceService = require('../../services/invoice/invoiceService');
-const uniPayService = require('../../services/payment/uniPayService');
+// const uniPayService = null;
 const { db } = require('../../config/firebase');
 
 /**
@@ -50,7 +50,6 @@ const isProduction = process.env.NODE_ENV === 'production' && process.env.UNIPAY
 
 // Log environment on startup
 logger.info(`Payment system initialized in ${isProduction ? 'PRODUCTION' : 'TEST'} mode`, {
-  uniPayConfigured: !!(process.env.UNIPAY_MERCHANT_ID || process.env.UNIPAY_TEST_MERCHANT_ID),
   paypalConfigured: !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id'),
   environment: isProduction ? 'production' : 'test'
 });
@@ -67,7 +66,6 @@ router.get('/test', (req, res) => {
     environment: isProduction ? 'production' : 'test',
     timestamp: new Date().toISOString(),
     availableProviders: {
-      unipay: !!(process.env.UNIPAY_MERCHANT_ID || process.env.UNIPAY_TEST_MERCHANT_ID),
       paypal: !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id'),
       directGooglePay: true, // Available through frontend SDK
       directApplePay: true   // Available through frontend SDK
@@ -80,67 +78,29 @@ router.get('/test', (req, res) => {
  */
 router.get('/payment-methods', async (req, res) => {
   try {
-    const { countryCode = 'US', amount, currency } = req.query;
-    
-    // Base payment methods always available
-    const methods = {
-      unipay_card: {
-        name: 'Credit/Debit Card (UniPay)',
-        provider: 'unipay',
-        available: !!(process.env.UNIPAY_MERCHANT_ID || process.env.UNIPAY_TEST_MERCHANT_ID),
-        requirements: ['Any country'],
-        description: 'Pyment gateway - Visa, Mastercard, and other major cards',
-        redirect: true // UniPay uses redirect flow
-      },
-      paypal: {
-        name: 'PayPal',
-        provider: 'paypal_direct',
-        available: !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id'),
-        requirements: ['Any country'],
-        description: 'Pay with your PayPal account'
-      },
-      google_pay: {
-        name: 'Google Pay',
-        provider: 'google_direct',
-        available: true,
-        requirements: ['Android devices', 'Chrome browser'],
-        description: 'Pay with Google Pay wallet'
-      },
-      apple_pay: {
-        name: 'Apple Pay',
-        provider: 'apple_direct',
-        available: true,
-        requirements: ['iOS devices', 'Safari browser', 'macOS Safari'],
-        description: 'Pay with Apple Pay wallet'
-      }
-    };
-
-    // UniPay is primarily for Georgian and regional markets
-    if (['GE', 'AM', 'AZ', 'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR',
-      'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL',
-      'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE'].includes(countryCode)) {
-      methods.unipay_card.priority = 1;
-      methods.unipay_card.recommended = true;
-    }
-
-    logger.info(`Payment methods requested for country: ${countryCode}`);
-
     return res.status(200).json({
       status: 'success',
-      countryCode,
-      currency: currency || 'USD',
-      amount: amount || null,
-      availableMethods: Object.keys(methods).filter(key => methods[key].available),
-      methodDetails: methods,
-      recommendation: getRecommendedMethod(countryCode),
+      availableMethods: ['paypal'],
+      methodDetails: {
+        paypal: {
+          name: 'PayPal',
+          provider: 'paypal_direct',
+          available: !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id'),
+          description: 'Pay with your PayPal account or cards via PayPal'
+        }, 
+        google_pay: {
+          name: 'Google Pay',
+          provider: 'google_direct',
+          available: true,
+          requirements: ['Android devices', 'Chrome browser'],
+          description: 'Pay with Google Pay wallet'
+        },
+      },
+      recommendation: 'paypal',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    logger.error('Error getting payment methods:', error);
-    return res.status(500).json({
-      error: 'Failed to get payment methods',
-      details: error.message
-    });
+    return res.status(500).json({ error: 'Failed to get payment methods' });
   }
 });
 
@@ -148,109 +108,18 @@ router.get('/payment-methods', async (req, res) => {
  * Create unified payment session (Updated for UniPay v3)
  */
 router.post('/create-session', async (req, res) => {
+  // Deprecated: Only PayPal is supported; instruct client to use PayPal order creation
   try {
-    const { amount, currency, items, customerInfo, metadata = {}, preferredProvider } = req.body;
-    
-    if (!amount || !items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({
-        error: 'Invalid request: amount and items are required'
-      });
-    }
-
-    const orderId = metadata.orderId || uuidv4();
-    
-    logger.info('Creating unified payment session', {
+    const orderId = req.body?.metadata?.orderId || uuidv4();
+    return res.status(200).json({
+      success: true,
+      provider: 'paypal_direct',
+      sessionType: 'paypal',
       orderId,
-      amount,
-      currency: currency || 'USD',
-      itemCount: items.length,
-      preferredProvider
+      message: 'Use /api/payments/paypal/create-order to create PayPal order'
     });
-
-    // Default to UniPay for card payments (Updated)
-    if (!preferredProvider || preferredProvider === 'unipay') {
-      try {
-        // Create UniPay session (Updated API call)
-        const result = await uniPayService.createPaymentSession({
-          amount: parseFloat(amount),
-          currency: currency?.toUpperCase() || 'USD',
-          orderId,
-          items,
-          customerInfo: customerInfo || {},
-          metadata: {
-            ...metadata,
-            items: JSON.stringify(items),
-            orderId
-          }
-        });
-
-        return res.status(200).json({
-          success: true,
-          provider: 'unipay',
-          sessionType: 'unipay',
-          sessionId: result.orderHashId, // Updated: UniPay uses orderHashId
-          orderHashId: result.orderHashId,
-          merchantOrderId: result.merchantOrderId,
-          orderId,
-          paymentUrl: result.paymentUrl, // Redirect URL for payment
-          amount: result.amount,
-          originalAmount: result.originalAmount,
-          currency: result.currency,
-          originalCurrency: result.originalCurrency,
-          vatInfo: result.vatInfo,
-          conversionInfo: result.conversionInfo,
-          redirect: true, // Indicate this needs redirect
-          ...result
-        });
-      } catch (uniPayError) {
-        logger.error('UniPay session creation failed:', uniPayError);
-        return res.status(500).json({
-          error: 'Failed to create payment session',
-          details: uniPayError.message
-        });
-      }
-    }
-
-    // Handle other providers (unchanged)
-    switch (preferredProvider) {
-      case 'paypal_direct':
-        return res.status(200).json({
-          success: true,
-          provider: 'paypal_direct',
-          sessionType: 'paypal',
-          orderId,
-          message: 'Use /api/payments/unipay/paypal/create-order to create PayPal order'
-        });
-        
-      case 'google_direct':
-        return res.status(200).json({
-          success: true,
-          provider: 'google_direct',
-          sessionType: 'google_pay',
-          orderId,
-          message: 'Initialize Google Pay on frontend'
-        });
-        
-      case 'apple_direct':
-        return res.status(200).json({
-          success: true,
-          provider: 'apple_direct',
-          sessionType: 'apple_pay',
-          orderId,
-          message: 'Initialize Apple Pay on frontend'
-        });
-        
-      default:
-        return res.status(400).json({
-          error: `Unsupported provider: ${preferredProvider}`
-        });
-    }
   } catch (error) {
-    logger.error('Error creating payment session:', error);
-    return res.status(500).json({
-      error: 'Failed to create payment session',
-      details: error.message
-    });
+    return res.status(500).json({ error: 'Failed to create session' });
   }
 });
 
@@ -578,46 +447,13 @@ router.get('/health', async (req, res) => {
       timestamp: new Date().toISOString(),
       providers: {}
     };
-
-    // Check UniPay (Updated)
-    try {
-      const uniPayHealth = await uniPayService.healthCheck();
-      health.providers.unipay = {
-        status: uniPayHealth.success ? 'healthy' : 'unhealthy',
-        ...uniPayHealth
-      };
-    } catch (uniPayError) {
-      health.providers.unipay = {
-        status: 'unhealthy',
-        error: uniPayError.message
-      };
-    }
-
-    // Check PayPal configuration
     health.providers.paypal = {
       status: (process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id') ? 'configured' : 'not_configured',
       configured: !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id')
     };
-
-    // Direct providers (always available)
-    health.providers.google_pay_direct = { status: 'available' };
-    health.providers.apple_pay_direct = { status: 'available' };
-
-    // Overall status
-    const unhealthyProviders = Object.values(health.providers).filter(p => p.status === 'unhealthy');
-    if (unhealthyProviders.length > 0) {
-      health.status = 'degraded';
-    }
-
     return res.status(200).json(health);
   } catch (error) {
-    logger.error('Error checking payment system health:', error);
-    return res.status(500).json({
-      status: 'unhealthy',
-      error: 'Health check failed',
-      details: error.message,
-      timestamp: new Date().toISOString()
-    });
+    return res.status(500).json({ status: 'unhealthy' });
   }
 });
 
@@ -643,6 +479,10 @@ function getRecommendedMethod(countryCode) {
 }
 
 // Mount UniPay routes
-router.use('/unipay', unipayRoutes);
+// router.use('/unipay', unipayRoutes); // Removed UniPay routes
+
+// Mount PayPal routes
+const paypalRoutes = require('./paypal');
+router.use('/paypal', paypalRoutes);
 
 module.exports = router;

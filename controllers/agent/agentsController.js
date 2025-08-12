@@ -5,6 +5,7 @@ const { db } = require('../../config/firebase');
 const admin = require('firebase-admin');
 const logger = require('../../utils/logger');
 const { getCache, setCache, deleteCache, deleteCacheByPattern, generateAgentCategoryCacheKey, generateAgentSearchCacheKey, generateAgentCacheKey, generateAgentCountCacheKey } = require('../../utils/cache');
+const { incrementCounter } = require('../../utils/cache');
 
 // ==========================================
 // IN-MEMORY CACHE FOR ALL AGENTS
@@ -1695,12 +1696,204 @@ const getLatestAgentsRoute = async (req, res) => {
   }
 };
 
-const addAgentReview_controller = async (req, res) => {
-  return res.status(501).json({ error: 'Review functionality not implemented yet' });
+/**
+ * Get user entitlements (admin, purchases, downloads) with Redis caching
+ */
+const getUserEntitlements = async (userId) => {
+  const cacheKey = `user:${userId}:entitlements`;
+  const cached = await getCache(cacheKey);
+  if (cached) return cached;
+  const userDoc = await db.collection('users').doc(userId).get();
+  const data = userDoc.exists ? userDoc.data() : {};
+  const entitlements = {
+    isAdmin: data.role === 'admin' || data.roles?.includes?.('admin') === true,
+    purchases: Array.isArray(data.purchases) ? data.purchases.map(p => p.agentId || p.productId).filter(Boolean) : [],
+    downloads: Array.isArray(data.downloads) ? data.downloads.map(d => d.agentId || d.id).filter(Boolean) : []
+  };
+  await setCache(cacheKey, entitlements, 1800); // 30 min TTL
+  return entitlements;
 };
 
+/**
+ * Determine if a user can review an agent (server-side, authoritative)
+ */
+const canUserReviewAgent = async (userId, agentId) => {
+  const ent = await getUserEntitlements(userId);
+  if (ent.isAdmin) return { canReview: true, reason: 'Admin user' };
+  if (ent.purchases.includes(agentId)) return { canReview: true, reason: 'Verified purchase' };
+  if (ent.downloads.includes(agentId)) return { canReview: true, reason: 'Downloaded agent' };
+  // Fallback: check downloads collection
+  const dlSnap = await db.collection('agent_downloads')
+    .where('agentId', '==', agentId)
+    .where('userId', '==', userId)
+    .limit(1)
+    .get();
+  if (!dlSnap.empty) return { canReview: true, reason: 'Downloaded agent' };
+  return { canReview: false, reason: 'You must purchase or download this agent before reviewing' };
+};
+
+/**
+ * Secure review submission with server-side eligibility enforcement
+ */
+const addAgentReview_controller = async (req, res) => {
+  try {
+    const userId = req.user?.uid;
+    const agentId = req.params.agentId;
+    const { content, rating } = req.body || {};
+
+    if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    if (!agentId) return res.status(400).json({ success: false, error: 'Missing agentId' });
+    if (!content || typeof content !== 'string' || content.trim().length < 3)
+      return res.status(400).json({ success: false, error: 'Review content is too short' });
+    const numericRating = Number(rating);
+    if (!Number.isFinite(numericRating) || numericRating < 1 || numericRating > 5)
+      return res.status(400).json({ success: false, error: 'Rating must be between 1 and 5' });
+
+    // Simple rate limit: 5 reviews per 10 minutes per user
+    const hits = await incrementCounter(`ratelimit:reviews:${userId}`, 600);
+    if (hits > 5) {
+      return res.status(429).json({ success: false, error: 'Too many review attempts. Please try again later.' });
+    }
+
+    // Eligibility check
+    const eligibility = await canUserReviewAgent(userId, agentId);
+    if (!eligibility.canReview) {
+      return res.status(403).json({ success: false, error: eligibility.reason });
+    }
+
+    // Fetch agent doc
+    let agentRef = db.collection('agents').doc(agentId);
+    let agentSnap = await agentRef.get();
+    if (!agentSnap.exists) {
+      // Fallback: lookup by 'id' field
+      const byId = await db.collection('agents').where('id', '==', agentId).limit(1).get();
+      if (!byId.empty) {
+        agentRef = byId.docs[0].ref;
+        agentSnap = byId.docs[0];
+      } else {
+        // Fallback: lookup by 'slug'
+        const bySlug = await db.collection('agents').where('slug', '==', agentId).limit(1).get();
+        if (!bySlug.empty) {
+          agentRef = bySlug.docs[0].ref;
+          agentSnap = bySlug.docs[0];
+        }
+      }
+    }
+    if (!agentSnap.exists) return res.status(404).json({ success: false, error: 'Agent not found' });
+    const agentData = agentSnap.data();
+    const canonicalAgentId = agentData.id || agentSnap.id;
+
+    // Prevent duplicate per user
+    const existing = Array.isArray(agentData.reviews) ? agentData.reviews.find(r => r.userId === userId) : null;
+    if (existing) return res.status(409).json({ success: false, error: 'You have already reviewed this agent' });
+
+    const reviewId = `${userId}_${Date.now()}`;
+    const review = {
+      id: reviewId,
+      userId,
+      userName: req.user?.name || req.user?.email?.split('@')[0] || 'User',
+      rating: numericRating,
+      content: content.trim(),
+      createdAt: new Date().toISOString(),
+      verificationStatus: eligibility.reason === 'Verified purchase' ? 'verified_purchase'
+        : eligibility.reason === 'Downloaded agent' ? 'verified_download'
+        : eligibility.reason === 'Admin user' ? 'admin' : 'unverified'
+    };
+
+    // Update Firestore: append review, update aggregates
+    const reviews = Array.isArray(agentData.reviews) ? [...agentData.reviews, review] : [review];
+    const newCount = reviews.length;
+    const sumRatings = reviews.reduce((acc, r) => acc + (Number(r.rating) || 0), 0);
+    const averageRating = Number((sumRatings / newCount).toFixed(2));
+
+    await agentRef.update({
+      reviews,
+      reviewCount: newCount,
+      averageRating
+    });
+
+    // Invalidate cache for this agent
+    try {
+      const agentCacheKey = generateAgentCacheKey(canonicalAgentId);
+      await deleteCache(agentCacheKey);
+    } catch (e) {
+      logger.warn('Failed to invalidate agent cache after review add:', e);
+    }
+
+    return res.status(200).json({ success: true, reviewId, review, averageRating, reviewCount: newCount });
+  } catch (error) {
+    logger.error('Error in addAgentReview_controller:', error);
+    return res.status(500).json({ success: false, error: 'Failed to add review' });
+  }
+};
+
+/**
+ * Secure delete review (admin or review owner)
+ */
 const deleteAgentReview_controller = async (req, res) => {
-  return res.status(501).json({ error: 'Review functionality not implemented yet' });
+  try {
+    const userId = req.user?.uid;
+    const agentId = req.params.agentId;
+    const reviewId = req.params.reviewId;
+
+    if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    if (!agentId || !reviewId) return res.status(400).json({ success: false, error: 'Missing agentId or reviewId' });
+
+    // Resolve agent document by docId/id/slug
+    let agentRef = db.collection('agents').doc(agentId);
+    let agentSnap = await agentRef.get();
+    if (!agentSnap.exists) {
+      const byId = await db.collection('agents').where('id', '==', agentId).limit(1).get();
+      if (!byId.empty) {
+        agentRef = byId.docs[0].ref;
+        agentSnap = byId.docs[0];
+      } else {
+        const bySlug = await db.collection('agents').where('slug', '==', agentId).limit(1).get();
+        if (!bySlug.empty) {
+          agentRef = bySlug.docs[0].ref;
+          agentSnap = bySlug.docs[0];
+        }
+      }
+    }
+    if (!agentSnap.exists) return res.status(404).json({ success: false, error: 'Agent not found' });
+
+    const agentData = agentSnap.data();
+    const canonicalAgentId = agentData.id || agentSnap.id;
+    const reviews = Array.isArray(agentData.reviews) ? agentData.reviews : [];
+
+    const target = reviews.find(r => (r.id === reviewId) || (r._id === reviewId));
+    if (!target) return res.status(404).json({ success: false, error: 'Review not found' });
+
+    const ent = await getUserEntitlements(userId);
+    const isAdminUser = ent.isAdmin;
+    const isOwner = target.userId === userId;
+    if (!isAdminUser && !isOwner) {
+      return res.status(403).json({ success: false, error: 'Not allowed to delete this review' });
+    }
+
+    const remaining = reviews.filter(r => (r.id !== reviewId) && (r._id !== reviewId));
+    const newCount = remaining.length;
+    const sumRatings = remaining.reduce((acc, r) => acc + (Number(r.rating) || 0), 0);
+    const averageRating = newCount > 0 ? Number((sumRatings / newCount).toFixed(2)) : 0;
+
+    await agentRef.update({
+      reviews: remaining,
+      reviewCount: newCount,
+      averageRating
+    });
+
+    try {
+      const cacheKey = generateAgentCacheKey(canonicalAgentId);
+      await deleteCache(cacheKey);
+    } catch (e) {
+      logger.warn('Failed to invalidate agent cache after review delete:', e);
+    }
+
+    return res.status(200).json({ success: true, reviewId, reviewCount: newCount, averageRating });
+  } catch (error) {
+    logger.error('Error in deleteAgentReview_controller:', error);
+    return res.status(500).json({ success: false, error: 'Failed to delete review' });
+  }
 };
 
 // Export all functions
@@ -1733,18 +1926,19 @@ const functionsToExport = {
   getLatestAgents, 
   getLatestAgentsRoute,
   
-  // Review handlers
-  addAgentReview_controller,
-  deleteAgentReview_controller,
-  
   // Count and search endpoints
   getAgentCount,
   getSearchResultsCount,
+  searchAgents,
   
   // Cache management
   refreshCache,
   getCacheStats,
-  initializeCache
+  initializeCache,
+
+  // Reviews
+  addAgentReview_controller,
+  deleteAgentReview_controller
 };
 
 for (const funcName in functionsToExport) {

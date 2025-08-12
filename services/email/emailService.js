@@ -562,7 +562,7 @@ function getPaymentMethodDisplayInfo(paymentMethod, paymentProcessor) {
   const methodMap = {
     'card': {
       displayName: 'Credit/Debit Card',
-      processorName: paymentProcessor === 'unipay' ? 'UniPay' : 'Stripe',
+      processorName: 'PayPal',
       note: null
     },
     'paypal': {
@@ -572,34 +572,30 @@ function getPaymentMethodDisplayInfo(paymentMethod, paymentProcessor) {
     },
     'google_pay': {
       displayName: 'Google Pay',
-      processorName: paymentProcessor === 'google_direct' ? 'Google Pay Direct' : 'UniPay',
+      processorName: 'PayPal', 'google_direct',
       note: 'Payment processed through your Google Pay wallet.'
     },
-    'apple_pay': {
-      displayName: 'Apple Pay',
-      processorName: paymentProcessor === 'apple_direct' ? 'Apple Pay Direct' : 'UniPay',
-      note: 'Payment processed through your Apple Pay wallet.'
-    },
+    
     'sepa': {
       displayName: 'SEPA Bank Transfer',
-      processorName: paymentProcessor === 'unipay' ? 'UniPay' : 'Stripe',
+      processorName: 'PayPal',
       note: 'Bank transfer processed through the SEPA network.'
     },
     'sepa_debit': {
       displayName: 'SEPA Direct Debit',
-      processorName: paymentProcessor === 'unipay' ? 'UniPay' : 'Stripe',
+      processorName: 'PayPal',
       note: 'Direct debit from your bank account.'
     },
     'sepa_credit_transfer': {
       displayName: 'SEPA Credit Transfer',
-      processorName: paymentProcessor === 'unipay' ? 'UniPay' : 'Manual',
+      processorName: 'Manual',
       note: 'Bank transfer will be processed within 1-2 business days.'
     }
   };
 
   return methodMap[paymentMethod] || {
     displayName: 'Payment',
-    processorName: paymentProcessor || 'Unknown',
+    processorName: paymentProcessor || 'PayPal',
     note: null
   };
 }
