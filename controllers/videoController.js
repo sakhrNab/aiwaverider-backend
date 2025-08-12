@@ -80,6 +80,7 @@ const addVideo = async (req, res) => {
       thumbnailUrl: metadata.thumbnailUrl,
       views: metadata.views,
       likes: metadata.likes,
+      description: metadata.description || '',
       addedBy: req.user.email, // Use authenticated user's email
       addedByUid: req.user.uid, // Also store the user ID
       createdAt: new Date(),
@@ -311,8 +312,41 @@ const refreshVideoStats = async (req, res) => {
   }
 };
 
+/**
+ * Delete a video (Admin only)
+ * DELETE /api/videos/:id
+ */
+const deleteVideo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ error: 'Missing video ID', message: 'Video ID is required' });
+    }
+
+    const docRef = db.collection('videos').doc(id);
+    const docSnap = await docRef.get();
+    if (!docSnap.exists) {
+      return res.status(404).json({ error: 'Video not found', message: 'No video with this ID' });
+    }
+
+    const data = docSnap.data();
+    const platform = data.platform;
+
+    await docRef.delete();
+
+    // Invalidate caches related to this platform
+    await deleteCacheByPattern(`video_list:${platform}:*`);
+
+    return res.json({ success: true, message: 'Video deleted', id });
+  } catch (error) {
+    console.error('Error deleting video:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Failed to delete video' });
+  }
+};
+
 module.exports = {
   addVideo,
   listVideos,
-  refreshVideoStats
+  refreshVideoStats,
+  deleteVideo
 }; 

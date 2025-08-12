@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { addVideo, listVideos, refreshVideoStats } = require('../../controllers/videoController');
+const { addVideo, listVideos, refreshVideoStats, deleteVideo } = require('../../controllers/videoController');
 const adminAuth = require('../../middleware/adminAuth');
 
 /**
@@ -26,5 +26,12 @@ router.post('/', adminAuth, addVideo);
  * @params  id (video document ID)
  */
 router.put('/:id/refresh', adminAuth, refreshVideoStats);
+
+/**
+ * @route   DELETE /api/videos/:id
+ * @desc    Delete a video (Admin only)
+ * @access  Admin
+ */
+router.delete('/:id', adminAuth, deleteVideo);
 
 module.exports = router; 
