@@ -572,7 +572,7 @@ function getPaymentMethodDisplayInfo(paymentMethod, paymentProcessor) {
     },
     'google_pay': {
       displayName: 'Google Pay',
-      processorName: 'PayPal', 'google_direct',
+      processorName: 'google_direct',
       note: 'Payment processed through your Google Pay wallet.'
     },
     

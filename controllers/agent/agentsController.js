@@ -533,6 +533,7 @@ const getAgentById = async (req, res) => {
   try {
     const agentIdFromParams = req.params.id || req.params.agentId;
     const skipCache = req.query.skipCache === 'true' || req.query.refresh === 'true';
+    const includeUser = req.query.includeUser === 'true';
     
     logger.info(`Attempting to get agent with ID: "${agentIdFromParams}"`, { skipCache });
     
@@ -610,6 +611,18 @@ const getAgentById = async (req, res) => {
       ...agentDoc.data()
     };
     
+    // Compute user-specific like status on the fly (not cached in Redis)
+    let userLike = null;
+    if (includeUser && req.user && req.user.uid) {
+      try {
+        const likes = Array.isArray(agentData.likes) ? agentData.likes : [];
+        const liked = likes.includes(req.user.uid);
+        userLike = { liked, likesCount: Array.isArray(agentData.likes) ? agentData.likes.length : (agentData.likesCount || 0) };
+      } catch (e) {
+        userLike = { liked: false, likesCount: Array.isArray(agentData.likes) ? agentData.likes.length : 0 };
+      }
+    }
+    
     // Handle reviews
     if (agentData.reviews && Array.isArray(agentData.reviews)) {
       agentData.reviews.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
@@ -646,6 +659,7 @@ const getAgentById = async (req, res) => {
       success: true,
       message: 'Agent retrieved successfully (from DB)',
       data: agentData,
+      userLike,
       fromCache: false
     });
     
