@@ -566,7 +566,7 @@ const getAgentById = async (req, res) => {
     }
     
     const primaryCacheKeyId = idToUseForDb;
-    const cacheKey = `${CACHE_KEYS.AGENT}${primaryCacheKeyId}`;
+    const cacheKey = generateAgentCacheKey(primaryCacheKeyId);
     
     if (!skipCache) {
       try {
@@ -642,7 +642,7 @@ const getAgentById = async (req, res) => {
     
     agentData._fetchTime = Date.now();
     
-    const effectiveCacheKey = `${CACHE_KEYS.AGENT}${finalIdUsedForAgent}`;
+    const effectiveCacheKey = generateAgentCacheKey(finalIdUsedForAgent);
     try {
       await setCache(effectiveCacheKey, agentData);
       logger.info(`Cached agent ${finalIdUsedForAgent} in Redis using key ${effectiveCacheKey}.`);
@@ -1830,6 +1830,9 @@ const addAgentReview_controller = async (req, res) => {
     try {
       const agentCacheKey = generateAgentCacheKey(canonicalAgentId);
       await deleteCache(agentCacheKey);
+      await deleteCacheByPattern('agents:results:*');
+      // Refresh in-memory cache since reviews changed
+      await refreshAgentsCache();
     } catch (e) {
       logger.warn('Failed to invalidate agent cache after review add:', e);
     }
@@ -1899,6 +1902,8 @@ const deleteAgentReview_controller = async (req, res) => {
     try {
       const cacheKey = generateAgentCacheKey(canonicalAgentId);
       await deleteCache(cacheKey);
+      await deleteCacheByPattern('agents:results:*');
+      await refreshAgentsCache();
     } catch (e) {
       logger.warn('Failed to invalidate agent cache after review delete:', e);
     }

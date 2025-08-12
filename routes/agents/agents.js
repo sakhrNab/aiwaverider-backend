@@ -8,6 +8,7 @@ const upload = require('../../middleware/upload');
 const { db } = require('../../config/firebase');
 const admin = require('firebase-admin');
 const { auth } = require('../../middleware/authenticationMiddleware');
+const { getCache, setCache, deleteCache, deleteCacheByPattern, generateAgentCacheKey } = require('../../utils/cache');
 
 // Helper function to increment agent download count
 async function incrementAgentDownloadCount(agentId) {
@@ -223,6 +224,13 @@ router.post('/:agentId/toggle-like', validateFirebaseToken, async (req, res) => 
       likes: updatedLikes
     });
     
+    // Invalidate user-like-status cache for this user+agent
+    try {
+      await deleteCache(`agent:${agentId}:user:${userId}:like`);
+      await deleteCache(generateAgentCacheKey(agentId));
+      await deleteCacheByPattern('agents:results:*');
+    } catch (e) {}
+    
     res.json({
       success: true,
       liked,
@@ -235,11 +243,18 @@ router.post('/:agentId/toggle-like', validateFirebaseToken, async (req, res) => 
   }
 });
 
-// Check if user has liked an agent
+// Check if user has liked an agent (cached per user+agent)
 router.get('/:id/user-like-status', validateFirebaseToken, async (req, res) => {
   try {
     const agentId = req.params.id;
     const userId = req.user.uid;
+    const cacheKey = `agent:${agentId}:user:${userId}:like`;
+    
+    // Try cache first
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
     
     // Get the agent document to check if the user is in the likes array
     const agentRef = db.collection('agents').doc(agentId);
@@ -254,14 +269,14 @@ router.get('/:id/user-like-status', validateFirebaseToken, async (req, res) => {
     const liked = Array.isArray(likes) ? likes.includes(userId) : false;
     const likesCount = Array.isArray(likes) ? likes.length : 0;
     
-    return res.json({
-      liked,
-      likesCount
-    });
+    const result = { liked, likesCount };
+    // Cache with a short TTL via setCache auto TTL selection
+    await setCache(cacheKey, result);
     
+    return res.json(result);
   } catch (error) {
-    console.error('Error checking like status:', error);
-    res.status(500).json({ error: 'Failed to check like status' });
+    console.error('Error fetching user like status:', error);
+    return res.status(500).json({ error: 'Failed to fetch like status' });
   }
 });
 
