@@ -9,6 +9,7 @@ const router = express.Router();
 const orderController = require('../../controllers/payment/orderController');
 const logger = require('../../utils/logger');
 const { db } = require('../../config/firebase');
+const { validateFirebaseToken } = require('../../middleware/authenticationMiddleware');
 
 /**
  * Download agent template
@@ -367,6 +368,59 @@ router.post('/revoke/:token', async (req, res) => {
       error: 'Failed to revoke template access',
       details: error.message
     });
+  }
+});
+
+/**
+ * Create template access token for entitled users (subscriber or purchaser)
+ */
+router.post('/access', validateFirebaseToken, async (req, res) => {
+  try {
+    const userId = req.user?.uid;
+    const email = req.user?.email || null;
+    const { agentId } = req.body || {};
+
+    if (!agentId) {
+      return res.status(400).json({ success: false, error: 'agentId is required' });
+    }
+
+    // Load user and entitlement
+    const userDoc = await db.collection('users').doc(userId).get();
+    const userData = userDoc.exists ? userDoc.data() : {};
+    const subscription = userData.subscription || {};
+    const nowTs = Date.now();
+    const currentPeriodEnd = subscription.currentPeriodEnd ? new Date(subscription.currentPeriodEnd).getTime() : 0;
+    const isSubscriber = (subscription.status === 'active' || subscription.status === 'trialing') && currentPeriodEnd > nowTs;
+
+    // Purchases fallback
+    const purchases = Array.isArray(userData.purchases) ? userData.purchases.map(p => p.agentId || p.productId) : [];
+    const isPurchased = purchases.includes(agentId);
+
+    if (!isSubscriber && !isPurchased) {
+      return res.status(403).json({ success: false, error: 'Not entitled to download this agent' });
+    }
+
+    // Create access token record
+    const { v4: uuidv4 } = require('uuid');
+    const token = uuidv4();
+    const orderId = `SUBSCR_${userId}_${Date.now()}`;
+
+    await db.collection('templateAccess').doc(token).set({
+      orderId,
+      agentId,
+      userId,
+      email,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      used: false,
+      subscriber: isSubscriber === true
+    });
+
+    const downloadUrl = `/api/templates/download/${agentId}?orderId=${orderId}&token=${token}`;
+    return res.status(200).json({ success: true, token, orderId, downloadUrl });
+  } catch (error) {
+    logger.error('Error creating template access token:', error);
+    return res.status(500).json({ success: false, error: 'Failed to create access token' });
   }
 });
 

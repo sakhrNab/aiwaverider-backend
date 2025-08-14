@@ -458,6 +458,23 @@ router.get('/health', async (req, res) => {
 });
 
 /**
+ * Provider-specific health check aliases (to match frontend paths)
+ */
+router.get('/providers/paypal/health', (req, res) => {
+  const configured = !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id');
+  return res.status(200).json({ provider: 'paypal', configured, status: configured ? 'configured' : 'not_configured' });
+});
+
+router.get('/providers/:provider/health', (req, res) => {
+  const { provider } = req.params;
+  if (provider === 'paypal') {
+    const configured = !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id');
+    return res.status(200).json({ provider: 'paypal', configured, status: configured ? 'configured' : 'not_configured' });
+  }
+  return res.status(404).json({ error: 'Provider not supported', provider });
+});
+
+/**
  * Helper functions
  */
 

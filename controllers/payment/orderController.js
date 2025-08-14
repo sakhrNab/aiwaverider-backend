@@ -8,8 +8,10 @@
 const admin = require('firebase-admin');
 const { v4: uuidv4 } = require('uuid');
 const emailService = require('../../services/email/emailService');
+const configEmail = require('../../config/email');
 const invoiceService = require('../../services/invoice/invoiceService');
 const logger = require('../../utils/logger');
+const { deleteCache } = require('../../utils/cache');
 
 // Initialize Firestore
 const db = admin.firestore();
@@ -233,7 +235,45 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
       
       // Create order record
       const order = await this.createOrder(orderData);
-      
+
+      // Persist purchases on user profile (entitlement) if we have a userId
+      if (userId && items.length > 0) {
+        try {
+          const userRef = db.collection('users').doc(userId);
+          await db.runTransaction(async (tx) => {
+            const snap = await tx.get(userRef);
+            const data = snap.exists ? snap.data() : {};
+            const purchases = Array.isArray(data.purchases) ? [...data.purchases] : [];
+            const existingAgentIds = new Set(
+              purchases.map((p) => (p.agentId || p.productId)).filter(Boolean)
+            );
+            const nowIso = new Date().toISOString();
+            for (const item of items) {
+              const agentId = item.id || item.agentId || item.productId;
+              if (!agentId) continue;
+              if (existingAgentIds.has(agentId)) continue;
+              purchases.push({
+                agentId,
+                productId: agentId,
+                orderId: order.id,
+                price: item.price || (order.total || 0),
+                currency: order.currency,
+                processor: processor,
+                paymentId: order.paymentId,
+                purchasedAt: nowIso
+              });
+              existingAgentIds.add(agentId);
+            }
+            tx.set(userRef, { purchases }, { merge: true });
+          });
+          // Invalidate entitlement cache so UI reflects purchase immediately
+          try { await deleteCache(`user:${userId}:entitlements`); } catch (e) { logger.warn('Failed to invalidate entitlement cache after purchase:', e.message); }
+          logger.info(`Recorded purchases for user ${userId} on order ${order.id}`);
+        } catch (purchaseErr) {
+          logger.error('Failed to record purchases on user profile:', purchaseErr);
+        }
+      }
+
       // Create invoice immediately for all successful payments
       let invoice = null;
       try {
@@ -527,8 +567,13 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
         ? `/account/orders/${order.id}?invoice=${order.invoiceId}`
         : `/account/orders/${order.id}`;
       
-      // Find template download link if available
-      const templateLink = templates.find(t => t.agentId === agentId)?.downloadUrl || '';
+      // Find template download link if available and make it absolute for emails
+      const rawTemplateLink = templates.find(t => t.agentId === agentId)?.downloadUrl || '';
+      const templateLink = rawTemplateLink 
+        ? (rawTemplateLink.startsWith('http') 
+            ? rawTemplateLink 
+            : `${configEmail.websiteUrl}${rawTemplateLink.startsWith('/') ? '' : '/'}${rawTemplateLink}`)
+        : '';
       
       // Enhanced email data for new system (Updated for UniPay)
       const emailData = {

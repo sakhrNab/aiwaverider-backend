@@ -95,6 +95,7 @@ const fetchYouTubeMetadata = async (videoId) => {
       platform: 'youtube',
       videoId,
       title: video.snippet.title,
+      description: video.snippet.description || '',
       authorName: video.snippet.channelTitle,
       authorUser: video.snippet.channelTitle, // YouTube doesn't have separate username
       thumbnailUrl: video.snippet.thumbnails.maxres?.url || 
@@ -161,6 +162,7 @@ const fetchTikTokMetadata = async (videoId) => {
       platform: 'tiktok',
       videoId,
       title: video.desc || 'TikTok Video',
+      description: (video.contents && video.contents[0]?.desc) || video.desc || '',
       authorName: video.author?.nickname || video.author?.uniqueId || 'Unknown',
       authorUser: video.author?.uniqueId || 'Unknown',
       thumbnailUrl: video.video?.cover || video.video?.originCover || video.video?.dynamicCover || '',
@@ -188,6 +190,7 @@ const fetchTikTokMetadata = async (videoId) => {
           platform: 'tiktok',
           videoId,
           title: 'TikTok Video',
+          description: '',
           authorName: 'TikTok User',
           authorUser: 'tiktok_user',
           thumbnailUrl: '',
@@ -214,7 +217,7 @@ const fetchTikTokMetadata = async (videoId) => {
 };
 
 /**
- * Fetch Instagram video metadata - improved approach with URL parsing
+ * Fetch Instagram video metadata - optional oEmbed support; fallback to basic
  */
 const fetchInstagramMetadata = async (videoId, originalUrl) => {
   const cacheKey = `video_meta:instagram:${videoId}`;
@@ -229,50 +232,69 @@ const fetchInstagramMetadata = async (videoId, originalUrl) => {
   try {
     console.log(`Creating metadata for Instagram video: ${videoId}`);
     
-    // Try to extract username from the URL pattern: instagram.com/@username/p/...
+    // Try oEmbed if token provided
+    const oembedToken = process.env.IG_OEMBED_TOKEN;
+    if (oembedToken) {
+      try {
+        const oembedResp = await axios.get('https://graph.facebook.com/v10.0/instagram_oembed', {
+          params: { url: originalUrl, access_token: oembedToken }
+        });
+        const meta = oembedResp.data || {};
+        const metadata = {
+          platform: 'instagram',
+          videoId,
+          title: meta.title || 'Instagram Post',
+          description: meta.title || '',
+          authorName: meta.author_name || 'Instagram User',
+          authorUser: meta.author_name || 'instagram_user',
+          thumbnailUrl: meta.thumbnail_url || '',
+          views: 0,
+          likes: 0,
+          embedUrl: generateEmbedUrl.instagram(videoId)
+        };
+        await setCache(cacheKey, metadata);
+        return metadata;
+      } catch (e) {
+        console.warn('Instagram oEmbed failed, falling back to basic parsing:', e.message);
+      }
+    }
+    
+    // Fallback path: parse username from URL
     let authorName = 'Instagram User';
     let authorUser = 'instagram_user';
     
     if (originalUrl) {
-      // Pattern to match Instagram URLs with usernames
       const usernamePatterns = [
-        /instagram\.com\/@([^\/]+)\//,  // @username format
-        /instagram\.com\/([^\/]+)\/p\//,  // username/p/ format
-        /instagram\.com\/([^\/]+)\/reel\//,  // username/reel/ format
-        /instagram\.com\/([^\/]+)\/tv\//     // username/tv/ format
+        /instagram\.com\/@([^\/]+)\//,
+        /instagram\.com\/([^\/]+)\/p\//,
+        /instagram\.com\/([^\/]+)\/reel\//,
+        /instagram\.com\/([^\/]+)\/tv\//
       ];
-      
       for (const pattern of usernamePatterns) {
         const match = originalUrl.match(pattern);
-        if (match && match[1]) {
+        if (match && match[1] && !['p', 'reel', 'tv', 'stories', 'explore'].includes(match[1].toLowerCase())) {
           const username = match[1];
-          // Skip if it's a generic path like 'p', 'reel', 'tv', etc.
-          if (!['p', 'reel', 'tv', 'stories', 'explore'].includes(username.toLowerCase())) {
-            authorUser = username;
-            // Create a display name from username
-            authorName = username.charAt(0).toUpperCase() + username.slice(1);
-            console.log(`Extracted Instagram username: ${username}`);
-            break;
-          }
+          authorUser = username;
+          authorName = username.charAt(0).toUpperCase() + username.slice(1);
+          break;
         }
       }
     }
     
-    // Return metadata with extracted or fallback author info
     const metadata = {
       platform: 'instagram',
       videoId,
       title: 'Instagram Post',
-      authorName: authorName,
-      authorUser: authorUser,
-      thumbnailUrl: '', // Instagram embeds provide their own thumbnails
-      views: 0, // Instagram doesn't provide public view counts
-      likes: 0, // Instagram doesn't provide public like counts
+      description: '',
+      authorName,
+      authorUser,
+      thumbnailUrl: '',
+      views: 0,
+      likes: 0,
       embedUrl: generateEmbedUrl.instagram(videoId),
-      category: 'Tech' // Add default category for filtering
+      category: 'Tech'
     };
 
-    // Cache the metadata (using optimized TTL)
     await setCache(cacheKey, metadata);
     console.log(`Cached Instagram metadata for video: ${videoId} with author: ${authorName}`);
     

@@ -12,6 +12,9 @@ router.post('/signup', authController.signup);
 // POST /api/auth/session - Create session with Firebase token
 router.post('/session', authController.createSession);
 
+// Add alias for frontend compatibility: POST /api/auth/create-session
+router.post('/create-session', authController.createSession);
+
 // POST /api/auth/signout - Sign out user
 router.post('/signout', authController.signout);
 

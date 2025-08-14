@@ -610,7 +610,44 @@ const getAgentById = async (req, res) => {
       id: agentDoc.id,
       ...agentDoc.data()
     };
-    
+
+    // Determine entitlement (do not block response if this fails)
+    let entitled = false;
+    try {
+      if (req.user && req.user.uid) {
+        const ent = await getUserEntitlements(req.user.uid);
+        const agentKey = agentDoc.id;
+        entitled = ent.isAdmin || ent.isSubscriber || ent.purchases.includes(agentKey) || ent.downloads.includes(agentKey);
+      }
+    } catch (entErr) {
+      logger.warn(`Failed to compute entitlements for user on agent ${agentDoc.id}: ${entErr.message}`);
+    }
+
+    // Sanitize deliverables and template URLs for paid products before caching/returning
+    const isPaid = agentData.isFree === false || (typeof agentData.price === 'number' ? agentData.price > 0 : false) || agentData.pricingTier === 'premium';
+    const sanitizedAgentData = { ...agentData };
+
+    if (isPaid) {
+      // Never expose direct download URLs for paid agents in public API
+      if (sanitizedAgentData.jsonFile && typeof sanitizedAgentData.jsonFile === 'object') {
+        sanitizedAgentData.jsonFile = { ...sanitizedAgentData.jsonFile };
+        delete sanitizedAgentData.jsonFile.url;
+      }
+      if (Array.isArray(sanitizedAgentData.deliverables)) {
+        sanitizedAgentData.deliverables = sanitizedAgentData.deliverables.map(d => {
+          const copy = { ...d };
+          delete copy.downloadUrl;
+          return copy;
+        });
+      }
+      sanitizedAgentData.downloadProtected = true;
+    } else {
+      sanitizedAgentData.downloadProtected = false;
+    }
+
+    // Expose entitlement on the agent object for frontend consumption
+    sanitizedAgentData.entitled = !!entitled;
+
     // Compute user-specific like status on the fly (not cached in Redis)
     let userLike = null;
     if (includeUser && req.user && req.user.uid) {
@@ -622,44 +659,45 @@ const getAgentById = async (req, res) => {
         userLike = { liked: false, likesCount: Array.isArray(agentData.likes) ? agentData.likes.length : 0 };
       }
     }
-    
+
     // Handle reviews
-    if (agentData.reviews && Array.isArray(agentData.reviews)) {
-      agentData.reviews.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-      if (agentData.reviews.length > 0) {
-        const totalRating = agentData.reviews.reduce((sum, review) => sum + (review.rating || 0), 0);
-        agentData.averageRating = totalRating / agentData.reviews.length;
-        agentData.reviewCount = agentData.reviews.length;
+    if (sanitizedAgentData.reviews && Array.isArray(sanitizedAgentData.reviews)) {
+      sanitizedAgentData.reviews.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      if (sanitizedAgentData.reviews.length > 0) {
+        const totalRating = sanitizedAgentData.reviews.reduce((sum, review) => sum + (review.rating || 0), 0);
+        sanitizedAgentData.averageRating = totalRating / sanitizedAgentData.reviews.length;
+        sanitizedAgentData.reviewCount = sanitizedAgentData.reviews.length;
       } else {
-        agentData.averageRating = 0;
-        agentData.reviewCount = 0;
+        sanitizedAgentData.averageRating = 0;
+        sanitizedAgentData.reviewCount = 0;
       }
     } else {
-      agentData.reviews = [];
-      agentData.averageRating = 0;
-      agentData.reviewCount = 0;
+      sanitizedAgentData.reviews = [];
+      sanitizedAgentData.averageRating = 0;
+      sanitizedAgentData.reviewCount = 0;
     }
-    
-    agentData._fetchTime = Date.now();
-    
+
+    sanitizedAgentData._fetchTime = Date.now();
+
     const effectiveCacheKey = generateAgentCacheKey(finalIdUsedForAgent);
     try {
-      await setCache(effectiveCacheKey, agentData);
+      await setCache(effectiveCacheKey, sanitizedAgentData);
       logger.info(`Cached agent ${finalIdUsedForAgent} in Redis using key ${effectiveCacheKey}.`);
     } catch (cacheError) {
       logger.error(`Error caching agent ${finalIdUsedForAgent} in Redis:`, cacheError);
     }
-    
+
     res.set({
       'Cache-Control': 'public, max-age=300',
-      'ETag': `W/"agent-${finalIdUsedForAgent}-${agentData._fetchTime}"`
+      'ETag': `W/"agent-${finalIdUsedForAgent}-${sanitizedAgentData._fetchTime}"`
     });
-    
+
     return res.status(200).json({
       success: true,
       message: 'Agent retrieved successfully (from DB)',
-      data: agentData,
+      data: sanitizedAgentData,
       userLike,
+      entitled,
       fromCache: false
     });
     
@@ -1719,10 +1757,18 @@ const getUserEntitlements = async (userId) => {
   if (cached) return cached;
   const userDoc = await db.collection('users').doc(userId).get();
   const data = userDoc.exists ? userDoc.data() : {};
+  const nowTs = Date.now();
+  const subscription = data.subscription || {};
+  const currentPeriodEnd = subscription.currentPeriodEnd
+    ? new Date(subscription.currentPeriodEnd).getTime()
+    : 0;
   const entitlements = {
     isAdmin: data.role === 'admin' || data.roles?.includes?.('admin') === true,
     purchases: Array.isArray(data.purchases) ? data.purchases.map(p => p.agentId || p.productId).filter(Boolean) : [],
-    downloads: Array.isArray(data.downloads) ? data.downloads.map(d => d.agentId || d.id).filter(Boolean) : []
+    downloads: Array.isArray(data.downloads) ? data.downloads.map(d => d.agentId || d.id).filter(Boolean) : [],
+    isSubscriber: (subscription.status === 'active' || subscription.status === 'trialing') && currentPeriodEnd > nowTs,
+    planId: subscription.planId || null,
+    currentPeriodEnd
   };
   await setCache(cacheKey, entitlements, 1800); // 30 min TTL
   return entitlements;
