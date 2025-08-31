@@ -319,7 +319,7 @@ router.post('/:agentId/increment-downloads', async (req, res) => {
   }
 });
 
-// Agent Downloads
+// Agent Downloads (requires authentication)
 router.post('/:id/download', validateFirebaseToken, async (req, res) => {
   const agentId = req.params.id;
   const userId = req.user.uid;
@@ -393,10 +393,32 @@ router.post('/:id/download', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// Free Agent Download
-router.post('/:id/free-download', validateFirebaseToken, async (req, res) => {
+// Free Agent Download (no authentication required but optional)
+router.post('/:id/free-download', (req, res, next) => {
+  // Check if there's an authorization header - if yes, validate it, if no, continue without auth
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    // User is trying to authenticate - validate the token
+    console.log('[FREE-DOWNLOAD] Authentication header found, attempting to validate');
+    validateFirebaseToken(req, res, (err) => {
+      if (err) {
+        // Authentication failed, but for free downloads, we'll continue without auth
+        console.log('[FREE-DOWNLOAD] Authentication failed, continuing without auth. Error:', err.message || err);
+        req.user = null;
+      } else {
+        console.log('[FREE-DOWNLOAD] Authentication successful for user:', req.user?.uid);
+      }
+      next();
+    });
+  } else {
+    // No authentication header - continue without auth
+    console.log('[FREE-DOWNLOAD] No authentication header, proceeding without auth');
+    req.user = null;
+    next();
+  }
+}, async (req, res) => {
   const agentId = req.params.id;
-  const userId = req.user.uid;
+  const userId = req.user?.uid; // Optional - user might not be authenticated
   
   try {
     // Create a JavaScript Date object for the download timestamp
@@ -416,30 +438,32 @@ router.post('/:id/free-download', validateFirebaseToken, async (req, res) => {
       return res.status(403).json({ success: false, message: 'This agent is not free' });
     }
     
-    // Update user's downloads array
-    const userRef = db.collection('users').doc(userId);
-    const userDoc = await userRef.get();
-    
-    if (userDoc.exists) {
-      const userData = userDoc.data();
-      const downloads = userData.downloads || [];
+    // Update user's downloads array if authenticated
+    if (userId) {
+      const userRef = db.collection('users').doc(userId);
+      const userDoc = await userRef.get();
       
-      // Check if user already has this download recorded
-      const existingDownload = downloads.find(d => d.agentId === agentId);
-      
-      if (!existingDownload) {
-        // Add to downloads array - using regular Date instead of serverTimestamp
-        await userRef.update({
-          downloads: admin.firestore.FieldValue.arrayUnion({
-            agentId,
-            id: agentId,
-            title: agentData.title || 'Unknown Agent',
-            imageUrl: agentData.imageUrl || null,
-            downloadDate: jsDate, // Use JavaScript Date instead of serverTimestamp
-            price: 0,
-            isFree: true
-          })
-        });
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        const downloads = userData.downloads || [];
+        
+        // Check if user already has this download recorded
+        const existingDownload = downloads.find(d => d.agentId === agentId);
+        
+        if (!existingDownload) {
+          // Add to downloads array - using regular Date instead of serverTimestamp
+          await userRef.update({
+            downloads: admin.firestore.FieldValue.arrayUnion({
+              agentId,
+              id: agentId,
+              title: agentData.title || 'Unknown Agent',
+              imageUrl: agentData.imageUrl || null,
+              downloadDate: jsDate, // Use JavaScript Date instead of serverTimestamp
+              price: 0,
+              isFree: true
+            })
+          });
+        }
       }
     }
     
@@ -467,8 +491,8 @@ router.post('/:id/free-download', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// Download file proxy endpoint
-router.get('/:id/download-file', async (req, res) => {
+// Download file proxy endpoint (no authentication required)
+router.get('/:id/download', async (req, res) => {
   try {
     const fileUrl = req.query.url;
     const agentId = req.params.id;
@@ -480,6 +504,12 @@ router.get('/:id/download-file', async (req, res) => {
       return res.status(400).json({ success: false, message: 'File URL is required' });
     }
     
+    // Validate that this is a Google Storage URL for security
+    if (!fileUrl.includes('storage.googleapis.com') && !fileUrl.includes('firebasestorage.app')) {
+      console.log('[DOWNLOAD PROXY] Invalid URL - not a Google Storage URL');
+      return res.status(400).json({ success: false, message: 'Invalid file URL' });
+    }
+    
     // Log the request details to help debug
     console.log(`[DOWNLOAD PROXY] Proxying download for agent ${agentId}, file: ${fileUrl}`);
     
@@ -488,7 +518,8 @@ router.get('/:id/download-file', async (req, res) => {
     const response = await axios({
       method: 'GET',
       url: fileUrl,
-      responseType: 'stream'
+      responseType: 'stream',
+      timeout: 30000 // 30 second timeout
     });
     
     console.log(`[DOWNLOAD PROXY] File fetched successfully, status: ${response.status}`);
@@ -496,10 +527,33 @@ router.get('/:id/download-file', async (req, res) => {
     
     // Get the filename from the URL
     const urlParts = fileUrl.split('/');
-    const filename = urlParts[urlParts.length - 1];
+    let filename = urlParts[urlParts.length - 1];
     
-    // Set headers to force download
+    // Clean up filename (remove query parameters)
+    if (filename.includes('?')) {
+      filename = filename.split('?')[0];
+    }
+    
+    // Ensure filename has proper extension
+    if (!filename.includes('.')) {
+      filename = `${agentId}.json`;
+    }
+    
+    // Set headers to force download with mobile browser compatibility
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    
+    // Mobile browser compatibility headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length');
+    
+    // Additional headers for mobile download support
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Accept-Ranges', 'bytes');
     
     // If content type is in the response, use it
     if (response.headers['content-type']) {
@@ -517,6 +571,8 @@ router.get('/:id/download-file', async (req, res) => {
     
     // Pipe the file stream to the response
     response.data.pipe(res);
+    
+    console.log(`[DOWNLOAD PROXY] File download completed successfully for ${filename}`);
   } catch (error) {
     console.error('[DOWNLOAD PROXY] Error proxying file download:', error);
     
