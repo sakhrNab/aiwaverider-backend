@@ -491,13 +491,32 @@ router.post('/:id/free-download', (req, res, next) => {
   }
 });
 
+// OPTIONS handler for CORS preflight requests
+router.options('/:id/download', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+  res.status(200).end();
+});
+
 // Download file proxy endpoint (no authentication required)
 router.get('/:id/download', async (req, res) => {
   try {
+    // Set CORS headers immediately for mobile compatibility
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length');
+    
     const fileUrl = req.query.url;
     const agentId = req.params.id;
+    const userAgent = req.headers['user-agent'] || '';
+    const isMobileRequest = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
     
     console.log(`[DOWNLOAD PROXY] Request received for agent ${agentId}, URL: ${fileUrl}`);
+    console.log(`[DOWNLOAD PROXY] User-Agent: ${userAgent}`);
+    console.log(`[DOWNLOAD PROXY] Is mobile request: ${isMobileRequest}`);
     
     if (!fileUrl) {
       console.log('[DOWNLOAD PROXY] Missing URL parameter');
@@ -544,12 +563,6 @@ router.get('/:id/download', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    
-    // Mobile browser compatibility headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length');
     
     // Additional headers for mobile download support
     res.setHeader('X-Content-Type-Options', 'nosniff');
