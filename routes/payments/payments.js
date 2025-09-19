@@ -55,7 +55,45 @@ logger.info(`Payment system initialized in ${isProduction ? 'PRODUCTION' : 'TEST
 });
 
 /**
- * Test endpoint - health check for the entire payment system
+ * @swagger
+ * /api/payments/test:
+ *   get:
+ *     summary: Test payment system
+ *     description: Health check endpoint for the entire payment system
+ *     tags: [Payments]
+ *     responses:
+ *       200:
+ *         description: Payment system is operational
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "success"
+ *                 message:
+ *                   type: string
+ *                   example: "Payment routes are working correctly"
+ *                 environment:
+ *                   type: string
+ *                   example: "test"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                   example: "2024-01-15T10:30:00Z"
+ *                 availableProviders:
+ *                   type: object
+ *                   properties:
+ *                     paypal:
+ *                       type: boolean
+ *                       example: true
+ *                     directGooglePay:
+ *                       type: boolean
+ *                       example: true
+ *                     directApplePay:
+ *                       type: boolean
+ *                       example: true
  */
 router.get('/test', (req, res) => {
   logger.info('Payment routes test endpoint accessed');
@@ -75,6 +113,57 @@ router.get('/test', (req, res) => {
 
 /**
  * Get supported payment methods for a region/country
+ */
+/**
+ * @swagger
+ * /api/payments/payment-methods:
+ *   get:
+ *     summary: Get supported payment methods
+ *     description: Get supported payment methods for a region/country
+ *     tags: [Payments]
+ *     parameters:
+ *       - in: query
+ *         name: country
+ *         schema:
+ *           type: string
+ *         description: Country code
+ *         example: "US"
+ *       - in: query
+ *         name: currency
+ *         schema:
+ *           type: string
+ *         description: Currency code
+ *         example: "USD"
+ *     responses:
+ *       200:
+ *         description: Payment methods retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 methods:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                         example: "paypal"
+ *                       name:
+ *                         type: string
+ *                         example: "PayPal"
+ *                       enabled:
+ *                         type: boolean
+ *                         example: true
+ *                       icon:
+ *                         type: string
+ *                         example: "https://example.com/paypal-icon.png"
+ *       500:
+ *         description: Internal server error
  */
 router.get('/payment-methods', async (req, res) => {
   try {
@@ -107,6 +196,77 @@ router.get('/payment-methods', async (req, res) => {
 /**
  * Create unified payment session (Updated for UniPay v3)
  */
+/**
+ * @swagger
+ * /api/payments/create-session:
+ *   post:
+ *     summary: Create payment session
+ *     description: Create a new payment session
+ *     tags: [Payments]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - amount
+ *               - currency
+ *             properties:
+ *               amount:
+ *                 type: number
+ *                 description: Payment amount
+ *                 example: 29.99
+ *               currency:
+ *                 type: string
+ *                 description: Currency code
+ *                 example: "USD"
+ *               items:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     name:
+ *                       type: string
+ *                       example: "AI Agent License"
+ *                     quantity:
+ *                       type: integer
+ *                       example: 1
+ *                     price:
+ *                       type: number
+ *                       example: 29.99
+ *               customerInfo:
+ *                 type: object
+ *                 properties:
+ *                   email:
+ *                     type: string
+ *                     format: email
+ *                     example: "customer@example.com"
+ *                   name:
+ *                     type: string
+ *                     example: "John Doe"
+ *     responses:
+ *       200:
+ *         description: Payment session created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 sessionId:
+ *                   type: string
+ *                   example: "cs_test_123"
+ *                 clientSecret:
+ *                   type: string
+ *                   example: "cs_test_123_secret_456"
+ *       400:
+ *         description: Bad request - Invalid payment data
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/create-session', async (req, res) => {
   // Deprecated: Only PayPal is supported; instruct client to use PayPal order creation
   try {
@@ -125,6 +285,50 @@ router.post('/create-session', async (req, res) => {
 
 /**
  * Direct Google Pay processing (cost-optimized) - UNCHANGED
+ */
+/**
+ * @swagger
+ * /api/payments/process-google-pay-direct:
+ *   post:
+ *     summary: Process Google Pay payment
+ *     description: Process a direct Google Pay payment
+ *     tags: [Payments]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - paymentToken
+ *               - amount
+ *             properties:
+ *               paymentToken:
+ *                 type: string
+ *                 description: Google Pay payment token
+ *                 example: "google_pay_token_123"
+ *               amount:
+ *                 type: number
+ *                 description: Payment amount
+ *                 example: 29.99
+ *               currency:
+ *                 type: string
+ *                 description: Currency code
+ *                 example: "USD"
+ *               customerInfo:
+ *                 type: object
+ *                 properties:
+ *                   email:
+ *                     type: string
+ *                     format: email
+ *                     example: "customer@example.com"
+ *     responses:
+ *       200:
+ *         description: Google Pay payment processed successfully
+ *       400:
+ *         description: Bad request - Invalid payment data
+ *       500:
+ *         description: Internal server error
  */
 router.post('/process-google-pay-direct', async (req, res) => {
   try {
@@ -208,6 +412,50 @@ router.post('/process-google-pay-direct', async (req, res) => {
 /**
  * Direct Apple Pay processing (cost-optimized) - UNCHANGED
  */
+/**
+ * @swagger
+ * /api/payments/process-apple-pay-direct:
+ *   post:
+ *     summary: Process Apple Pay payment
+ *     description: Process a direct Apple Pay payment
+ *     tags: [Payments]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - paymentData
+ *               - amount
+ *             properties:
+ *               paymentData:
+ *                 type: string
+ *                 description: Apple Pay payment data
+ *                 example: "apple_pay_data_123"
+ *               amount:
+ *                 type: number
+ *                 description: Payment amount
+ *                 example: 29.99
+ *               currency:
+ *                 type: string
+ *                 description: Currency code
+ *                 example: "USD"
+ *               customerInfo:
+ *                 type: object
+ *                 properties:
+ *                   email:
+ *                     type: string
+ *                     format: email
+ *                     example: "customer@example.com"
+ *     responses:
+ *       200:
+ *         description: Apple Pay payment processed successfully
+ *       400:
+ *         description: Bad request - Invalid payment data
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/process-apple-pay-direct', async (req, res) => {
   try {
     const { paymentData, orderDetails, customerInfo, metadata = {} } = req.body;
@@ -289,6 +537,53 @@ router.post('/process-apple-pay-direct', async (req, res) => {
 
 /**
  * Get payment/order status by ID (Updated for UniPay)
+ */
+/**
+ * @swagger
+ * /api/payments/status/{id}:
+ *   get:
+ *     summary: Get payment status
+ *     description: Get the status of a payment by ID
+ *     tags: [Payments]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Payment ID
+ *         example: "pay_123"
+ *     responses:
+ *       200:
+ *         description: Payment status retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 paymentId:
+ *                   type: string
+ *                   example: "pay_123"
+ *                 status:
+ *                   type: string
+ *                   enum: [pending, succeeded, failed, canceled]
+ *                   example: "succeeded"
+ *                 amount:
+ *                   type: number
+ *                   example: 29.99
+ *                 currency:
+ *                   type: string
+ *                   example: "USD"
+ *                 createdAt:
+ *                   type: string
+ *                   format: date-time
+ *       404:
+ *         description: Payment not found
+ *       500:
+ *         description: Internal server error
  */
 router.get('/status/:id', async (req, res) => {
   try {
@@ -438,6 +733,42 @@ router.post('/switch-environment', async (req, res) => {
 
 /**
  * System health check - all payment providers (Updated)
+ */
+/**
+ * @swagger
+ * /api/payments/health:
+ *   get:
+ *     summary: Payment system health check
+ *     description: Check the health of the payment system
+ *     tags: [Payments]
+ *     responses:
+ *       200:
+ *         description: Payment system is healthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "healthy"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                 services:
+ *                   type: object
+ *                   properties:
+ *                     paypal:
+ *                       type: string
+ *                       example: "operational"
+ *                     googlePay:
+ *                       type: string
+ *                       example: "operational"
+ *                     applePay:
+ *                       type: string
+ *                       example: "operational"
+ *       500:
+ *         description: Payment system unhealthy
  */
 router.get('/health', async (req, res) => {
   try {

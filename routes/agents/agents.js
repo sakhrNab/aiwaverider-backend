@@ -66,19 +66,259 @@ router.get('/refresh-cache', validateFirebaseToken, (req, res) => {
 // ==========================================
 
 // IMPORTANT: Specific routes must come before dynamic parameter routes
-// Main agents endpoint - now uses in-memory cache and searches integrations properly
+/**
+ * @swagger
+ * /api/agents:
+ *   get:
+ *     summary: Get all agents
+ *     description: Retrieve a paginated list of all AI agents with optional filtering and search
+ *     tags: [Agents]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           default: 1
+ *         description: Page number for pagination
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *           default: 10
+ *         description: Number of agents per page
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *         description: Filter by category
+ *         example: "Writing"
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search term for agent title and description
+ *         example: "writing assistant"
+ *       - in: query
+ *         name: sortBy
+ *         schema:
+ *           type: string
+ *           enum: [createdAt, downloadCount, title, price]
+ *           default: createdAt
+ *         description: Sort field
+ *       - in: query
+ *         name: sortOrder
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
+ *           default: desc
+ *         description: Sort order
+ *       - in: query
+ *         name: priceMin
+ *         schema:
+ *           type: number
+ *           minimum: 0
+ *         description: Minimum price filter
+ *       - in: query
+ *         name: priceMax
+ *         schema:
+ *           type: number
+ *           minimum: 0
+ *         description: Maximum price filter
+ *       - in: query
+ *         name: tags
+ *         schema:
+ *           type: string
+ *         description: Comma-separated list of tags to filter by
+ *         example: "writing,content,ai"
+ *     responses:
+ *       200:
+ *         description: List of agents retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/PaginationResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/Agent'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getAgents);
 
-// Featured agents
+/**
+ * @swagger
+ * /api/agents/featured:
+ *   get:
+ *     summary: Get featured agents
+ *     description: Retrieve a list of featured AI agents
+ *     tags: [Agents]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 50
+ *           default: 10
+ *         description: Number of featured agents to return
+ *     responses:
+ *       200:
+ *         description: Featured agents retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Agent'
+ *                 count:
+ *                   type: integer
+ *                   example: 5
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/featured', publicCacheMiddleware({ duration: getFeaturedCacheDuration() }), agentsController.getFeaturedAgents);
 
-// Latest agents
+/**
+ * @swagger
+ * /api/agents/latest:
+ *   get:
+ *     summary: Get latest agents
+ *     description: Retrieve the most recently created AI agents
+ *     tags: [Agents]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 50
+ *           default: 10
+ *         description: Number of latest agents to return
+ *     responses:
+ *       200:
+ *         description: Latest agents retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Agent'
+ *                 count:
+ *                   type: integer
+ *                   example: 10
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/latest', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getLatestAgentsRoute);
 
-// Agent count - NEW
+/**
+ * @swagger
+ * /api/agents/count:
+ *   get:
+ *     summary: Get total agent count
+ *     description: Get the total number of agents in the system
+ *     tags: [Agents]
+ *     responses:
+ *       200:
+ *         description: Agent count retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 count:
+ *                   type: integer
+ *                   example: 150
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/count', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getAgentCount);
 
-// Search count endpoint - matches frontend pattern: /api/agents/search/count?q=telegram&category=All
+/**
+ * @swagger
+ * /api/agents/search/count:
+ *   get:
+ *     summary: Get search results count
+ *     description: Get the count of agents matching search criteria
+ *     tags: [Agents]
+ *     parameters:
+ *       - in: query
+ *         name: q
+ *         schema:
+ *           type: string
+ *         description: Search query
+ *         example: "writing assistant"
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *         description: Category filter
+ *         example: "Writing"
+ *       - in: query
+ *         name: tags
+ *         schema:
+ *           type: string
+ *         description: Comma-separated tags
+ *         example: "writing,content"
+ *     responses:
+ *       200:
+ *         description: Search count retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 count:
+ *                   type: integer
+ *                   example: 25
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/search/count', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getSearchResultsCount);
 
 // ==========================================
@@ -671,6 +911,47 @@ if (process.env.NODE_ENV === 'development') {
 // DYNAMIC AGENT ID ROUTE - MUST BE LAST
 // ==========================================
 
+/**
+ * @swagger
+ * /api/agents/{agentId}:
+ *   get:
+ *     summary: Get agent by ID
+ *     description: Retrieve a specific AI agent by its ID
+ *     tags: [Agents]
+ *     parameters:
+ *       - in: path
+ *         name: agentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Agent ID
+ *         example: "agent-123"
+ *     responses:
+ *       200:
+ *         description: Agent retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   $ref: '#/components/schemas/Agent'
+ *       404:
+ *         description: Agent not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 // IMPORTANT: This dynamic route must come LAST to avoid catching specific routes like /count
 router.get('/:agentId', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getAgentById);
 

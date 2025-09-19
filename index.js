@@ -15,6 +15,10 @@ const { initializeSettings } = require('./models/siteSettings');
 const uploadMiddleware = require('./middleware/upload');
 const admin = require('firebase-admin');
 
+// Swagger configuration
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./config/swagger');
+
 // Initialize express
 const app = express();
 
@@ -36,6 +40,44 @@ app.locals.upload = uploadMiddleware;
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// ------------------ Swagger Documentation ------------------
+// Serve Swagger UI only in development
+if (!isProduction) {
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: 'AIWaverider API Documentation',
+    swaggerOptions: {
+      persistAuthorization: true,
+    displayRequestDuration: true,
+    filter: true,
+    showExtensions: true,
+    showCommonExtensions: true
+  }
+  }));
+
+  // Serve raw Swagger JSON
+  app.get('/api-docs.json', (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.send(swaggerSpec);
+  });
+} else {
+  // Production: Return message instead of Swagger
+  app.get('/api-docs', (req, res) => {
+    res.status(404).json({
+      error: 'API Documentation not available in production',
+      message: 'Swagger documentation is only available in development environment',
+      contact: 'For API documentation, please contact the development team'
+    });
+  });
+  
+  app.get('/api-docs.json', (req, res) => {
+    res.status(404).json({
+      error: 'API Documentation not available in production',
+      message: 'Swagger JSON is only available in development environment'
+    });
+  });
+}
 
 // ------------------ CORS Configuration ------------------
 const allowedOrigins = isProduction

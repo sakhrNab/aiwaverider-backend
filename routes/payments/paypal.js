@@ -41,7 +41,100 @@ async function generatePayPalAccessToken() {
   }
 }
 
-// Create PayPal order
+/**
+ * @swagger
+ * /api/payments/paypal/create-order:
+ *   post:
+ *     summary: Create PayPal order
+ *     description: Create a new PayPal payment order
+ *     tags: [PayPal Integration]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - amount
+ *               - items
+ *             properties:
+ *               amount:
+ *                 type: number
+ *                 description: Total amount for the order
+ *                 example: 29.99
+ *               currency:
+ *                 type: string
+ *                 enum: [USD, EUR, GBP]
+ *                 default: USD
+ *                 description: Currency code
+ *               items:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     name:
+ *                       type: string
+ *                       example: "AI Agent License"
+ *                     quantity:
+ *                       type: integer
+ *                       example: 1
+ *                     unit_amount:
+ *                       type: number
+ *                       example: 29.99
+ *                 description: Array of items in the order
+ *               customerInfo:
+ *                 type: object
+ *                 properties:
+ *                   email:
+ *                     type: string
+ *                     format: email
+ *                     example: "customer@example.com"
+ *                   name:
+ *                     type: string
+ *                     example: "John Doe"
+ *                 description: Customer information
+ *               metadata:
+ *                 type: object
+ *                 properties:
+ *                   orderId:
+ *                     type: string
+ *                     example: "order-123"
+ *                 description: Additional metadata
+ *     responses:
+ *       200:
+ *         description: PayPal order created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 id:
+ *                   type: string
+ *                   description: PayPal order ID
+ *                   example: "PAYPAL-ORDER-123"
+ *                 orderId:
+ *                   type: string
+ *                   description: Internal order ID
+ *                   example: "order-123"
+ *                 mock:
+ *                   type: boolean
+ *                   description: Whether this is a mock order (development mode)
+ *       400:
+ *         description: Bad request - Invalid input data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Invalid amount. Must be a positive number."
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/create-order', async (req, res) => {
   try {
     const { amount, currency, items = [], customerInfo = {}, metadata = {} } = req.body;
@@ -169,7 +262,49 @@ router.post('/create-order', async (req, res) => {
   }
 });
 
-// Capture PayPal payment
+/**
+ * @swagger
+ * /api/payments/paypal/capture:
+ *   post:
+ *     summary: Capture PayPal payment
+ *     description: Capture a PayPal payment after order approval
+ *     tags: [PayPal Integration]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - orderID
+ *             properties:
+ *               orderID:
+ *                 type: string
+ *                 description: PayPal order ID to capture
+ *                 example: "PAYPAL-ORDER-123"
+ *     responses:
+ *       200:
+ *         description: Payment captured successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 id:
+ *                   type: string
+ *                   description: PayPal capture ID
+ *                   example: "CAPTURE-123"
+ *                 status:
+ *                   type: string
+ *                   example: "COMPLETED"
+ *       400:
+ *         description: Bad request - Invalid order ID
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/capture', async (req, res) => {
   try {
     const { orderID } = req.body;
@@ -289,6 +424,42 @@ router.post('/capture', async (req, res) => {
 });
 
 // Confirm a PayPal subscription (called after onApprove)
+/**
+ * @swagger
+ * /api/payments/paypal/subscriptions/confirm:
+ *   post:
+ *     summary: Confirm PayPal subscription
+ *     description: Confirm a PayPal subscription
+ *     tags: [PayPal Integration]
+ *     security:
+ *       - FirebaseAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - subscriptionId
+ *             properties:
+ *               subscriptionId:
+ *                 type: string
+ *                 description: PayPal subscription ID
+ *                 example: "I-BW452GLLEP1G"
+ *               planId:
+ *                 type: string
+ *                 description: PayPal plan ID
+ *                 example: "P-5ML4271244454362WXNWU5NQ"
+ *     responses:
+ *       200:
+ *         description: Subscription confirmed successfully
+ *       400:
+ *         description: Bad request - Invalid subscription data
+ *       401:
+ *         description: Unauthorized - Authentication required
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/subscriptions/confirm', validateFirebaseToken, async (req, res) => {
   try {
     const { subscriptionID } = req.body || {};
@@ -356,6 +527,36 @@ router.post('/subscriptions/confirm', validateFirebaseToken, async (req, res) =>
 });
 
 // Test-create a subscription (server-side) to validate plan + environment
+/**
+ * @swagger
+ * /api/payments/paypal/subscriptions/test-create:
+ *   post:
+ *     summary: Test create PayPal subscription
+ *     description: Create a test PayPal subscription for development
+ *     tags: [PayPal Integration]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               planId:
+ *                 type: string
+ *                 description: PayPal plan ID
+ *                 example: "P-5ML4271244454362WXNWU5NQ"
+ *               customerId:
+ *                 type: string
+ *                 description: Customer ID
+ *                 example: "customer-123"
+ *     responses:
+ *       200:
+ *         description: Test subscription created successfully
+ *       400:
+ *         description: Bad request - Invalid plan data
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/subscriptions/test-create', async (req, res) => {
   try {
     const planId = (req.body && req.body.plan_id) || PAYPAL_SUBS_PLAN_ID;
@@ -397,6 +598,28 @@ router.post('/subscriptions/test-create', async (req, res) => {
 });
 
 // Add GET variant here to avoid shadowing by /subscriptions/:id
+/**
+ * @swagger
+ * /api/payments/paypal/subscriptions/test-create:
+ *   get:
+ *     summary: Test create PayPal subscription (GET)
+ *     description: Create a test PayPal subscription via GET request
+ *     tags: [PayPal Integration]
+ *     parameters:
+ *       - in: query
+ *         name: planId
+ *         schema:
+ *           type: string
+ *         description: PayPal plan ID
+ *         example: "P-5ML4271244454362WXNWU5NQ"
+ *     responses:
+ *       200:
+ *         description: Test subscription created successfully
+ *       400:
+ *         description: Bad request - Missing plan ID
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/subscriptions/test-create', async (req, res) => {
   try {
     const planId = req.query.plan_id || PAYPAL_SUBS_PLAN_ID;
@@ -438,6 +661,29 @@ router.get('/subscriptions/test-create', async (req, res) => {
 });
 
 // Get a subscription status
+/**
+ * @swagger
+ * /api/payments/paypal/subscriptions/{id}:
+ *   get:
+ *     summary: Get PayPal subscription status
+ *     description: Get the status of a PayPal subscription
+ *     tags: [PayPal Integration]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: PayPal subscription ID
+ *         example: "I-BW452GLLEP1G"
+ *     responses:
+ *       200:
+ *         description: Subscription status retrieved successfully
+ *       404:
+ *         description: Subscription not found
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/subscriptions/:id', async (req, res) => {
   try {
     const id = req.params.id;
@@ -454,6 +700,28 @@ router.get('/subscriptions/:id', async (req, res) => {
 });
 
 // PayPal Webhook - verify and process subscription events
+/**
+ * @swagger
+ * /api/payments/paypal/webhook:
+ *   post:
+ *     summary: PayPal webhook handler
+ *     description: Handle PayPal webhook events
+ *     tags: [PayPal Integration]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             description: PayPal webhook event data
+ *     responses:
+ *       200:
+ *         description: Webhook processed successfully
+ *       400:
+ *         description: Bad request - Invalid webhook data
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/webhook', async (req, res) => {
   try {
     const webhookId = process.env.PAYPAL_WEBHOOK_ID;
@@ -533,6 +801,47 @@ router.post('/webhook', async (req, res) => {
 });
 
 // List plans (optional product filter)
+/**
+ * @swagger
+ * /api/payments/paypal/plans:
+ *   get:
+ *     summary: List PayPal plans
+ *     description: Get all available PayPal subscription plans
+ *     tags: [PayPal Integration]
+ *     responses:
+ *       200:
+ *         description: Plans retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 plans:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                         example: "P-5ML4271244454362WXNWU5NQ"
+ *                       name:
+ *                         type: string
+ *                         example: "Basic Plan"
+ *                       description:
+ *                         type: string
+ *                         example: "Basic subscription plan"
+ *                       price:
+ *                         type: number
+ *                         example: 9.99
+ *                       currency:
+ *                         type: string
+ *                         example: "USD"
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/plans', async (req, res) => {
   try {
     const token = await generatePayPalAccessToken();
@@ -548,6 +857,29 @@ router.get('/plans', async (req, res) => {
 });
 
 // Get plan details
+/**
+ * @swagger
+ * /api/payments/paypal/plans/{id}:
+ *   get:
+ *     summary: Get PayPal plan details
+ *     description: Get details of a specific PayPal subscription plan
+ *     tags: [PayPal Integration]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: PayPal plan ID
+ *         example: "P-5ML4271244454362WXNWU5NQ"
+ *     responses:
+ *       200:
+ *         description: Plan details retrieved successfully
+ *       404:
+ *         description: Plan not found
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/plans/:id', async (req, res) => {
   try {
     const token = await generatePayPalAccessToken();
@@ -562,6 +894,38 @@ router.get('/plans/:id', async (req, res) => {
 });
 
 // Safe config echo for debugging (masked IDs)
+/**
+ * @swagger
+ * /api/payments/paypal/config:
+ *   get:
+ *     summary: Get PayPal configuration
+ *     description: Get PayPal configuration settings
+ *     tags: [PayPal Integration]
+ *     responses:
+ *       200:
+ *         description: Configuration retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 clientId:
+ *                   type: string
+ *                   example: "your-paypal-client-id"
+ *                 environment:
+ *                   type: string
+ *                   example: "sandbox"
+ *                 currency:
+ *                   type: string
+ *                   example: "USD"
+ *                 supportedCurrencies:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                   example: ["USD", "EUR", "GBP"]
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/config', (req, res) => {
   const mask = (s) => {
     if (!s || typeof s !== 'string') return null;

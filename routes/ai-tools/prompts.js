@@ -217,9 +217,96 @@ const generateResultsCacheKey = (searchQuery, filters, limit, offset) => {
 };
 
 /**
- * @route   GET /api/prompts
- * @desc    Get all prompts with search, filtering, and pagination
- * @access  Public
+ * @swagger
+ * /api/prompts:
+ *   get:
+ *     summary: Get all prompts
+ *     description: Get all prompts with search, filtering, and pagination
+ *     tags: [Prompts]
+ *     parameters:
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search term for prompt title and description
+ *         example: "AI writing"
+ *       - in: query
+ *         name: searchQuery
+ *         schema:
+ *           type: string
+ *         description: Alternative search parameter
+ *         example: "productivity"
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *           default: "All"
+ *         description: Filter by prompt category
+ *         example: "AI Prompts"
+ *       - in: query
+ *         name: tags
+ *         schema:
+ *           type: string
+ *         description: Filter by tags (comma-separated)
+ *         example: "writing,productivity"
+ *       - in: query
+ *         name: featured
+ *         schema:
+ *           type: boolean
+ *         description: Filter for featured prompts only
+ *       - in: query
+ *         name: createdBy
+ *         schema:
+ *           type: string
+ *         description: Filter by creator user ID
+ *         example: "user123"
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *           default: 20
+ *         description: Number of prompts per page
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           minimum: 0
+ *           default: 0
+ *         description: Number of prompts to skip
+ *     responses:
+ *       200:
+ *         description: Prompts retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Prompt'
+ *                 total:
+ *                   type: integer
+ *                   description: Total number of prompts matching the criteria
+ *                 limit:
+ *                   type: integer
+ *                   description: Number of prompts per page
+ *                 offset:
+ *                   type: integer
+ *                   description: Number of prompts skipped
+ *                 responseTime:
+ *                   type: integer
+ *                   description: Response time in milliseconds
+ *                 fromCache:
+ *                   type: boolean
+ *                   description: Whether the response came from cache
+ *       500:
+ *         description: Internal server error
  */
 router.get('/', async (req, res) => {
   try {

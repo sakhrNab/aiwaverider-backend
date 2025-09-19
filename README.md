@@ -1,6 +1,120 @@
 # AI Wave Rider Backend
 
-This is the backend service for the AI Wave Rider application.
+This is the backend service for the AI Wave Rider application - an AI agents marketplace with payment processing, user management, and content delivery.
+
+## 🚀 Quick Start
+
+1. **Install dependencies**: `npm install`
+2. **Set up environment**: Copy `.env.example` to `.env` and configure
+3. **Start the server**: `npm start`
+4. **View API docs**: Visit `http://localhost:4000/api-docs`
+
+## 📚 API Documentation
+
+### Swagger/OpenAPI Documentation
+
+The backend includes comprehensive API documentation powered by Swagger/OpenAPI 3.0:
+
+- **Interactive UI**: `http://localhost:4000/api-docs`
+- **Raw JSON**: `http://localhost:4000/api-docs.json`
+- **Health Check**: `http://localhost:4000/_health`
+
+### Current API Coverage
+
+- **Total Endpoints**: ~170
+- **Documented**: ~50+ (30% coverage)
+- **Authentication**: Complete
+- **User Management**: Complete
+- **Profile Management**: Complete
+- **Agents Management**: Partial
+- **Payment Integration**: Partial
+
+### Documented Endpoints
+
+#### Authentication (`/api/auth/`)
+- User registration and login
+- Session management
+- Token verification and refresh
+- User signout
+
+#### User Management (`/api/users/`)
+- Get all users with pagination
+- Get user by ID
+- Create, update, and delete users
+- User role management
+
+#### Profile Management (`/api/profile/`)
+- Get and update user profiles
+- Avatar upload
+- Interest management
+- Notification preferences
+- Favorites management
+- Settings configuration
+- Community information
+
+#### Agents (`/api/agents/`)
+- List all agents with filtering
+- Featured and latest agents
+- Agent search and pagination
+- Individual agent details
+
+#### Other Services
+- AI Tools management
+- Video content management
+- Chat processing
+- Payment system testing
+- Admin settings
+
+### API Features
+
+- **Authentication**: Firebase Auth integration
+- **Pagination**: Consistent pagination across all list endpoints
+- **Filtering**: Advanced filtering and search capabilities
+- **Caching**: Redis-based caching for improved performance
+- **Rate Limiting**: Built-in rate limiting for API protection
+- **Error Handling**: Comprehensive error responses with proper HTTP status codes
+- **Validation**: Request validation with detailed error messages
+
+### Swagger Implementation Details
+
+The Swagger documentation is implemented using:
+
+- **swagger-jsdoc**: Generates OpenAPI specs from JSDoc comments
+- **swagger-ui-express**: Serves the interactive documentation UI
+- **OpenAPI 3.0**: Latest specification standard
+- **JSDoc Comments**: Documentation embedded directly in route files
+
+#### Configuration Files
+
+- `config/swagger.js`: Main Swagger configuration
+- Route files: Individual endpoint documentation
+- `index.js`: Swagger UI setup and serving
+
+#### Adding New Endpoints
+
+To add Swagger documentation for new endpoints:
+
+1. Add JSDoc comments above the route handler
+2. Include `@swagger` tag
+3. Define request/response schemas
+4. Specify security requirements
+5. Add parameter descriptions
+
+Example:
+```javascript
+/**
+ * @swagger
+ * /api/example:
+ *   get:
+ *     summary: Example endpoint
+ *     description: This is an example endpoint
+ *     tags: [Example]
+ *     responses:
+ *       200:
+ *         description: Success response
+ */
+router.get('/example', exampleController);
+```
 
 ## Docker Setup
 
