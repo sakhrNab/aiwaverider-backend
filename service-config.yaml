@@ -118,3 +118,7 @@ spec:
           valueFrom: { secretKeyRef: { name: PAYPAL_WEBHOOK_ID, key: latest } }
         - name: PAYPAL_SUBS_PLAN_ID
           valueFrom: { secretKeyRef: { name: PAYPAL_SUBS_PLAN_ID, key: latest } }
+        - name: FIREBASE_PROJECT_ID
+          value: "aiwaverider"
+        - name: AUTHORIZED_ADMIN_EMAILS
+          value: { secretKeyRef: { name: AUTHORIZED_ADMIN_EMAILS, key: latest } }

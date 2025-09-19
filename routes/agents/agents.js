@@ -419,6 +419,8 @@ router.post('/:id/free-download', (req, res, next) => {
 }, async (req, res) => {
   const agentId = req.params.id;
   const userId = req.user?.uid; // Optional - user might not be authenticated
+  const userAgent = req.headers['user-agent'] || '';
+  const isMobileRequest = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
   
   try {
     // Create a JavaScript Date object for the download timestamp
@@ -471,16 +473,29 @@ router.post('/:id/free-download', (req, res, next) => {
     await incrementAgentDownloadCount(agentId);
     
     // Return success with download info
-    res.json({
+    const downloadUrl = agentData.jsonFileUrl || agentData.downloadUrl || agentData.fileUrl;
+    
+    console.log(`[FREE-DOWNLOAD] Preparing response for agent ${agentId}:`);
+    console.log(`[FREE-DOWNLOAD] - jsonFileUrl: ${agentData.jsonFileUrl}`);
+    console.log(`[FREE-DOWNLOAD] - downloadUrl: ${agentData.downloadUrl}`);
+    console.log(`[FREE-DOWNLOAD] - fileUrl: ${agentData.fileUrl}`);
+    console.log(`[FREE-DOWNLOAD] - Final downloadUrl: ${downloadUrl}`);
+    console.log(`[FREE-DOWNLOAD] - Is mobile request: ${isMobileRequest}`);
+    
+    const responseData = {
       success: true,
       message: 'Free agent download processed successfully',
-      downloadUrl: agentData.jsonFileUrl || agentData.downloadUrl || agentData.fileUrl,
+      downloadUrl: downloadUrl,
       agent: {
         id: agentId,
         ...agentData,
         downloadDate: new Date() // Also use a regular Date here
       }
-    });
+    };
+    
+    console.log(`[FREE-DOWNLOAD] Sending response with downloadUrl: ${responseData.downloadUrl}`);
+    
+    res.json(responseData);
   } catch (error) {
     console.error('Error processing free download:', error);
     res.status(500).json({ 
@@ -489,6 +504,17 @@ router.post('/:id/free-download', (req, res, next) => {
       error: error.message
     });
   }
+});
+
+// Test route to verify download endpoint is accessible
+router.get('/:id/download-test', async (req, res) => {
+  console.log(`[DOWNLOAD TEST] Route hit for agent: ${req.params.id}`);
+  res.json({ 
+    success: true, 
+    message: 'Download test route working!', 
+    agentId: req.params.id,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // OPTIONS handler for CORS preflight requests
@@ -502,6 +528,14 @@ router.options('/:id/download', (req, res) => {
 
 // Download file proxy endpoint (no authentication required)
 router.get('/:id/download', async (req, res) => {
+  console.log(`[DOWNLOAD PROXY] ======= ROUTE HIT =======`);
+  console.log(`[DOWNLOAD PROXY] Request method: ${req.method}`);
+  console.log(`[DOWNLOAD PROXY] Request URL: ${req.url}`);
+  console.log(`[DOWNLOAD PROXY] Request path: ${req.path}`);
+  console.log(`[DOWNLOAD PROXY] Agent ID param: ${req.params.id}`);
+  console.log(`[DOWNLOAD PROXY] Query params:`, req.query);
+  console.log(`[DOWNLOAD PROXY] ======= PROCESSING =======`);
+  
   try {
     // Set CORS headers immediately for mobile compatibility
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -517,6 +551,9 @@ router.get('/:id/download', async (req, res) => {
     console.log(`[DOWNLOAD PROXY] Request received for agent ${agentId}, URL: ${fileUrl}`);
     console.log(`[DOWNLOAD PROXY] User-Agent: ${userAgent}`);
     console.log(`[DOWNLOAD PROXY] Is mobile request: ${isMobileRequest}`);
+    console.log(`[DOWNLOAD PROXY] Request headers:`, JSON.stringify(req.headers, null, 2));
+    console.log(`[DOWNLOAD PROXY] Referer: ${req.headers.referer || 'None'}`);
+    console.log(`[DOWNLOAD PROXY] Origin: ${req.headers.origin || 'None'}`);
     
     if (!fileUrl) {
       console.log('[DOWNLOAD PROXY] Missing URL parameter');
