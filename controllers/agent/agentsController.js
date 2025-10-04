@@ -28,9 +28,50 @@ const refreshAgentsCache = async () => {
     
     allAgentsCache = [];
     snapshot.forEach(doc => {
+      const data = doc.data();
+      
+      // Convert Firestore timestamps to JavaScript Date objects
+      if (data.createdAt) {
+        if (data.createdAt.toDate && typeof data.createdAt.toDate === 'function') {
+          data.createdAt = data.createdAt.toDate();
+        } else if (data.createdAt._seconds) {
+          data.createdAt = new Date(data.createdAt._seconds * 1000);
+        } else if (typeof data.createdAt === 'string') {
+          // Handle ISO string format like "2025-06-23T20:20:55.452Z"
+          data.createdAt = new Date(data.createdAt);
+        }
+      }
+      if (data.updatedAt) {
+        if (data.updatedAt.toDate && typeof data.updatedAt.toDate === 'function') {
+          data.updatedAt = data.updatedAt.toDate();
+        } else if (data.updatedAt._seconds) {
+          data.updatedAt = new Date(data.updatedAt._seconds * 1000);
+        } else if (typeof data.updatedAt === 'string') {
+          data.updatedAt = new Date(data.updatedAt);
+        }
+      }
+      if (data.analyzedAt) {
+        if (data.analyzedAt.toDate && typeof data.analyzedAt.toDate === 'function') {
+          data.analyzedAt = data.analyzedAt.toDate();
+        } else if (data.analyzedAt._seconds) {
+          data.analyzedAt = new Date(data.analyzedAt._seconds * 1000);
+        } else if (typeof data.analyzedAt === 'string') {
+          data.analyzedAt = new Date(data.analyzedAt);
+        }
+      }
+      if (data.lastTransformed) {
+        if (data.lastTransformed.toDate && typeof data.lastTransformed.toDate === 'function') {
+          data.lastTransformed = data.lastTransformed.toDate();
+        } else if (data.lastTransformed._seconds) {
+          data.lastTransformed = new Date(data.lastTransformed._seconds * 1000);
+        } else if (typeof data.lastTransformed === 'string') {
+          data.lastTransformed = new Date(data.lastTransformed);
+        }
+      }
+      
       allAgentsCache.push({
         id: doc.id,
-        ...doc.data()
+        ...data
       });
     });
     
@@ -39,7 +80,7 @@ const refreshAgentsCache = async () => {
     
     logger.info(`✅ Loaded ${allAgentsCache.length} agents into memory cache in ${loadTime}ms`);
     
-    await setCache('agents:total:count', allAgentsCache.length);
+    await setCache('agents:count:total', allAgentsCache.length);
     return true;
   } catch (error) {
     logger.error('❌ Error refreshing agents cache:', error);
@@ -377,7 +418,8 @@ const getAgents = async (req, res) => {
       limit = 20,
       offset = 0,
       lastVisibleId,
-      filter
+      filter,
+      refresh = false
     } = req.query;
     
     const finalSearchQuery = searchQuery || search;
@@ -401,13 +443,19 @@ const getAgents = async (req, res) => {
       offset: parsedOffset
     });
     
-    // 1. Ensure in-memory cache is loaded
+    // 1. Force refresh cache if requested
+    if (refresh === 'true' || refresh === true) {
+      logger.info('🔄 Force refreshing agents cache due to refresh parameter');
+      await refreshAgentsCache();
+    }
+    
+    // 2. Ensure in-memory cache is loaded
     const cacheLoaded = await ensureCacheLoaded();
     if (!cacheLoaded || !allAgentsCache) {
       throw new Error('Failed to load agents cache');
     }
     
-    // 2. Check Redis cache for this specific query
+    // 3. Check Redis cache for this specific query
     const cacheKey = generateResultsCacheKey(finalSearchQuery, filters, parsedLimit, parsedOffset);
     const cachedResult = await getCache(cacheKey);
     
@@ -1642,8 +1690,12 @@ const refreshCache = async (req, res) => {
     const success = await refreshAgentsCache();
     
     if (success) {
+      // Clear all agent-related cache patterns
       await deleteCacheByPattern('agents:results:*');
-      logger.info('🧹 Cleared cached search results');
+      await deleteCacheByPattern('agents:search:*');
+      await deleteCacheByPattern('agents:count:*');
+      await deleteCacheByPattern('agent:*');
+      logger.info('🧹 Cleared all agent-related cache patterns');
       
       return res.status(200).json({
         success: true,

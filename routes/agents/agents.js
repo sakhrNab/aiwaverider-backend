@@ -133,6 +133,13 @@ router.get('/refresh-cache', validateFirebaseToken, (req, res) => {
  *           type: string
  *         description: Comma-separated list of tags to filter by
  *         example: "writing,content,ai"
+ *       - in: query
+ *         name: refresh
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: Force refresh the agents cache from database (useful for development and testing)
+ *         example: true
  *     responses:
  *       200:
  *         description: List of agents retrieved successfully
@@ -172,6 +179,13 @@ router.get('/', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), 
  *           maximum: 50
  *           default: 10
  *         description: Number of featured agents to return
+ *       - in: query
+ *         name: refresh
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: Force refresh the agents cache from database (useful for development and testing)
+ *         example: true
  *     responses:
  *       200:
  *         description: Featured agents retrieved successfully
@@ -215,6 +229,13 @@ router.get('/featured', publicCacheMiddleware({ duration: getFeaturedCacheDurati
  *           maximum: 50
  *           default: 10
  *         description: Number of latest agents to return
+ *       - in: query
+ *         name: refresh
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: Force refresh the agents cache from database (useful for development and testing)
+ *         example: true
  *     responses:
  *       200:
  *         description: Latest agents retrieved successfully
@@ -249,6 +270,14 @@ router.get('/latest', publicCacheMiddleware({ duration: getDefaultCacheDuration(
  *     summary: Get total agent count
  *     description: Get the total number of agents in the system
  *     tags: [Agents]
+ *     parameters:
+ *       - in: query
+ *         name: refresh
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: Force refresh the agents cache from database (useful for development and testing)
+ *         example: true
  *     responses:
  *       200:
  *         description: Agent count retrieved successfully

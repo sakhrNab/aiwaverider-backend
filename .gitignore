@@ -27,3 +27,12 @@ package-lock*
 
 # unneccessary generated files
 *.$*
+
+# Security: Old insecure token generation routes (REMOVED)
+# These files should be deleted from the codebase
+
+# Security: Any token generation scripts
+scripts/generate-*.js
+scripts/get-*.js
+API_TOKEN_TESTING_GUIDE.md
+EXTERNAL_API_GUIDE.md

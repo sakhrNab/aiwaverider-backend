@@ -236,14 +236,18 @@ router.get('/:id', async (req, res) => {
  *                 type: string
  *                 description: Tool URL
  *                 example: "https://example.com/tool"
- *               keyword:
- *                 type: string
- *                 description: Comma-separated keywords
- *                 example: "coding,development,ai"
+ *               keywords:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Keywords (array of strings)
+ *                 example: ["coding", "development", "ai"]
  *               category:
- *                 type: string
- *                 description: Tool category
- *                 example: "Development"
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Tool categories (array of strings)
+ *                 example: ["Productivity", "AI Tools"]
  *               tags:
  *                 type: string
  *                 description: Comma-separated tags
@@ -288,7 +292,7 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
     }
     
     // Extract fields from request body
-    const { title, description, link, keyword, category, additionalHTML } = req.body;
+    const { title, description, link, keyword, keywords, category, additionalHTML } = req.body;
     
     // Handle tags which might be a string, array, or missing
     let tags = [];
@@ -306,16 +310,32 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
     }
     
     // Handle keywords which might be a string, array, or missing
-    let keywords = [];
-    if (keyword) {
-      if (Array.isArray(keyword)) {
-        keywords = keyword;
-      } else if (typeof keyword === 'string') {
+    let processedKeywords = [];
+    const keywordsInput = keywords || keyword; // Support both 'keywords' and 'keyword' for backward compatibility
+    if (keywordsInput) {
+      if (Array.isArray(keywordsInput)) {
+        processedKeywords = keywordsInput;
+      } else if (typeof keywordsInput === 'string') {
         // If it's a comma-separated string, split it
-        if (keyword.includes(',')) {
-          keywords = keyword.split(',').map(kw => kw.trim());
+        if (keywordsInput.includes(',')) {
+          processedKeywords = keywordsInput.split(',').map(kw => kw.trim());
         } else {
-          keywords = [keyword];
+          processedKeywords = [keywordsInput];
+        }
+      }
+    }
+    
+    // Handle category which might be a string, array, or missing
+    let processedCategory = [];
+    if (category) {
+      if (Array.isArray(category)) {
+        processedCategory = category;
+      } else if (typeof category === 'string') {
+        // If it's a comma-separated string, split it
+        if (category.includes(',')) {
+          processedCategory = category.split(',').map(cat => cat.trim());
+        } else {
+          processedCategory = [category];
         }
       }
     }
@@ -325,8 +345,8 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
     console.log('Title:', title);
     console.log('Description:', description);
     console.log('Link:', link);
-    console.log('Keyword:', keyword);
-    console.log('Category:', category);
+    console.log('Keywords:', processedKeywords);
+    console.log('Category:', processedCategory);
     console.log('Additional HTML:', additionalHTML);
     console.log('Tags:', tags);
     console.log('Image file:', req.file);
@@ -402,9 +422,9 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
       description,
       link: safeLink,
       image: imageUrl || '',
-      keywords: keywords || [],  // Store as array of keywords
+      keywords: processedKeywords,  // Store as array of keywords
       tags: tags || [],
-      category: category || '',
+      category: processedCategory,  // Store as array of categories
       additionalHTML: additionalHTML || '',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -469,14 +489,18 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
  *                 type: string
  *                 description: Tool URL
  *                 example: "https://example.com/updated-tool"
- *               keyword:
- *                 type: string
- *                 description: Comma-separated keywords
- *                 example: "coding,development,ai,updated"
+ *               keywords:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Keywords (array of strings)
+ *                 example: ["coding", "development", "ai", "updated"]
  *               category:
- *                 type: string
- *                 description: Tool category
- *                 example: "Development"
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Tool categories (array of strings)
+ *                 example: ["Productivity", "AI Tools"]
  *               tags:
  *                 type: string
  *                 description: Comma-separated tags
@@ -538,15 +562,31 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
     
     // Handle keywords which might be a string, array, or missing
     let keywords = undefined;
-    if (keyword) {
-      if (Array.isArray(keyword)) {
-        keywords = keyword;
-      } else if (typeof keyword === 'string') {
+    const keywordsInput = req.body.keywords || keyword; // Support both 'keywords' and 'keyword' for backward compatibility
+    if (keywordsInput) {
+      if (Array.isArray(keywordsInput)) {
+        keywords = keywordsInput;
+      } else if (typeof keywordsInput === 'string') {
         // If it's a comma-separated string, split it
-        if (keyword.includes(',')) {
-          keywords = keyword.split(',').map(kw => kw.trim());
+        if (keywordsInput.includes(',')) {
+          keywords = keywordsInput.split(',').map(kw => kw.trim());
         } else {
-          keywords = [keyword];
+          keywords = [keywordsInput];
+        }
+      }
+    }
+
+    // Handle category which might be a string, array, or missing
+    let processedCategory = undefined;
+    if (category) {
+      if (Array.isArray(category)) {
+        processedCategory = category;
+      } else if (typeof category === 'string') {
+        // If it's a comma-separated string, split it
+        if (category.includes(',')) {
+          processedCategory = category.split(',').map(cat => cat.trim());
+        } else {
+          processedCategory = [category];
         }
       }
     }
@@ -624,7 +664,7 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
       ...(imageUrl && { image: imageUrl }),
       ...(keywords && { keywords }),  // Store as array of keywords
       ...(tags && { tags }),
-      ...(category && { category }),
+      ...(processedCategory && { category: processedCategory }), // Store as array of categories
       ...(additionalHTML && { additionalHTML }),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedBy: req.user.uid

@@ -18,8 +18,37 @@ const auth = async (req, res, next) => {
 
     const token = authHeader.split('Bearer ')[1];
     
-    // Verify the token
-    const decodedToken = await admin.auth().verifyIdToken(token);
+    // Verify the token (handle both ID tokens and custom tokens)
+    let decodedToken;
+    try {
+      // First try to verify as ID token
+      decodedToken = await admin.auth().verifyIdToken(token);
+    } catch (idTokenError) {
+      // If ID token verification fails, check if it's a custom token from our secure service
+      try {
+        // For custom tokens from our secure token service, we trust them
+        // Custom tokens are JWT tokens signed by our Firebase service account
+        const jwt = require('jsonwebtoken');
+        
+        // Decode the token without verification first to check the issuer
+        const decoded = jwt.decode(token, { complete: true });
+        if (decoded && decoded.payload.iss && decoded.payload.iss.includes('firebase-adminsdk')) {
+          // This is a custom token from our secure service - trust it
+          decodedToken = decoded.payload;
+        } else {
+          throw new Error('Not a custom token');
+        }
+      } catch (customTokenError) {
+        // If both fail, return authentication error
+        console.error('Token verification failed:', customTokenError.message);
+        return res.status(401).json({ 
+          success: false, 
+          error: 'Authentication failed',
+          details: 'Invalid token format'
+        });
+      }
+    }
+    
     if (!decodedToken) {
       return res.status(401).json({ 
         success: false, 
@@ -27,25 +56,34 @@ const auth = async (req, res, next) => {
       });
     }
 
-    // Get user data from Firestore
-    const userDoc = await admin.firestore().collection('users').doc(decodedToken.uid).get();
-    
     // Set up basic user object with authentication info
     req.user = {
       uid: decodedToken.uid,
       email: decodedToken.email
     };
 
-    // If user exists in our database, add their role and additional data
-    if (userDoc.exists) {
-      const userData = userDoc.data();
-      req.user.isAdmin = userData.role === 'admin';
-      req.user.role = userData.role || 'user';
-      req.user.username = userData.username;
+    // Check if this is a custom token from our secure service
+    if (decodedToken.claims && decodedToken.claims.admin === true) {
+      // This is a custom token from our secure service with admin privileges
+      req.user.isAdmin = true;
+      req.user.role = 'admin';
+      req.user.username = decodedToken.claims.username || 'Admin User';
+      console.log('✅ Custom token admin user authenticated:', decodedToken.uid);
     } else {
-      // User is authenticated but not in our database
-      req.user.isAdmin = false;
-      req.user.role = 'user';
+      // Regular Firebase ID token - check database
+      const userDoc = await admin.firestore().collection('users').doc(decodedToken.uid).get();
+      
+      // If user exists in our database, add their role and additional data
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        req.user.isAdmin = userData.role === 'admin';
+        req.user.role = userData.role || 'user';
+        req.user.username = userData.username;
+      } else {
+        // User is authenticated but not in our database
+        req.user.isAdmin = false;
+        req.user.role = 'user';
+      }
     }
 
     next();

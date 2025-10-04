@@ -2,6 +2,12 @@ require('dotenv').config();
 const admin = require('firebase-admin');
 const path = require('path');
 
+// Force IPv4 connections to avoid IPv6 timeout issues
+process.env.GRPC_DNS_RESOLVER = 'native';
+process.env.GRPC_LOOKUP_SERVICE_CONFIG = '{"serviceConfig":{"loadBalancingConfig":{"pick_first":{"shuffleAddressList":false}}}}';
+// Force Node.js to prefer IPv4
+process.env.NODE_OPTIONS = '--dns-result-order=ipv4first';
+
 const initializeFirebase = () => {
   if (admin.apps.length) {
     console.log('Firebase already initialized, returning existing instance');
@@ -99,7 +105,11 @@ if (firebaseAdmin) {
   try {
     console.log('Initializing Firestore...');
     db = firebaseAdmin.firestore();
-    db.settings({ ignoreUndefinedProperties: true });
+    db.settings({ 
+      ignoreUndefinedProperties: true,
+      // Force IPv4 connections to avoid IPv6 timeout issues
+      preferRest: true
+    });
     console.log('Firestore initialized successfully');
   } catch (error) {
     console.error('Failed to initialize Firestore:', error);

@@ -42,53 +42,46 @@ app.locals.upload = uploadMiddleware;
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ------------------ Swagger Documentation ------------------
-// Serve Swagger UI only in development
-if (!isProduction) {
-  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-    customCss: '.swagger-ui .topbar { display: none }',
-    customSiteTitle: 'AIWaverider API Documentation',
-    swaggerOptions: {
-      persistAuthorization: true,
+// Serve Swagger UI in both development and production
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: 'AIWaverider API Documentation',
+  swaggerOptions: {
+    persistAuthorization: true,
     displayRequestDuration: true,
     filter: true,
     showExtensions: true,
-    showCommonExtensions: true
+    showCommonExtensions: true,
+    // Enable CORS for Swagger UI
+    requestInterceptor: (req) => {
+      req.headers['Access-Control-Allow-Origin'] = '*';
+      req.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS';
+      req.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With';
+      return req;
+    }
   }
-  }));
+}));
 
-  // Serve raw Swagger JSON
-  app.get('/api-docs.json', (req, res) => {
-    res.setHeader('Content-Type', 'application/json');
-    res.send(swaggerSpec);
-  });
-} else {
-  // Production: Return message instead of Swagger
-  app.get('/api-docs', (req, res) => {
-    res.status(404).json({
-      error: 'API Documentation not available in production',
-      message: 'Swagger documentation is only available in development environment',
-      contact: 'For API documentation, please contact the development team'
-    });
-  });
-  
-  app.get('/api-docs.json', (req, res) => {
-    res.status(404).json({
-      error: 'API Documentation not available in production',
-      message: 'Swagger JSON is only available in development environment'
-    });
-  });
-}
+// Serve raw Swagger JSON
+app.get('/api-docs.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.send(swaggerSpec);
+});
 
 // ------------------ CORS Configuration ------------------
 const allowedOrigins = isProduction
   ? (process.env.CORS_ORIGINS || '').split(',').map(origin => origin.trim())
-  : ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:45977']; // Frontend origins
+  : ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:45977', 'http://localhost:4000', 'http://127.0.0.1:4000']; // Frontend origins + backend self-requests
 
 // Create a CORS middleware function with proper configuration
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps, curl requests, or same origin)
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else if (isDevelopment && origin && origin.includes('localhost')) {
+      // In development, allow any localhost origin
       callback(null, true);
     } else {
       logger.warn(`CORS blocked request from origin: ${origin}`);

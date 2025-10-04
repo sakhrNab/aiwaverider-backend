@@ -122,3 +122,11 @@ spec:
           value: "aiwaverider"
         - name: AUTHORIZED_ADMIN_EMAILS
           value: { secretKeyRef: { name: AUTHORIZED_ADMIN_EMAILS, key: latest } }
+        - name: DEV_SECRET_KEY
+          valueFrom: { secretKeyRef: { name: DEV_SECRET_KEY, key: latest } }
+        - name: SECURE_TOKEN_API_KEY
+          valueFrom: { secretKeyRef: { name: SECURE_TOKEN_API_KEY, key: latest } }
+        - name: N8N_ALLOWED_IPS
+          valueFrom: { secretKeyRef: { name: N8N_ALLOWED_IPS, key: latest } }
+        - name: FIREBASE_WEB_API_KEY
+          valueFrom: { secretKeyRef: { name: FIREBASE_WEB_API_KEY, key: latest } }

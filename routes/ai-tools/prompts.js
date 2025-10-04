@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const router = express.Router();
 const admin = require('firebase-admin');
 const { auth } = require('../../middleware/authenticationMiddleware');
@@ -356,6 +356,12 @@ router.get('/', async (req, res) => {
       const responseTime = Date.now() - startTime;
       logger.info(`⚡ Cache HIT for ${cacheKey} | Response time: ${responseTime}ms`);
       
+      // Set cache headers for browser caching
+      res.set({
+        'Cache-Control': 'public, max-age=300', // 5 minutes
+        'ETag': `W/"prompts-${cacheKey}-${Date.now()}"`
+      });
+      
       return res.status(200).json({
         ...cachedResult,
         responseTime,
@@ -415,6 +421,12 @@ router.get('/', async (req, res) => {
       cached: true
     });
     
+    // Set cache headers for browser caching
+    res.set({
+      'Cache-Control': 'public, max-age=300', // 5 minutes
+      'ETag': `W/"prompts-${cacheKey}-${Date.now()}"`
+    });
+    
     return res.status(200).json(response);
     
   } catch (error) {
@@ -427,6 +439,37 @@ router.get('/', async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/prompts/count:
+ *   get:
+ *     summary: Get total count of prompts
+ *     description: Get the total number of prompts in the system
+ *     tags: [Prompts]
+ *     responses:
+ *       200:
+ *         description: Prompt count retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 totalCount:
+ *                   type: integer
+ *                   example: 150
+ *                 fromCache:
+ *                   type: boolean
+ *                   description: Whether the response came from cache
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 /**
  * @route   GET /api/prompts/count
  * @desc    Get total count of prompts
@@ -468,6 +511,45 @@ router.get('/count', async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/prompts/categories:
+ *   get:
+ *     summary: Get all prompt categories with counts
+ *     description: Get all available prompt categories along with the count of prompts in each category
+ *     tags: [Prompts]
+ *     responses:
+ *       200:
+ *         description: Categories retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       name:
+ *                         type: string
+ *                         example: "AI Prompts"
+ *                       count:
+ *                         type: integer
+ *                         example: 25
+ *                 fromCache:
+ *                   type: boolean
+ *                   description: Whether the response came from cache
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 /**
  * @route   GET /api/prompts/categories
  * @desc    Get all prompt categories with counts
@@ -527,6 +609,44 @@ router.get('/categories', async (req, res) => {
 });
 
 /**
+ * @swagger
+ * /api/prompts/featured:
+ *   get:
+ *     summary: Get featured prompts
+ *     description: Get a list of featured prompts, sorted by creation date
+ *     tags: [Prompts]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 50
+ *           default: 10
+ *         description: Number of featured prompts to return
+ *     responses:
+ *       200:
+ *         description: Featured prompts retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 prompts:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Prompt'
+ *                 fromCache:
+ *                   type: boolean
+ *                   description: Whether the response came from cache
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+/**
  * @route   GET /api/prompts/featured
  * @desc    Get featured prompts
  * @access  Public
@@ -576,6 +696,57 @@ router.get('/featured', async (req, res) => {
 });
 
 /**
+ * @swagger
+ * /api/prompts/user/{userId}/liked:
+ *   get:
+ *     summary: Get prompts liked by a user
+ *     description: Get all prompts that have been liked by a specific user
+ *     tags: [Prompts]
+ *     security:
+ *       - FirebaseAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID to get liked prompts for
+ *         example: "user123"
+ *     responses:
+ *       200:
+ *         description: Liked prompts retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Prompt'
+ *                 count:
+ *                   type: integer
+ *                   description: Number of liked prompts
+ *                 userId:
+ *                   type: string
+ *                   description: User ID
+ *       403:
+ *         description: Access denied - users can only view their own liked prompts
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+/**
  * @route   GET /api/prompts/user/:userId/liked
  * @desc    Get prompts liked by a user
  * @access  Private (Authenticated users)
@@ -618,6 +789,48 @@ router.get('/user/:userId/liked', auth, async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/prompts/cache/refresh:
+ *   post:
+ *     summary: Manual cache refresh (Admin only)
+ *     description: Manually refresh the prompts cache. This endpoint is only available to admin users.
+ *     tags: [Prompts]
+ *     security:
+ *       - FirebaseAuth: []
+ *     responses:
+ *       200:
+ *         description: Cache refreshed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Prompts cache refreshed successfully. Loaded 150 prompts"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                 promptCount:
+ *                   type: integer
+ *                   description: Number of prompts loaded into cache
+ *       403:
+ *         description: Access denied - Admin privileges required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 /**
  * @route   POST /api/prompts/cache/refresh
  * @desc    Manual cache refresh (Admin only)
@@ -662,6 +875,71 @@ router.post('/cache/refresh', auth, async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/prompts/{id}:
+ *   get:
+ *     summary: Get a single prompt by ID
+ *     description: Retrieve a specific prompt by its unique identifier
+ *     tags: [Prompts]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Unique identifier of the prompt
+ *         example: "prompt-123"
+ *       - in: query
+ *         name: skipCache
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: Skip cache and fetch fresh data from database
+ *       - in: query
+ *         name: refresh
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: Force refresh from database (alias for skipCache)
+ *     responses:
+ *       200:
+ *         description: Prompt retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Prompt retrieved successfully"
+ *                 data:
+ *                   $ref: '#/components/schemas/Prompt'
+ *                 fromCache:
+ *                   type: boolean
+ *                   description: Whether the response came from cache
+ *       400:
+ *         description: Invalid prompt ID format
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: Prompt not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 /**
  * @route   GET /api/prompts/:id
  * @desc    Get a single prompt by ID
@@ -753,16 +1031,104 @@ router.get('/:id', async (req, res) => {
 });
 
 /**
+ * @swagger
+ * /api/prompts:
+ *   post:
+ *     summary: Create a new prompt
+ *     description: Create a new prompt in the system. This endpoint is only available to admin users.
+ *     tags: [Prompts]
+ *     security:
+ *       - FirebaseAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - title
+ *               - description
+ *             properties:
+ *               title:
+ *                 type: string
+ *                 description: Title of the prompt
+ *                 example: "AI Writing Assistant Prompt"
+ *               description:
+ *                 type: string
+ *                 description: Description of the prompt
+ *                 example: "A comprehensive prompt for AI writing assistance"
+ *               link:
+ *                 type: string
+ *                 description: External link related to the prompt
+ *                 example: "https://example.com/prompt"
+ *               keyword:
+ *                 type: string
+ *                 description: Comma-separated keywords
+ *                 example: "writing,productivity,AI"
+ *               category:
+ *                 type: string
+ *                 description: Category of the prompt
+ *                 example: "AI Prompts"
+ *               tags:
+ *                 type: string
+ *                 description: Comma-separated tags
+ *                 example: "writing,assistant,productivity"
+ *               additionalHTML:
+ *                 type: string
+ *                 description: Additional HTML content
+ *               image:
+ *                 type: string
+ *                 format: binary
+ *                 description: Result/output image file for the prompt
+ *               inputImage:
+ *                 type: string
+ *                 format: binary
+ *                 description: Input image for comparison (file upload or base64 data URL)
+ *                 example: "input-image.jpg"
+ *     responses:
+ *       201:
+ *         description: Prompt created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   $ref: '#/components/schemas/Prompt'
+ *       400:
+ *         description: Bad request - missing required fields
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: Access denied - Admin privileges required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+/**
  * @route   POST /api/prompts
  * @desc    Create a new prompt
  * @access  Private (Admin only)
  */
-router.post('/', auth, upload.single('image'), async (req, res) => {
+router.post('/', auth, upload.fields([
+  { name: 'image', maxCount: 1 },
+  { name: 'inputImage', maxCount: 1 }
+]), async (req, res) => {
   try {
-    console.log('Creating prompt with data:', req.body);
-    
     // Check if user is admin
-    if (!req.user.isAdmin) {
+    if (!req.user || !req.user.isAdmin) {
       return res.status(403).json({
         success: false,
         error: 'Access denied. Admin privileges required.'
@@ -800,13 +1166,6 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
       }
     }
     
-    console.log('Extracted fields:');
-    console.log('Title:', title);
-    console.log('Description:', description);
-    console.log('Category:', category);
-    console.log('Tags:', tags);
-    console.log('Keywords:', keywords);
-    console.log('Image file:', req.file);
     
     // Validate required fields
     if (!title || !description) {
@@ -819,45 +1178,47 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
     // Ensure link has a default value if empty
     const safeLink = link || '';
     
-    // Handle image upload (same logic as AI tools)
+    // Handle image upload - support both file uploads and binary data
     let imageUrl = '';
-    if (req.file) {
-      console.log('File received:', req.file.originalname, req.file.mimetype, req.file.size);
+    
+    // Check for file upload (multer)
+    if (req.files && req.files.image) {
+      // console.log('File received via multer:', req.files.image[0].originalname, req.files.image[0].mimetype, req.files.image[0].size);
       
       const timestamp = Date.now();
-      const filename = `${timestamp}-${req.file.originalname.replace(/\s+/g, '-')}`;
+      const filename = `${timestamp}-${req.files.image[0].originalname.replace(/\s+/g, '-')}`;
       
       try {
         const storage = admin.storage();
         const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
         
         if (bucketName) {
-          console.log('Using Firebase Storage bucket:', bucketName);
+          // console.log('Using Firebase Storage bucket:', bucketName);
           
           const bucket = storage.bucket(bucketName);
           const fileName = `prompts/${filename}`;
           const fileRef = bucket.file(fileName);
           
-          await fileRef.save(req.file.buffer, {
+          await fileRef.save(req.files.image[0].buffer, {
             metadata: {
-              contentType: req.file.mimetype,
+              contentType: req.files.image[0].mimetype,
             },
           });
           
           await fileRef.makePublic();
           imageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
-          console.log('Firebase Storage URL:', imageUrl);
+          // console.log('Firebase Storage URL:', imageUrl);
         } else {
-          console.log('Firebase Storage bucket not configured. Using local storage.');
+          // console.log('Firebase Storage bucket not configured. Using local storage.');
           
           const uploadsDir = path.join(__dirname, '../../uploads');
           if (!fs.existsSync(uploadsDir)) {
             fs.mkdirSync(uploadsDir, { recursive: true });
           }
           
-          fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
+          fs.writeFileSync(path.join(uploadsDir, filename), req.files.image[0].buffer);
           imageUrl = `/uploads/${filename}`;
-          console.log('Local storage URL:', imageUrl);
+          // console.log('Local storage URL:', imageUrl);
         }
       } catch (error) {
         console.error('Error uploading image:', error);
@@ -867,18 +1228,258 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
           fs.mkdirSync(uploadsDir, { recursive: true });
         }
         
-        fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
+        fs.writeFileSync(path.join(uploadsDir, filename), req.files.image[0].buffer);
         imageUrl = `/uploads/${filename}`;
-        console.log('Local storage URL:', imageUrl);
+        // console.log('Local storage URL:', imageUrl);
       }
     }
+    // Check for binary data in request body (from workflows like n8n)
+    else if (req.body.image && typeof req.body.image === 'string' && req.body.image.startsWith('data:')) {
+      // console.log('✅ Binary data received in request body (data: URL format)');
+      
+      try {
+        // Extract base64 data from data URL
+        const base64Data = req.body.image.split(',')[1];
+        const mimeType = req.body.image.split(',')[0].split(':')[1].split(';')[0];
+        const extension = mimeType.split('/')[1] || 'jpg';
+        
+        const timestamp = Date.now();
+        const filename = `${timestamp}-workflow-image.${extension}`;
+        const buffer = Buffer.from(base64Data, 'base64');
+        
+        // console.log('Processing binary data:', { mimeType, extension, size: buffer.length });
+        
+        const storage = admin.storage();
+        const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
+        
+        if (bucketName) {
+          // console.log('Using Firebase Storage bucket for binary data:', bucketName);
+          
+          const bucket = storage.bucket(bucketName);
+          const fileName = `prompts/${filename}`;
+          const fileRef = bucket.file(fileName);
+          
+          await fileRef.save(buffer, {
+            metadata: {
+              contentType: mimeType,
+            },
+          });
+          
+          await fileRef.makePublic();
+          imageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
+          // console.log('Firebase Storage URL for binary data:', imageUrl);
+        } else {
+          // console.log('Firebase Storage bucket not configured. Using local storage for binary data.');
+          
+          const uploadsDir = path.join(__dirname, '../../uploads');
+          if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+          }
+          
+          fs.writeFileSync(path.join(uploadsDir, filename), buffer);
+          imageUrl = `/uploads/${filename}`;
+          // console.log('Local storage URL for binary data:', imageUrl);
+        }
+      } catch (error) {
+        console.error('Error processing binary data:', error);
+        // Continue without image if binary data processing fails
+      }
+    }
+    // Check for binary data as Buffer (alternative format)
+    else if (req.body.image && Buffer.isBuffer(req.body.image)) {
+      // console.log('✅ Buffer data received in request body');
+      
+      try {
+        const timestamp = Date.now();
+        const filename = `${timestamp}-workflow-buffer.jpg`;
+        
+        // console.log('Processing buffer data:', { size: req.body.image.length });
+        
+        const storage = admin.storage();
+        const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
+        
+        if (bucketName) {
+          // console.log('Using Firebase Storage bucket for buffer data:', bucketName);
+          
+          const bucket = storage.bucket(bucketName);
+          const fileName = `prompts/${filename}`;
+          const fileRef = bucket.file(fileName);
+          
+          await fileRef.save(req.body.image, {
+            metadata: {
+              contentType: 'image/jpeg',
+            },
+          });
+          
+          await fileRef.makePublic();
+          imageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
+          // console.log('Firebase Storage URL for buffer data:', imageUrl);
+        } else {
+          // console.log('Firebase Storage bucket not configured. Using local storage for buffer data.');
+          
+          const uploadsDir = path.join(__dirname, '../../uploads');
+          if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+          }
+          
+          fs.writeFileSync(path.join(uploadsDir, filename), req.body.image);
+          imageUrl = `/uploads/${filename}`;
+          // console.log('Local storage URL for buffer data:', imageUrl);
+        }
+      } catch (error) {
+        console.error('Error processing buffer data:', error);
+        // Continue without image if buffer processing fails
+      }
+    }
+    // Catch-all case for debugging
+    else if (req.body.image) {
+      // console.log('❌ Image data received but in unrecognized format:');
+      // console.log('Type:', typeof req.body.image);
+      // console.log('Is Buffer:', Buffer.isBuffer(req.body.image));
+      // console.log('Is String:', typeof req.body.image === 'string');
+      // console.log('Starts with data:', req.body.image && typeof req.body.image === 'string' && req.body.image.startsWith('data:'));
+      // console.log('Value preview:', req.body.image ? String(req.body.image).substring(0, 100) + '...' : 'null/undefined');
+    }
+    
+    // console.log('Final imageUrl value:', imageUrl);
+    
+    // If no image was processed from req.body.image, try to extract from additionalHTML
+    if (!imageUrl && additionalHTML) {
+      // console.log('🔍 No image from body, checking additionalHTML for base64 image...');
+      const imgRegex = /<img[^>]+src="(data:image\/[^"]+)"/g;
+      const match = imgRegex.exec(additionalHTML);
+      
+      if (match && match[1]) {
+        // console.log('✅ Found base64 image in additionalHTML, storing in image field');
+        // Only set imageUrl if it's still empty to avoid overwriting processed images
+        if (!imageUrl) {
+        imageUrl = match[1]; // Store the base64 data URL directly
+        }
+      }
+    }
+    
+    // Handle input image if provided - support both file uploads and base64 data URLs
+    let inputImageUrl = '';
+    
+    // Check for input image file upload (multer)
+    if (req.files && req.files.inputImage) {
+      // console.log('Input image file received via multer:', req.files.inputImage.originalname, req.files.inputImage.mimetype, req.files.inputImage.size);
+      
+      const timestamp = Date.now();
+      const filename = `${timestamp}-input-${req.files.inputImage.originalname.replace(/\s+/g, '-')}`;
+      
+      try {
+        const storage = admin.storage();
+        const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
+        
+        if (bucketName) {
+          // console.log('Using Firebase Storage bucket for input image:', bucketName);
+          
+          const bucket = storage.bucket(bucketName);
+          const fileName = `prompts/input/${filename}`;
+          const fileRef = bucket.file(fileName);
+          
+          await fileRef.save(req.files.inputImage.buffer, {
+            metadata: {
+              contentType: req.files.inputImage.mimetype,
+            },
+          });
+          
+          await fileRef.makePublic();
+          inputImageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
+          // console.log('Firebase Storage URL for input image:', inputImageUrl);
+        } else {
+          // console.log('Firebase Storage bucket not configured. Using local storage for input image.');
+          
+          const uploadsDir = path.join(__dirname, '../../uploads/input');
+          if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+          }
+          
+          fs.writeFileSync(path.join(uploadsDir, filename), req.files.inputImage.buffer);
+          inputImageUrl = `/uploads/input/${filename}`;
+          // console.log('Local storage URL for input image:', inputImageUrl);
+        }
+      } catch (error) {
+        console.error('Error uploading input image:', error);
+        
+        const uploadsDir = path.join(__dirname, '../../uploads/input');
+        if (!fs.existsSync(uploadsDir)) {
+          fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+        
+        fs.writeFileSync(path.join(uploadsDir, filename), req.files.inputImage.buffer);
+        inputImageUrl = `/uploads/input/${filename}`;
+        // console.log('Local storage URL for input image:', inputImageUrl);
+      }
+    }
+    // Check for input image base64 data URL
+    else if (req.body.inputImage && typeof req.body.inputImage === 'string' && req.body.inputImage.startsWith('data:')) {
+      // console.log('Input image base64 data received');
+      
+      try {
+        // Extract base64 data from data URL
+        const base64Data = req.body.inputImage.split(',')[1];
+        const mimeType = req.body.inputImage.split(',')[0].split(':')[1].split(';')[0];
+        const extension = mimeType.split('/')[1] || 'jpg';
+        
+        const timestamp = Date.now();
+        const filename = `${timestamp}-input-image.${extension}`;
+        const buffer = Buffer.from(base64Data, 'base64');
+        
+        
+        const storage = admin.storage();
+        const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
+        
+        if (bucketName) {
+          // console.log('Using Firebase Storage bucket for input image:', bucketName);
+          
+          const bucket = storage.bucket(bucketName);
+          const fileName = `prompts/input/${filename}`;
+          const fileRef = bucket.file(fileName);
+          
+          await fileRef.save(buffer, {
+            metadata: {
+              contentType: mimeType,
+            },
+          });
+          
+          await fileRef.makePublic();
+          inputImageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
+          // console.log('Firebase Storage URL for input image:', inputImageUrl);
+        } else {
+          // console.log('Firebase Storage bucket not configured. Using local storage for input image.');
+          
+          const uploadsDir = path.join(__dirname, '../../uploads/input');
+          if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+          }
+          
+          fs.writeFileSync(path.join(uploadsDir, filename), buffer);
+          inputImageUrl = `/uploads/input/${filename}`;
+          // console.log('Local storage URL for input image:', inputImageUrl);
+        }
+      } catch (error) {
+        console.error('Error processing input image base64 data:', error);
+        // Fallback to storing as base64 if conversion fails
+        inputImageUrl = req.body.inputImage;
+      }
+    }
+
+    // Debug logging to track variable values
+    console.log('🔍 DEBUG - Final variable values before document creation:');
+    console.log('imageUrl:', imageUrl);
+    console.log('inputImageUrl:', inputImageUrl);
+    console.log('req.body.image type:', typeof req.body.image);
+    console.log('req.body.inputImage type:', typeof req.body.inputImage);
     
     // Prepare the document
     const newPrompt = {
       title,
       description,
       link: safeLink,
-      image: imageUrl || '',
+      image: imageUrl || '', // Result/output image
+      inputImage: inputImageUrl || '', // Input image for comparison
       keywords: keywords || [],
       tags: tags || [],
       category: category || '',
@@ -932,11 +1533,108 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
 });
 
 /**
+ * @swagger
+ * /api/prompts/{id}:
+ *   put:
+ *     summary: Update a prompt
+ *     description: Update an existing prompt in the system. This endpoint is only available to admin users.
+ *     tags: [Prompts]
+ *     security:
+ *       - FirebaseAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Unique identifier of the prompt to update
+ *         example: "prompt-123"
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title:
+ *                 type: string
+ *                 description: Updated title of the prompt
+ *                 example: "Updated AI Writing Assistant Prompt"
+ *               description:
+ *                 type: string
+ *                 description: Updated description of the prompt
+ *                 example: "An improved comprehensive prompt for AI writing assistance"
+ *               link:
+ *                 type: string
+ *                 description: Updated external link
+ *                 example: "https://example.com/updated-prompt"
+ *               keyword:
+ *                 type: string
+ *                 description: Updated comma-separated keywords
+ *                 example: "writing,productivity,AI,updated"
+ *               category:
+ *                 type: string
+ *                 description: Updated category of the prompt
+ *                 example: "AI Prompts"
+ *               tags:
+ *                 type: string
+ *                 description: Updated comma-separated tags
+ *                 example: "writing,assistant,productivity,updated"
+ *               additionalHTML:
+ *                 type: string
+ *                 description: Updated additional HTML content
+ *               isFeatured:
+ *                 type: boolean
+ *                 description: Whether the prompt should be featured
+ *               image:
+ *                 type: string
+ *                 format: binary
+ *                 description: Updated result/output image file for the prompt
+ *               inputImage:
+ *                 type: string
+ *                 format: binary
+ *                 description: Updated input image for comparison (file upload or base64 data URL)
+ *     responses:
+ *       200:
+ *         description: Prompt updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   $ref: '#/components/schemas/Prompt'
+ *       403:
+ *         description: Access denied - Admin privileges required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: Prompt not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+/**
  * @route   PUT /api/prompts/:id
  * @desc    Update a prompt
  * @access  Private (Admin only)
  */
-router.put('/:id', auth, upload.single('image'), async (req, res) => {
+router.put('/:id', auth, upload.fields([
+  { name: 'image', maxCount: 1 },
+  { name: 'inputImage', maxCount: 1 }
+]), async (req, res) => {
   try {
     // Check if user is admin
     if (!req.user.isAdmin) {
@@ -989,13 +1687,15 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
       }
     }
     
-    // Handle image upload
+    // Handle image upload - support both file uploads and binary data
     let imageUrl = undefined;
-    if (req.file) {
-      console.log('File received:', req.file.originalname, req.file.mimetype, req.file.size);
+    
+    // Check for file upload (multer)
+    if (req.files && req.files.image) {
+      // console.log('File received via multer:', req.files.image[0].originalname, req.files.image[0].mimetype, req.files.image[0].size);
       
       const timestamp = Date.now();
-      const filename = `${timestamp}-${req.file.originalname.replace(/\s+/g, '-')}`;
+      const filename = `${timestamp}-${req.files.image[0].originalname.replace(/\s+/g, '-')}`;
       
       try {
         const storage = admin.storage();
@@ -1006,9 +1706,9 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
           const fileName = `prompts/${filename}`;
           const fileRef = bucket.file(fileName);
           
-          await fileRef.save(req.file.buffer, {
+          await fileRef.save(req.files.image[0].buffer, {
             metadata: {
-              contentType: req.file.mimetype,
+              contentType: req.files.image[0].mimetype,
             },
           });
           
@@ -1020,7 +1720,7 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
             fs.mkdirSync(uploadsDir, { recursive: true });
           }
           
-          fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
+          fs.writeFileSync(path.join(uploadsDir, filename), req.files.image[0].buffer);
           imageUrl = `/uploads/${filename}`;
         }
       } catch (error) {
@@ -1030,10 +1730,211 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
           fs.mkdirSync(uploadsDir, { recursive: true });
         }
         
-        fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
+        fs.writeFileSync(path.join(uploadsDir, filename), req.files.image[0].buffer);
         imageUrl = `/uploads/${filename}`;
       }
     }
+    // Check for binary data in request body (from workflows like n8n)
+    else if (req.body.image && typeof req.body.image === 'string' && req.body.image.startsWith('data:')) {
+      // console.log('Binary data received in request body for update');
+      
+      try {
+        // Extract base64 data from data URL
+        const base64Data = req.body.image.split(',')[1];
+        const mimeType = req.body.image.split(',')[0].split(':')[1].split(';')[0];
+        const extension = mimeType.split('/')[1] || 'jpg';
+        
+        const timestamp = Date.now();
+        const filename = `${timestamp}-workflow-image-update.${extension}`;
+        const buffer = Buffer.from(base64Data, 'base64');
+        
+        // console.log('Processing binary data for update:', { mimeType, extension, size: buffer.length });
+        
+        const storage = admin.storage();
+        const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
+        
+        if (bucketName) {
+          const bucket = storage.bucket(bucketName);
+          const fileName = `prompts/${filename}`;
+          const fileRef = bucket.file(fileName);
+          
+          await fileRef.save(buffer, {
+            metadata: {
+              contentType: mimeType,
+            },
+          });
+          
+          await fileRef.makePublic();
+          imageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
+        } else {
+          const uploadsDir = path.join(__dirname, '../../uploads');
+          if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+          }
+          
+          fs.writeFileSync(path.join(uploadsDir, filename), buffer);
+          imageUrl = `/uploads/${filename}`;
+        }
+      } catch (error) {
+        console.error('Error processing binary data for update:', error);
+        // Continue without image if binary data processing fails
+      }
+    }
+    // Check for binary data as Buffer (alternative format)
+    else if (req.body.image && Buffer.isBuffer(req.body.image)) {
+      // console.log('Buffer data received in request body for update');
+      
+      try {
+        const timestamp = Date.now();
+        const filename = `${timestamp}-workflow-buffer-update.jpg`;
+        
+        // console.log('Processing buffer data for update:', { size: req.body.image.length });
+        
+        const storage = admin.storage();
+        const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
+        
+        if (bucketName) {
+          const bucket = storage.bucket(bucketName);
+          const fileName = `prompts/${filename}`;
+          const fileRef = bucket.file(fileName);
+          
+          await fileRef.save(req.body.image, {
+            metadata: {
+              contentType: 'image/jpeg',
+            },
+          });
+          
+          await fileRef.makePublic();
+          imageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
+        } else {
+          const uploadsDir = path.join(__dirname, '../../uploads');
+          if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+          }
+          
+          fs.writeFileSync(path.join(uploadsDir, filename), req.body.image);
+          imageUrl = `/uploads/${filename}`;
+        }
+      } catch (error) {
+        console.error('Error processing buffer data for update:', error);
+        // Continue without image if buffer processing fails
+      }
+    }
+    
+    // Handle input image if provided - support both file uploads and base64 data URLs
+    let inputImageUrl = undefined;
+    
+    // Check for input image file upload (multer)
+    if (req.files && req.files.inputImage) {
+      // console.log('Input image file received via multer for update:', req.files.inputImage[0].originalname, req.files.inputImage[0].mimetype, req.files.inputImage[0].size);
+      
+      const timestamp = Date.now();
+      const filename = `${timestamp}-input-update-${req.files.inputImage[0].originalname.replace(/\s+/g, '-')}`;
+      
+      try {
+        const storage = admin.storage();
+        const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
+        
+        if (bucketName) {
+          // console.log('Using Firebase Storage bucket for input image update:', bucketName);
+          
+          const bucket = storage.bucket(bucketName);
+          const fileName = `prompts/input/${filename}`;
+          const fileRef = bucket.file(fileName);
+          
+          await fileRef.save(req.files.inputImage[0].buffer, {
+            metadata: {
+              contentType: req.files.inputImage[0].mimetype,
+            },
+          });
+          
+          await fileRef.makePublic();
+          inputImageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
+          // console.log('Firebase Storage URL for input image update:', inputImageUrl);
+        } else {
+          // console.log('Firebase Storage bucket not configured. Using local storage for input image update.');
+          
+          const uploadsDir = path.join(__dirname, '../../uploads/input');
+          if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+          }
+          
+          fs.writeFileSync(path.join(uploadsDir, filename), req.files.inputImage[0].buffer);
+          inputImageUrl = `/uploads/input/${filename}`;
+          // console.log('Local storage URL for input image update:', inputImageUrl);
+        }
+      } catch (error) {
+        console.error('Error uploading input image for update:', error);
+        
+        const uploadsDir = path.join(__dirname, '../../uploads/input');
+        if (!fs.existsSync(uploadsDir)) {
+          fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+        
+        fs.writeFileSync(path.join(uploadsDir, filename), req.files.inputImage[0].buffer);
+        inputImageUrl = `/uploads/input/${filename}`;
+        // console.log('Local storage URL for input image update:', inputImageUrl);
+      }
+    }
+    // Check for input image base64 data URL
+    else if (req.body.inputImage && typeof req.body.inputImage === 'string' && req.body.inputImage.startsWith('data:')) {
+      // console.log('Input image base64 data received for update');
+      
+      try {
+        // Extract base64 data from data URL
+        const base64Data = req.body.inputImage.split(',')[1];
+        const mimeType = req.body.inputImage.split(',')[0].split(':')[1].split(';')[0];
+        const extension = mimeType.split('/')[1] || 'jpg';
+        
+        const timestamp = Date.now();
+        const filename = `${timestamp}-input-update.${extension}`;
+        const buffer = Buffer.from(base64Data, 'base64');
+        
+        
+        const storage = admin.storage();
+        const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
+        
+        if (bucketName) {
+          // console.log('Using Firebase Storage bucket for input image update:', bucketName);
+          
+          const bucket = storage.bucket(bucketName);
+          const fileName = `prompts/input/${filename}`;
+          const fileRef = bucket.file(fileName);
+          
+          await fileRef.save(buffer, {
+            metadata: {
+              contentType: mimeType,
+            },
+          });
+          
+          await fileRef.makePublic();
+          inputImageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
+          // console.log('Firebase Storage URL for input image update:', inputImageUrl);
+        } else {
+          // console.log('Firebase Storage bucket not configured. Using local storage for input image update.');
+          
+          const uploadsDir = path.join(__dirname, '../../uploads/input');
+          if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+          }
+          
+          fs.writeFileSync(path.join(uploadsDir, filename), buffer);
+          inputImageUrl = `/uploads/input/${filename}`;
+          // console.log('Local storage URL for input image update:', inputImageUrl);
+        }
+      } catch (error) {
+        console.error('Error processing input image base64 data for update:', error);
+        // Fallback to storing as base64 if conversion fails
+        inputImageUrl = req.body.inputImage;
+      }
+    }
+    
+    // Debug logging to track variable values
+    console.log('🔍 DEBUG UPDATE - Final variable values before document update:');
+    console.log('imageUrl:', imageUrl);
+    console.log('inputImageUrl:', inputImageUrl);
+    console.log('req.body.image type:', typeof req.body.image);
+    console.log('req.body.inputImage type:', typeof req.body.inputImage);
     
     // Prepare the update data
     const updateData = {
@@ -1041,6 +1942,7 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
       ...(description && { description }),
       ...(link !== undefined && { link }),
       ...(imageUrl && { image: imageUrl }),
+      ...(inputImageUrl !== undefined && { inputImage: inputImageUrl }),
       ...(keywords && { keywords }),
       ...(tags && { tags }),
       ...(category && { category }),
@@ -1087,6 +1989,56 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/prompts/{id}:
+ *   delete:
+ *     summary: Delete a prompt
+ *     description: Delete an existing prompt from the system. This endpoint is only available to admin users.
+ *     tags: [Prompts]
+ *     security:
+ *       - FirebaseAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Unique identifier of the prompt to delete
+ *         example: "prompt-123"
+ *     responses:
+ *       200:
+ *         description: Prompt deleted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Prompt prompt-123 has been deleted"
+ *       403:
+ *         description: Access denied - Admin privileges required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: Prompt not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 /**
  * @route   DELETE /api/prompts/:id
  * @desc    Delete a prompt
@@ -1148,6 +2100,72 @@ router.delete('/:id', auth, async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/prompts/{id}/like:
+ *   post:
+ *     summary: Toggle like on a prompt
+ *     description: Like or unlike a prompt. If the user has already liked the prompt, it will be unliked, and vice versa.
+ *     tags: [Prompts]
+ *     security:
+ *       - FirebaseAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Unique identifier of the prompt to like/unlike
+ *         example: "prompt-123"
+ *     responses:
+ *       200:
+ *         description: Like status toggled successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Prompt liked successfully"
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     promptId:
+ *                       type: string
+ *                       example: "prompt-123"
+ *                     isLiked:
+ *                       type: boolean
+ *                       example: true
+ *                     likeCount:
+ *                       type: integer
+ *                       example: 42
+ *                     action:
+ *                       type: string
+ *                       enum: [liked, unliked]
+ *                       example: "liked"
+ *       400:
+ *         description: Bad request - missing required parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: Prompt not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 /**
  * @route   POST /api/prompts/:id/like
  * @desc    Toggle like on a prompt
@@ -1234,193 +2252,6 @@ router.post('/:id/like', auth, async (req, res) => {
     });
   }
 });
-
-/**
- * @route   GET /api/prompts/user/:userId/liked
- * @desc    Get prompts liked by a user
- * @access  Private (Authenticated users)
- */
-router.get('/user/:userId/liked', auth, async (req, res) => {
-  try {
-    const userId = req.params.userId;
-    const requestingUserId = req.user.uid;
-    
-    // Users can only see their own liked prompts (unless admin)
-    if (userId !== requestingUserId && !req.user.isAdmin) {
-      return res.status(403).json({
-        success: false,
-        error: 'Access denied. You can only view your own liked prompts.'
-      });
-    }
-    
-    // Ensure cache is loaded
-    await ensureCacheLoaded();
-    
-    // Filter prompts liked by the user
-    const likedPrompts = allPromptsCache.filter(prompt => 
-      prompt.likes && prompt.likes.includes(userId)
-    );
-    
-    return res.status(200).json({
-      success: true,
-      data: likedPrompts,
-      count: likedPrompts.length,
-      userId: userId
-    });
-    
-  } catch (error) {
-    logger.error(`Error getting liked prompts for user ${req.params.userId}:`, error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to get liked prompts',
-      details: error.message
-    });
-  }
-});
-
-/**
- * @route   GET /api/prompts/categories
- * @desc    Get all prompt categories with counts
- * @access  Public
- */
-router.get('/categories', async (req, res) => {
-  try {
-    const cacheKey = 'prompts:categories:counts';
-    const cachedData = await getCache(cacheKey);
-    
-    if (cachedData) {
-      return res.status(200).json({
-        success: true,
-        data: cachedData,
-        fromCache: true
-      });
-    }
-    
-    // Ensure cache is loaded
-    await ensureCacheLoaded();
-    
-    // Count prompts by category
-    const categoryCounts = {};
-    
-    allPromptsCache.forEach(prompt => {
-      const category = prompt.category || 'Uncategorized';
-      categoryCounts[category] = (categoryCounts[category] || 0) + 1;
-    });
-    
-    // Format response
-    const categories = Object.entries(categoryCounts).map(([name, count]) => ({
-      name,
-      count
-    }));
-    
-    // Add "All" category
-    const totalCount = allPromptsCache.length;
-    categories.unshift({ name: 'All', count: totalCount });
-    
-    // Cache the result
-    await setCache(cacheKey, categories);
-    
-    return res.status(200).json({
-      success: true,
-      data: categories,
-      fromCache: false
-    });
-    
-  } catch (error) {
-    logger.error('Error getting prompt categories:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to get prompt categories',
-      details: error.message
-    });
-  }
-});
-
-/**
- * @route   GET /api/prompts/count
- * @desc    Get total count of prompts
- * @access  Public
- */
-router.get('/count', async (req, res) => {
-  try {
-    const cacheKey = generatePromptCountCacheKey();
-    const cachedCount = await getCache(cacheKey);
-    
-    if (cachedCount !== null) {
-      return res.status(200).json({
-        success: true,
-        totalCount: cachedCount,
-        fromCache: true
-      });
-    }
-    
-    // Get count from Firebase
-    const snapshot = await admin.firestore().collection(COLLECTION_NAME).get();
-    const totalCount = snapshot.size;
-    
-    // Cache the result
-    await setCache(cacheKey, totalCount);
-    
-    return res.status(200).json({
-      success: true,
-      totalCount: totalCount,
-      fromCache: false
-    });
-    
-  } catch (error) {
-    logger.error('Error getting prompt count:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to get prompt count',
-      details: error.message
-    });
-  }
-});
-
-/**
- * @route   POST /api/prompts/cache/refresh
- * @desc    Manual cache refresh (Admin only)
- * @access  Private (Admin only)
- */
-router.post('/cache/refresh', auth, async (req, res) => {
-  try {
-    if (!req.user.isAdmin) {
-      return res.status(403).json({
-        success: false,
-        error: 'Access denied. Admin privileges required.'
-      });
-    }
-    
-    logger.info('🔄 Manual prompts cache refresh requested');
-    const success = await refreshPromptsCache();
-    
-    if (success) {
-      await deleteCacheByPattern('prompts:results:*');
-      logger.info('🧹 Cleared cached prompt search results');
-      
-      return res.status(200).json({
-        success: true,
-        message: `Prompts cache refreshed successfully. Loaded ${allPromptsCache?.length || 0} prompts`,
-        timestamp: new Date().toISOString(),
-        promptCount: allPromptsCache?.length || 0
-      });
-    } else {
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to refresh prompts cache',
-        timestamp: new Date().toISOString()
-      });
-    }
-  } catch (error) {
-    logger.error('❌ Error in refresh prompts cache:', error);
-    return res.status(500).json({
-      success: false,
-      error: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
 /**
  * Initialize prompts cache on server startup
  */
@@ -1434,6 +2265,77 @@ const initializePromptsCache = async () => {
   }
   return success;
 };
+
+/**
+ * @route   POST /api/prompts/:id/view
+ * @desc    Increment prompt view count
+ * @access  Public
+ */
+router.post('/:id/view', async (req, res) => {
+  try {
+    const promptId = req.params.id;
+    
+    logger.info(`Incrementing view count for prompt: ${promptId}`);
+    
+    if (!promptId || typeof promptId !== 'string') {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid prompt ID format'
+      });
+    }
+    
+    const cleanPromptId = promptId.trim();
+    const promptRef = admin.firestore().collection(COLLECTION_NAME).doc(cleanPromptId);
+    
+    // Use Firestore transaction to safely increment view count
+    await admin.firestore().runTransaction(async (transaction) => {
+      const promptDoc = await transaction.get(promptRef);
+      
+      if (!promptDoc.exists) {
+        throw new Error('Prompt not found');
+      }
+      
+      const currentData = promptDoc.data();
+      const newViewCount = (currentData.viewCount || 0) + 1;
+      
+      transaction.update(promptRef, {
+        viewCount: newViewCount,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    });
+    
+    // Invalidate cache for this prompt
+    try {
+      const cacheKey = generatePromptCacheKey(cleanPromptId);
+      await deleteCache(cacheKey);
+      logger.info(`Cache invalidated for prompt ${cleanPromptId}`);
+    } catch (cacheError) {
+      logger.warn(`Failed to invalidate cache for prompt ${cleanPromptId}:`, cacheError);
+    }
+    
+    logger.info(`Successfully incremented view count for prompt ${cleanPromptId}`);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'View count incremented successfully'
+    });
+    
+  } catch (error) {
+    logger.error('Error incrementing prompt view count:', error);
+    
+    if (error.message === 'Prompt not found') {
+      return res.status(404).json({
+        success: false,
+        message: 'Prompt not found'
+      });
+    }
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to increment view count'
+    });
+  }
+});
 
 // Export the router and initialization function
 module.exports = { 

@@ -26,10 +26,16 @@ const swaggerDefinition = {
   },
   servers: [
     {
-      url: process.env.NODE_ENV === 'production' 
-        ? 'https://api.aiwaverider.com' 
-        : 'http://localhost:4000',
-      description: process.env.NODE_ENV === 'production' ? 'Production server' : 'Development server'
+      url: 'https://api.aiwaverider.com',
+      description: 'Production server - AIWaverider API'
+    },
+    {
+      url: 'http://localhost:4000',
+      description: 'Development server - Local development'
+    },
+    {
+      url: 'https://staging-api.aiwaverider.com',
+      description: 'Staging server - Pre-production testing'
     }
   ],
   components: {
@@ -57,6 +63,12 @@ const swaggerDefinition = {
       in: 'header',
       name: 'X-Admin-API-Key',
       description: 'Admin API key for production token generation'
+    },
+    SecureApiKey: {
+      type: 'apiKey',
+      in: 'header',
+      name: 'X-Secure-API-Key',
+      description: 'Secure API key for production token generation with IP whitelisting'
     }
     },
     schemas: {
@@ -450,11 +462,11 @@ const swaggerDefinition = {
             },
             example: ['writing', 'content', 'assistant']
           },
-          featured: {
+          isFeatured: {
             type: 'boolean',
             example: false
           },
-          imageUrl: {
+          image: {
             type: 'string',
             example: 'https://example.com/image.jpg'
           },
@@ -463,12 +475,35 @@ const swaggerDefinition = {
             example: 'https://example.com/prompt'
           },
           likes: {
+            type: 'array',
+            items: {
+              type: 'string'
+            },
+            example: ['user1', 'user2']
+          },
+          likeCount: {
             type: 'integer',
             example: 42
           },
-          views: {
+          viewCount: {
             type: 'integer',
             example: 150
+          },
+          downloadCount: {
+            type: 'integer',
+            example: 25
+          },
+          isPublic: {
+            type: 'boolean',
+            example: true
+          },
+          type: {
+            type: 'string',
+            example: 'prompt'
+          },
+          additionalHTML: {
+            type: 'string',
+            example: '<div>Additional HTML content</div>'
           },
           createdBy: {
             type: 'string',
@@ -613,6 +648,10 @@ const swaggerDefinition = {
     {
       name: 'Admin Token Service',
       description: 'Secure admin token generation for production use'
+    },
+    {
+      name: 'Secure Token Service',
+      description: 'Production-ready secure token generation with IP whitelisting, API key auth, and rate limiting'
     }
   ]
 };
