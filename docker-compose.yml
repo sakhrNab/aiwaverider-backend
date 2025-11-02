@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: aiwaverider-backend
+    restart: unless-stopped
+    # Don't expose ports directly - Coolify's Traefik handles routing
+    expose:
+      - "5000"
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    # Environment variables - set these in Coolify UI or create .env.prod file
+    # Required: FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_STORAGE_BUCKET, SESSION_SECRET, etc.
+    # env_file:
+    #   - .env.prod  # Uncomment if using env file, otherwise set in Coolify
+    depends_on:
+      - redis
+    networks:
+      - backend-network
+    labels:
+      # Enable Traefik for this service
+      - traefik.enable=true
+      # Router configuration - domain will be configured in Coolify UI
+      # Using placeholder that Coolify will override with actual domain
+      - traefik.http.routers.aiwaverider-backend.rule=Host(`aiwaverider.com`)
+      # Entry points for HTTPS
+      - traefik.http.routers.aiwaverider-backend.entrypoints=websecure
+      # Enable TLS/HTTPS
+      - traefik.http.routers.aiwaverider-backend.tls=true
+      # Service configuration - point to the internal port
+      - traefik.http.services.aiwaverider-backend.loadbalancer.server.port=5000
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/_health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  redis:
+    image: redis:7-alpine
+    container_name: aiwaverider-redis
+    restart: unless-stopped
+    # Don't expose Redis port to host in production - only internal access
+    expose:
+      - "6379"
+    command: redis-server --appendonly yes --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  backend-network:
+    driver: bridge
