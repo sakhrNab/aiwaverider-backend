@@ -14,6 +14,8 @@ const { db } = require('./config/firebase');
 const { initializeSettings } = require('./models/siteSettings');
 const uploadMiddleware = require('./middleware/upload');
 const admin = require('firebase-admin');
+const cron = require('node-cron');
+const { syncAllChannels } = require('./services/videoSync');
 
 // Initialize express
 const app = express();
@@ -338,6 +340,59 @@ const server = app.listen(PORT, async () => {
     } catch (error) {
       console.error('❌ Failed to initialize prompts cache on production startup:', error);
     }
+  }
+
+  // Initialize video channel sync
+  try {
+    console.log('🔄 Setting up video channel sync...');
+    
+    // Don't run sync on startup - let cron jobs handle it
+    // YouTube: Daily at midnight (00:00)
+    // TikTok: Monthly on the 1st at 00:00
+
+    // Schedule sync jobs
+    // YouTube: Daily at midnight (00:00)
+    // TikTok: Monthly on the 1st at 00:00
+    cron.schedule('0 0 * * *', async () => {
+      console.log('🔄 Starting scheduled daily video channel sync (YouTube)...');
+      try {
+        const { syncYouTubeChannel } = require('./services/videoSync');
+        const youtubeResults = await syncYouTubeChannel();
+        console.log('✅ YouTube sync completed:', {
+          videosAdded: youtubeResults.videosAdded,
+          videosUpdated: youtubeResults.videosUpdated,
+          errors: youtubeResults.errors.length
+        });
+      } catch (error) {
+        console.error('❌ YouTube sync failed:', error);
+        logger.error('YouTube sync failed', { error: error.message });
+      }
+    });
+    
+    // TikTok: Monthly sync on the 1st of each month at 00:00
+    // Cron format: '0 0 1 * *' = At 00:00 on the 1st day of every month
+    cron.schedule('0 0 1 * *', async () => {
+      console.log('🔄 Starting scheduled monthly TikTok video sync...');
+      try {
+        const { syncTikTokUser } = require('./services/videoSync');
+        const tiktokResults = await syncTikTokUser();
+        console.log('✅ TikTok sync completed:', {
+          videosAdded: tiktokResults.videosAdded,
+          videosUpdated: tiktokResults.videosUpdated,
+          errors: tiktokResults.errors.length
+        });
+      } catch (error) {
+        console.error('❌ TikTok sync failed:', error);
+        logger.error('TikTok sync failed', { error: error.message });
+      }
+    });
+    
+    console.log('✅ Video channel sync scheduled:');
+    console.log('   - YouTube: Daily at 00:00 (midnight)');
+    console.log('   - TikTok: Monthly on the 1st at 00:00');
+  } catch (error) {
+    console.error('❌ Failed to set up video channel sync:', error);
+    logger.error('Failed to set up video channel sync', { error: error.message });
   }
 });
 

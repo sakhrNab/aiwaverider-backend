@@ -9,6 +9,21 @@ const router = express.Router();
 const emailController = require('../../controllers/email/emailController');
 const { isAdmin, auth } = require('../../middleware/authenticationMiddleware');
 
+// Public routes (before auth middleware)
+/**
+ * @route   POST /api/email/waitlist
+ * @desc    Add email to waitlist (public)
+ * @access  Public
+ */
+router.post('/waitlist', emailController.addToWaitlist);
+
+/**
+ * @route   GET /api/email/waitlist/count
+ * @desc    Get waitlist count (public)
+ * @access  Public
+ */
+router.get('/waitlist/count', emailController.getWaitlistCount);
+
 // Routes require authentication
 router.use(auth);
 

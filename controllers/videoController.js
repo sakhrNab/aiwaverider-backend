@@ -165,17 +165,26 @@ const listVideos = async (req, res) => {
     let videos = [];
     
     if (totalVideos > 0) {
-      // Get all documents for this platform and slice them
+      // Get all documents for this platform
       // Note: This is not the most efficient for large datasets, but works for now
-      const allDocsQuery = await db.collection('videos')
-        .where('platform', '==', platform)
-        .orderBy('createdAt', 'desc')
-        .get();
+      let allDocsQuery;
       
-      const allDocs = allDocsQuery.docs.slice(offset, offset + PAGE_SIZE);
+      // For TikTok, we'll fetch all and sort by engagement (likes + views)
+      // For other platforms, use createdAt descending
+      if (platform === 'tiktok') {
+        allDocsQuery = await db.collection('videos')
+          .where('platform', '==', platform)
+          .get();
+      } else {
+        allDocsQuery = await db.collection('videos')
+          .where('platform', '==', platform)
+          .orderBy('createdAt', 'desc')
+          .get();
+      }
       
       // Process each video document
-      for (const doc of allDocs) {
+      const allVideos = [];
+      for (const doc of allDocsQuery.docs) {
         const videoData = { id: doc.id, ...doc.data() };
         
         // Only try to refresh metadata for platforms that provide real-time stats
@@ -207,8 +216,32 @@ const listVideos = async (req, res) => {
           videoData.lastFetched = videoData.lastFetched.toDate().toISOString();
         }
 
-        videos.push(videoData);
+        // Calculate engagement score for TikTok (likes + views)
+        if (platform === 'tiktok') {
+          const views = parseInt(videoData.views) || 0;
+          const likes = parseInt(videoData.likes) || 0;
+          const comments = parseInt(videoData.comments) || 0;
+          const shares = parseInt(videoData.shares) || 0;
+          // Engagement = likes + (views * 0.01) + (comments * 2) + (shares * 3)
+          // This weights likes most heavily, then comments, then shares, then views
+          videoData.engagementScore = likes + (views * 0.01) + (comments * 2) + (shares * 3);
+        }
+
+        allVideos.push(videoData);
       }
+      
+      // Sort TikTok videos by engagement score (highest first)
+      if (platform === 'tiktok') {
+        allVideos.sort((a, b) => {
+          const scoreA = a.engagementScore || 0;
+          const scoreB = b.engagementScore || 0;
+          return scoreB - scoreA; // Descending order
+        });
+      }
+      
+      // Apply pagination
+      const allDocs = allVideos.slice(offset, offset + PAGE_SIZE);
+      videos = allDocs;
     }
 
     const response = {
@@ -220,9 +253,18 @@ const listVideos = async (req, res) => {
       hasPreviousPage: pageNum > 1
     };
 
-    // Cache the response (using optimized TTL)
-    await setCache(cacheKey, response);
-    console.log(`Cached video list for ${platform}, page ${pageNum}`);
+    // Cache the response with platform-specific TTL
+    // TikTok: 30 days (monthly sync), YouTube: 1 week (weekly sync), Instagram: 5 minutes (daily sync)
+    let cacheTTL;
+    if (platform === 'tiktok') {
+      cacheTTL = 30 * 24 * 60 * 60; // 30 days
+    } else if (platform === 'youtube') {
+      cacheTTL = 7 * 24 * 60 * 60; // 1 week
+    } else {
+      cacheTTL = VIDEO_CACHE_TTL; // 5 minutes for Instagram (default)
+    }
+    await setCache(cacheKey, response, cacheTTL);
+    console.log(`Cached video list for ${platform}, page ${pageNum} (TTL: ${cacheTTL}s)`);
 
     res.json(response);
 

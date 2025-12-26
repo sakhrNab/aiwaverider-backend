@@ -12,6 +12,7 @@ const logger = require('../utils/logger');
 const emailCampaignsCollection = db.collection('emailCampaigns');
 const emailLogsCollection = db.collection('emailLogs');
 const usersCollection = db.collection('users');
+const waitlistCollection = db.collection('waitlist');
 
 /**
  * Create a new email campaign
@@ -320,5 +321,99 @@ function getDefaultContent(templateType) {
       return '<p>Thank you for being part of the AI Waverider community!</p>';
   }
 }
+
+/**
+ * Add email to waitlist
+ * @param {string} email - Email address
+ * @returns {Promise<Object>} - Waitlist entry data
+ */
+exports.addToWaitlist = async (email) => {
+  try {
+    // Check if email already exists in waitlist
+    const existingSnapshot = await waitlistCollection
+      .where('email', '==', email.toLowerCase().trim())
+      .get();
+    
+    if (!existingSnapshot.empty) {
+      // Email already exists, return existing entry
+      const existingDoc = existingSnapshot.docs[0];
+      return {
+        id: existingDoc.id,
+        ...existingDoc.data(),
+        alreadyExists: true
+      };
+    }
+    
+    // Create new waitlist entry
+    const waitlistRef = waitlistCollection.doc();
+    const waitlistData = {
+      email: email.toLowerCase().trim(),
+      status: 'active',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    
+    await waitlistRef.set(waitlistData);
+    
+    return {
+      id: waitlistRef.id,
+      ...waitlistData,
+      alreadyExists: false
+    };
+  } catch (error) {
+    logger.error(`Error adding email to waitlist: ${error.message}`);
+    throw error;
+  }
+};
+
+/**
+ * Get all waitlist entries
+ * @param {Object} options - Query options (limit, status)
+ * @returns {Promise<Array>} - Waitlist entries
+ */
+exports.getWaitlistEntries = async (options = {}) => {
+  try {
+    const { limit = 100, status = 'active' } = options;
+    
+    let query = waitlistCollection
+      .where('status', '==', status)
+      .orderBy('createdAt', 'desc')
+      .limit(limit);
+    
+    const snapshot = await query.get();
+    
+    return snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+  } catch (error) {
+    logger.error(`Error getting waitlist entries: ${error.message}`);
+    throw error;
+  }
+};
+
+/**
+ * Get waitlist count
+ * @returns {Promise<number>} - Total waitlist count
+ */
+exports.getWaitlistCount = async () => {
+  try {
+    const snapshot = await waitlistCollection
+      .where('status', '==', 'active')
+      .get();
+    
+    return snapshot.size;
+  } catch (error) {
+    logger.error(`Error getting waitlist count: ${error.message}`);
+    // If query fails, try getting all and filtering (fallback)
+    try {
+      const allSnapshot = await waitlistCollection.get();
+      return allSnapshot.docs.filter(doc => doc.data().status === 'active').length;
+    } catch (fallbackError) {
+      logger.error(`Error in fallback waitlist count: ${fallbackError.message}`);
+      throw error;
+    }
+  }
+};
 
 module.exports = exports; 

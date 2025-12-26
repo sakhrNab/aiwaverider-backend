@@ -191,6 +191,42 @@ const filterAgents = (agents, filters) => {
     appliedFilters.push(`complexity:${filters.complexity}`);
   }
   
+  // Filter by minimum rating
+  if (filters.rating !== undefined && filters.rating !== null && filters.rating > 0) {
+    const minRating = parseFloat(filters.rating);
+    filtered = filtered.filter(agent => {
+      const agentRating = agent.rating?.average || agent.rating || 0;
+      return agentRating >= minRating;
+    });
+    appliedFilters.push(`rating:${minRating}+`);
+  }
+  
+  // Filter by tags (agents must have at least one of the specified tags)
+  if (filters.tags && Array.isArray(filters.tags) && filters.tags.length > 0) {
+    filtered = filtered.filter(agent => {
+      const agentTags = agent.tags || [];
+      return filters.tags.some(tag => 
+        agentTags.some(agentTag => 
+          agentTag && typeof agentTag === 'string' && agentTag.toLowerCase() === tag.toLowerCase()
+        )
+      );
+    });
+    appliedFilters.push(`tags:${filters.tags.join(',')}`);
+  }
+  
+  // Filter by features (agents must have at least one of the specified features)
+  if (filters.features && Array.isArray(filters.features) && filters.features.length > 0) {
+    filtered = filtered.filter(agent => {
+      const agentFeatures = agent.features || [];
+      return filters.features.some(feature => 
+        agentFeatures.some(agentFeature => 
+          agentFeature && typeof agentFeature === 'string' && agentFeature.toLowerCase() === feature.toLowerCase()
+        )
+      );
+    });
+    appliedFilters.push(`features:${filters.features.join(',')}`);
+  }
+  
   if (appliedFilters.length > 0) {
     logger.info(`🔧 Applied filters: ${appliedFilters.join(', ')} | ${filtered.length} results`);
   }
@@ -201,7 +237,7 @@ const filterAgents = (agents, filters) => {
 /**
  * Generate cache key for search/filter results
  */
-const generateResultsCacheKey = (searchQuery, filters, limit, offset) => {
+const generateResultsCacheKey = (searchQuery, filters, limit, offset, sortFilter = null) => {
   const parts = ['agents:results'];
   
   if (searchQuery) parts.push(`search:${searchQuery}`);
@@ -211,6 +247,12 @@ const generateResultsCacheKey = (searchQuery, filters, limit, offset) => {
   if (filters.verified) parts.push(`ver:${filters.verified}`);
   if (filters.featured) parts.push(`feat:${filters.featured}`);
   if (filters.complexity) parts.push(`comp:${filters.complexity}`);
+  if (filters.rating) parts.push(`rating:${filters.rating}`);
+  if (filters.tags && Array.isArray(filters.tags)) parts.push(`tags:${filters.tags.sort().join(',')}`);
+  if (filters.features && Array.isArray(filters.features)) parts.push(`features:${filters.features.sort().join(',')}`);
+  
+  // Include sort filter in cache key (critical for correct sorting)
+  if (sortFilter) parts.push(`sort:${sortFilter.replace(/\s+/g, '_')}`);
   
   parts.push(`limit:${limit}`);
   parts.push(`offset:${offset}`);
@@ -346,15 +388,22 @@ const getAgents = async (req, res) => {
       verified,
       featured,
       complexity,
+      rating, // Add rating filter
+      tags, // Add tags filter (comma-separated)
+      features, // Add features filter (comma-separated)
       limit = 20,
       offset = 0,
       lastVisibleId, // Keep for backward compatibility
-      filter // Keep for backward compatibility
+      filter // Keep for backward compatibility - used for sorting
     } = req.query;
     
     const finalSearchQuery = searchQuery || search;
     const parsedLimit = parseInt(limit) || 20;
     const parsedOffset = parseInt(offset) || 0;
+    
+    // Parse tags and features from comma-separated strings
+    const tagsArray = tags ? (typeof tags === 'string' ? tags.split(',').map(t => t.trim()) : tags) : undefined;
+    const featuresArray = features ? (typeof features === 'string' ? features.split(',').map(f => f.trim()) : features) : undefined;
     
     const filters = {
       category,
@@ -362,12 +411,16 @@ const getAgents = async (req, res) => {
       priceMax,
       verified,
       featured,
-      complexity
+      complexity,
+      rating: rating ? parseFloat(rating) : undefined,
+      tags: tagsArray,
+      features: featuresArray
     };
     
     logger.info(`📊 getAgents called:`, {
       searchQuery: finalSearchQuery,
       filters,
+      sortFilter: filter || 'Hot & New',
       limit: parsedLimit,
       offset: parsedOffset,
       backwardCompatibility: { lastVisibleId, filter }
@@ -379,8 +432,9 @@ const getAgents = async (req, res) => {
       throw new Error('Failed to load agents cache');
     }
     
-    // 2. Check Redis cache for this specific query
-    const cacheKey = generateResultsCacheKey(finalSearchQuery, filters, parsedLimit, parsedOffset);
+    // 2. Check Redis cache for this specific query (include sort filter in cache key)
+    const sortFilter = filter || 'Hot & New';
+    const cacheKey = generateResultsCacheKey(finalSearchQuery, filters, parsedLimit, parsedOffset, sortFilter);
     const cachedResult = await getCache(cacheKey);
     
     if (cachedResult) {
@@ -407,12 +461,64 @@ const getAgents = async (req, res) => {
     // 5. Apply filters
     results = filterAgents(results, filters);
     
-    // 6. Sort results (newest first, but could add more sorting options)
+    // 6. Sort results based on filter parameter (sortFilter already extracted above for cache key)
+    logger.info(`🔄 Sorting ${results.length} results by: ${sortFilter}`);
     results.sort((a, b) => {
-      if (a.createdAt && b.createdAt) {
-        return new Date(b.createdAt) - new Date(a.createdAt);
+      switch (sortFilter) {
+        case 'Hot & New':
+        case 'newest':
+          // Sort by newest first (default)
+          if (a.createdAt && b.createdAt) {
+            return new Date(b.createdAt) - new Date(a.createdAt);
+          }
+          return 0;
+          
+        case 'Top Rated':
+        case 'top-rated':
+          // Sort by rating average (descending), then by rating count
+          const aRating = a.rating?.average || a.rating || 0;
+          const bRating = b.rating?.average || b.rating || 0;
+          const aCount = a.rating?.count || 0;
+          const bCount = b.rating?.count || 0;
+          if (aRating !== bRating) {
+            return bRating - aRating;
+          }
+          return bCount - aCount;
+          
+        case 'Most Popular':
+        case 'popular':
+          // Sort by popularity metrics (views, usersCount, rating count)
+          const aPopularity = a.usersCount || a.views || a.rating?.count || 0;
+          const bPopularity = b.usersCount || b.views || b.rating?.count || 0;
+          if (aPopularity !== bPopularity) {
+            return bPopularity - aPopularity;
+          }
+          // Secondary sort by rating
+          const aRatingPop = a.rating?.average || a.rating || 0;
+          const bRatingPop = b.rating?.average || b.rating || 0;
+          return bRatingPop - aRatingPop;
+          
+        case 'Price: Low to High':
+        case 'price-low':
+          // Sort by price ascending
+          const aPrice = a.price || a.priceDetails?.discountedPrice || a.priceDetails?.basePrice || 0;
+          const bPrice = b.price || b.priceDetails?.discountedPrice || b.priceDetails?.basePrice || 0;
+          return aPrice - bPrice;
+          
+        case 'Price: High to Low':
+        case 'price-high':
+          // Sort by price descending
+          const aPriceHigh = a.price || a.priceDetails?.discountedPrice || a.priceDetails?.basePrice || 0;
+          const bPriceHigh = b.price || b.priceDetails?.discountedPrice || b.priceDetails?.basePrice || 0;
+          return bPriceHigh - aPriceHigh;
+          
+        default:
+          // Default to newest first
+          if (a.createdAt && b.createdAt) {
+            return new Date(b.createdAt) - new Date(a.createdAt);
+          }
+          return 0;
       }
-      return 0;
     });
     
     // 7. Calculate pagination
@@ -443,6 +549,7 @@ const getAgents = async (req, res) => {
     logger.info(`✅ Query processed successfully:`, {
       totalFound: totalCount,
       returned: paginatedResults.length,
+      sortedBy: sortFilter,
       responseTime: response.responseTime,
       cached: true
     });

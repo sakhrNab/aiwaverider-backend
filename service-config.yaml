@@ -98,6 +98,8 @@ spec:
           valueFrom: { secretKeyRef: { name: INSTAGRAM_ACCESS_TOKEN, key: latest } }
         - name: TIKTOK_RAPIDAPI_HOST
           valueFrom: { secretKeyRef: { name: TIKTOK_RAPIDAPI_HOST, key: latest } }
+        - name: TIKTOK_SECUID
+          valueFrom: { secretKeyRef: { name: TIKTOK_SECUID, key: latest } }
         - name: INSTAGRAM_BUSINESS_ACCOUNT_ID
           valueFrom: { secretKeyRef: { name: INSTAGRAM_BUSINESS_ACCOUNT_ID, key: latest } }
         - name: FACEBOOK_PAGE_ID

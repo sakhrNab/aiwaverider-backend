@@ -8,6 +8,42 @@ const upload = require('../../middleware/upload');
 // Initialize Firestore
 const db = admin.firestore();
 
+/**
+ * Helper function to safely convert Firestore Timestamp to ISO string
+ * Handles Timestamp objects, strings, numbers, and Date objects
+ */
+const toISOString = (timestamp) => {
+  if (!timestamp) return null;
+  
+  // If it's a Firestore Timestamp object, use toDate()
+  if (timestamp.toDate && typeof timestamp.toDate === 'function') {
+    return timestamp.toDate().toISOString();
+  }
+  
+  // If it's already a string (ISO format), return as-is
+  if (typeof timestamp === 'string') {
+    return timestamp;
+  }
+  
+  // If it's a number (milliseconds), convert to Date
+  if (typeof timestamp === 'number') {
+    return new Date(timestamp).toISOString();
+  }
+  
+  // If it's a Date object, convert to ISO string
+  if (timestamp instanceof Date) {
+    return timestamp.toISOString();
+  }
+  
+  // Fallback: try to create a Date from the value
+  try {
+    return new Date(timestamp).toISOString();
+  } catch (e) {
+    console.warn('[Profile API] Failed to convert timestamp to ISO string:', timestamp);
+    return null;
+  }
+};
+
 // GET /api/profile - Get user profile with improved error handling
 router.get('/', validateFirebaseToken, async (req, res) => {
   try {
@@ -66,11 +102,28 @@ router.get('/', validateFirebaseToken, async (req, res) => {
           await db.collection('users').doc(req.user.uid).set(userData);
           console.log('[Profile API] Created missing user document in Firestore');
           
-          // Return the created profile data
+          // Retrieve the created document to get proper Timestamp objects
+          const createdDoc = await db.collection('users').doc(req.user.uid).get();
+          const createdData = createdDoc.data();
+          
+          // Return the created profile data with converted timestamps
           return res.json({
-            ...userData,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+            uid: req.user.uid,
+            email: createdData.email || userData.email,
+            username: createdData.username || userData.username,
+            displayName: createdData.displayName || userData.displayName || '',
+            photoURL: createdData.photoURL || userData.photoURL || '',
+            firstName: createdData.firstName || userData.firstName || '',
+            lastName: createdData.lastName || userData.lastName || '',
+            role: createdData.role || userData.role || 'authenticated',
+            phoneNumber: createdData.phoneNumber || userData.phoneNumber || '',
+            interests: createdData.interests || userData.interests || [],
+            notifications: createdData.notifications || userData.notifications || {},
+            emailPreferences: createdData.emailPreferences || userData.emailPreferences || {},
+            onboarding: createdData.onboarding || userData.onboarding || { completed: false },
+            status: createdData.status || userData.status || 'active',
+            createdAt: toISOString(createdData.createdAt) || new Date().toISOString(),
+            updatedAt: toISOString(createdData.updatedAt) || new Date().toISOString()
           });
         } catch (createError) {
           console.error('[Profile API] Error creating user document:', createError);
@@ -104,8 +157,8 @@ router.get('/', validateFirebaseToken, async (req, res) => {
       emailPreferences: userData.emailPreferences || {},
       onboarding: userData.onboarding || { completed: false },
       status: userData.status || 'active',
-      createdAt: userData.createdAt ? userData.createdAt.toDate().toISOString() : null,
-      updatedAt: userData.updatedAt ? userData.updatedAt.toDate().toISOString() : null
+      createdAt: toISOString(userData.createdAt),
+      updatedAt: toISOString(userData.updatedAt)
     });
   } catch (err) {
     console.error('[Profile API] Error fetching profile:', err);
@@ -167,8 +220,8 @@ router.put('/', validateFirebaseToken, async (req, res) => {
         return res.json({
           uid: req.user.uid,
           ...createdData,
-          createdAt: createdData.createdAt ? createdData.createdAt.toDate().toISOString() : new Date().toISOString(),
-          updatedAt: createdData.updatedAt ? createdData.updatedAt.toDate().toISOString() : new Date().toISOString()
+          createdAt: toISOString(createdData.createdAt) || new Date().toISOString(),
+          updatedAt: toISOString(createdData.updatedAt) || new Date().toISOString()
         });
       } catch (createError) {
         console.error('[Profile API] Error creating user profile:', createError);
@@ -189,11 +242,27 @@ router.put('/', validateFirebaseToken, async (req, res) => {
     const updatedDoc = await userRef.get();
     const userData = updatedDoc.data();
 
+    // Safely convert and return profile data
     return res.json({
       uid: req.user.uid,
-      ...userData,
-      createdAt: userData.createdAt ? userData.createdAt.toDate().toISOString() : null,
-      updatedAt: userData.updatedAt ? userData.updatedAt.toDate().toISOString() : new Date().toISOString()
+      email: userData.email || '',
+      username: userData.username || '',
+      displayName: userData.displayName || '',
+      photoURL: userData.photoURL || '',
+      firstName: userData.firstName || '',
+      lastName: userData.lastName || '',
+      role: userData.role || 'authenticated',
+      phoneNumber: userData.phoneNumber || '',
+      interests: userData.interests || [],
+      notifications: userData.notifications || {},
+      emailPreferences: userData.emailPreferences || {},
+      onboarding: userData.onboarding || { completed: false },
+      status: userData.status || 'active',
+      bio: userData.bio || '',
+      language: userData.language || 'en',
+      theme: userData.theme || 'light',
+      createdAt: toISOString(userData.createdAt) || new Date().toISOString(),
+      updatedAt: toISOString(userData.updatedAt) || new Date().toISOString()
     });
   } catch (err) {
     console.error('[Profile API] Error updating profile:', err);
@@ -488,7 +557,7 @@ router.get('/community', validateFirebaseToken, async (req, res) => {
     }
 
     return res.json({
-      discordLink: process.env.DISCORD_INVITE_LINK || 'https://discord.com/channels/1377544516579491891/1377544516579491894',
+      discordLink: process.env.DISCORD_INVITE_LINK || 'https://www.skool.com/ai-waverider-community-2071',
       paymentLink: process.env.PAYMENT_LINK || 'https://payment-provider.com/your-payment-link',
       communityBenefits: [
         'Access to exclusive content',

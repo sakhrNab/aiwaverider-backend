@@ -1850,4 +1850,95 @@ exports.sendAgentUpdateEmail = async (req, res) => {
   }
 };
 
+/**
+ * Add email to waitlist (public endpoint)
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+exports.addToWaitlist = async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    // Validate email
+    if (!email || !validateEmail(email)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Valid email address is required' 
+      });
+    }
+    
+    // Add to waitlist
+    const waitlistEntry = await emailNotificationModel.addToWaitlist(email);
+    
+    // Optionally send confirmation email
+    try {
+      await emailService.sendEmail({
+        to: email,
+        subject: 'You\'re on the waitlist! - AI Waverider',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2 style="color: #3498db;">Welcome to the AI Waverider Waitlist!</h2>
+            <p>Thank you for joining our waitlist. You'll be the first to know when we launch our AI Automation Mastery Program.</p>
+            <p><strong>What's Next?</strong></p>
+            <ul>
+              <li>You'll receive early access 2 weeks before public launch</li>
+              <li>Founding members get 40% off ($297 instead of $497)</li>
+              <li>Lifetime price lock - your price never increases</li>
+              <li>Exclusive bonus templates and priority support</li>
+            </ul>
+            <p>We'll notify you as soon as we're ready to launch!</p>
+            <p>Best regards,<br>The AI Waverider Team</p>
+          </div>
+        `
+      });
+    } catch (emailError) {
+      // Don't fail if confirmation email fails
+      logger.warn(`Failed to send waitlist confirmation email to ${email}: ${emailError.message}`);
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: waitlistEntry.alreadyExists 
+        ? 'You\'re already on the waitlist!' 
+        : 'Successfully added to waitlist!',
+      data: {
+        email: waitlistEntry.email,
+        alreadyExists: waitlistEntry.alreadyExists
+      }
+    });
+  } catch (error) {
+    logger.error(`Error adding email to waitlist: ${error.message}`);
+    
+    res.status(500).json({
+      success: false,
+      message: 'Failed to add email to waitlist',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Get waitlist count (public endpoint)
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+exports.getWaitlistCount = async (req, res) => {
+  try {
+    const count = await emailNotificationModel.getWaitlistCount();
+    
+    res.status(200).json({
+      success: true,
+      data: { count }
+    });
+  } catch (error) {
+    logger.error(`Error getting waitlist count: ${error.message}`);
+    
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get waitlist count',
+      error: error.message
+    });
+  }
+};
+
 module.exports = exports; 

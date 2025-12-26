@@ -117,10 +117,10 @@ async function getCompiledTemplate(templateName) {
  * @returns {Object} - Nodemailer transporter
  */
 function createTransport() {
-  return nodemailer.createTransporter({
+  return nodemailer.createTransport({
     host: config.host,
     port: config.port,
-    secure: config.secure, // true for 465, false for other ports
+    secure: config.secure, 
     auth: {
       user: config.user,
       pass: config.password

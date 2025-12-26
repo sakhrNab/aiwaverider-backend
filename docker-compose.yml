@@ -5,65 +5,66 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.prod
-    container_name: aiwaverider-backend
-    restart: unless-stopped
-    # Don't expose ports directly - Coolify's Traefik handles routing
-    expose:
-      - "5000"
     environment:
       - NODE_ENV=production
       - PORT=5000
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-    # Environment variables - set these in Coolify UI or create .env.prod file
-    # Required: FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_STORAGE_BUCKET, SESSION_SECRET, etc.
-    # env_file:
-    #   - .env.prod  # Uncomment if using env file, otherwise set in Coolify
+    # Use expose instead of ports to avoid host port collisions
+    # Coolify/Traefik will handle external routing
+    expose:
+      - "5000"
     depends_on:
       - redis
-    networks:
-      - backend-network
-    labels:
-      # Enable Traefik for this service
-      - traefik.enable=true
-      # Router configuration - domain will be configured in Coolify UI
-      # Using placeholder that Coolify will override with actual domain
-      - traefik.http.routers.aiwaverider-backend.rule=Host(`aiwaverider.com`)
-      # Entry points for HTTPS
-      - traefik.http.routers.aiwaverider-backend.entrypoints=websecure
-      # Enable TLS/HTTPS
-      - traefik.http.routers.aiwaverider-backend.tls=true
-      # Service configuration - point to the internal port
-      - traefik.http.services.aiwaverider-backend.loadbalancer.server.port=5000
+    restart: unless-stopped
+    # Health check for container monitoring
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/_health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/_health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 40s
+      start_period: 30s
+    # Graceful shutdown period
+    stop_grace_period: 30s
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Traefik labels for external routing (Coolify will manage domain)
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.aiwaverider-backend.rule=Host(`api.aiwaverider.com`)
+      - traefik.http.routers.aiwaverider-backend.entrypoints=https
+      - traefik.http.services.aiwaverider-backend.loadbalancer.server.port=5000
+      - traefik.http.routers.aiwaverider-backend.tls=true
+      - traefik.http.routers.aiwaverider-backend.tls.certresolver=letsencrypt
+    networks:
+      - aiwaverider_network
 
   redis:
     image: redis:7-alpine
-    container_name: aiwaverider-redis
-    restart: unless-stopped
-    # Don't expose Redis port to host in production - only internal access
-    expose:
-      - "6379"
     command: redis-server --appendonly yes --save 60 1 --loglevel warning
     volumes:
       - redis_data:/data
-    networks:
-      - backend-network
+    # Use expose instead of ports for internal communication
+    expose:
+      - "6379"
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aiwaverider_network
 
 volumes:
   redis_data:
-    driver: local
 
 networks:
-  backend-network:
+  aiwaverider_network:
     driver: bridge
+    # Note: Coolify will manage external networks
+    # If you need external network, use: external: true
