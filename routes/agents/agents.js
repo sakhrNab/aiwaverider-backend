@@ -7,11 +7,7 @@ const publicCacheMiddleware = require('../../middleware/publicCacheMiddleware');
 const upload = require('../../middleware/upload');
 const { db } = require('../../config/firebase');
 const admin = require('firebase-admin');
-<<<<<<< HEAD
-=======
-const { auth } = require('../../middleware/authenticationMiddleware');
 const { getCache, setCache, deleteCache, deleteCacheByPattern, generateAgentCacheKey } = require('../../utils/cache');
->>>>>>> 9bd340e791e081fb76ba546ea35c18019b188998
 
 // Helper function to increment agent download count
 async function incrementAgentDownloadCount(agentId) {

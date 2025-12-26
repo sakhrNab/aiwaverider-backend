@@ -230,14 +230,14 @@ const listVideos = async (req, res) => {
 
     // Paginate from in-memory cache
     const offset = (pageNum - 1) * PAGE_SIZE;
-    
+
     let videos = [];
-    
+
     if (totalVideos > 0) {
       // Get all documents for this platform
       // Note: This is not the most efficient for large datasets, but works for now
       let allDocsQuery;
-      
+
       // For TikTok, we'll fetch all and sort by engagement (likes + views)
       // For other platforms, use createdAt descending
       if (platform === 'tiktok') {
@@ -250,12 +250,12 @@ const listVideos = async (req, res) => {
           .orderBy('createdAt', 'desc')
           .get();
       }
-      
+
       // Process each video document
       const allVideos = [];
       for (const doc of allDocsQuery.docs) {
         const videoData = { id: doc.id, ...doc.data() };
-        
+
         // Only try to refresh metadata for platforms that provide real-time stats
         // Instagram doesn't provide public stats, so skip the refresh
         if (platform !== 'instagram') {
@@ -264,7 +264,7 @@ const listVideos = async (req, res) => {
             if (videoData.originalUrl) {
               const metaCacheKey = `video_meta:${platform}:${extractVideoId[platform](videoData.originalUrl)}`;
               const freshMeta = await getCache(metaCacheKey);
-              
+
               if (freshMeta) {
                 videoData.views = freshMeta.views;
                 videoData.likes = freshMeta.likes;
@@ -272,9 +272,9 @@ const listVideos = async (req, res) => {
             } else {
               console.warn(`Video ${videoData.id} has undefined originalUrl, skipping metadata refresh`);
             }
+          } catch (error) {
+            console.warn(`Could not extract video ID for ${videoData.originalUrl}:`, error.message);
           }
-        } catch (error) {
-          console.warn(`Could not extract video ID for ${videoData.originalUrl}:`, error.message);
         }
 
         // Convert Firestore timestamps to ISO strings
