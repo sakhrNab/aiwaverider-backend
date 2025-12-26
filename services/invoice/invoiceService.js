@@ -20,8 +20,8 @@ class InvoiceService {
       country: process.env.COMPANY_COUNTRY || 'Georgia',
       postalCode: process.env.COMPANY_POSTAL_CODE || '0108',
       taxId: process.env.COMPANY_TAX_ID || 'GE123456789',
-      email: process.env.COMPANY_EMAIL || 'billing@aiwaverider.com',
-      phone: process.env.COMPANY_PHONE || '+995 555 123 456',
+      email: process.env.COMPANY_EMAIL || 'support@aiwaverider.com',
+      phone: process.env.COMPANY_PHONE || '+995 558 950 430',
       website: process.env.COMPANY_WEBSITE || 'https://aiwaverider.com'
     };
   }

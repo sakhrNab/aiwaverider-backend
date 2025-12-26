@@ -9,6 +9,7 @@ const upload = require('../../middleware/upload');
 const db = admin.firestore();
 
 /**
+
  * Helper function to safely convert Firestore Timestamp to ISO string
  * Handles Timestamp objects, strings, numbers, and Date objects
  */
@@ -45,6 +46,106 @@ const toISOString = (timestamp) => {
 };
 
 // GET /api/profile - Get user profile with improved error handling
+/**
+ * @swagger
+ * /api/profile:
+ *   get:
+ *     summary: Get user profile
+ *     description: Retrieve the current user's profile information
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     responses:
+ *       200:
+ *         description: Profile retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 uid:
+ *                   type: string
+ *                   example: "user-123"
+ *                 email:
+ *                   type: string
+ *                   format: email
+ *                   example: "user@example.com"
+ *                 username:
+ *                   type: string
+ *                   example: "john_doe"
+ *                 displayName:
+ *                   type: string
+ *                   example: "John Doe"
+ *                 photoURL:
+ *                   type: string
+ *                   format: uri
+ *                   example: "https://example.com/photo.jpg"
+ *                 firstName:
+ *                   type: string
+ *                   example: "John"
+ *                 lastName:
+ *                   type: string
+ *                   example: "Doe"
+ *                 role:
+ *                   type: string
+ *                   example: "authenticated"
+ *                 phoneNumber:
+ *                   type: string
+ *                   example: "+1234567890"
+ *                 interests:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                   example: ["AI", "Tech", "Development"]
+ *                 notifications:
+ *                   type: object
+ *                   properties:
+ *                     email:
+ *                       type: boolean
+ *                     inApp:
+ *                       type: boolean
+ *                 emailPreferences:
+ *                   type: object
+ *                   properties:
+ *                     weeklyUpdates:
+ *                       type: boolean
+ *                     announcements:
+ *                       type: boolean
+ *                     newAgents:
+ *                       type: boolean
+ *                     newTools:
+ *                       type: boolean
+ *                     marketingEmails:
+ *                       type: boolean
+ *                 onboarding:
+ *                   type: object
+ *                   properties:
+ *                     completed:
+ *                       type: boolean
+ *                     currentStep:
+ *                       type: string
+ *                     profileComplete:
+ *                       type: boolean
+ *                     phoneNumberAdded:
+ *                       type: boolean
+ *                     profileImageAdded:
+ *                       type: boolean
+ *                 status:
+ *                   type: string
+ *                   example: "active"
+ *                 createdAt:
+ *                   type: string
+ *                   format: date-time
+ *                 updatedAt:
+ *                   type: string
+ *                   format: date-time
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       404:
+ *         description: User profile not found
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/', validateFirebaseToken, async (req, res) => {
   try {
     console.log('[Profile API] Fetching profile for user:', req.user.uid);
@@ -169,7 +270,129 @@ router.get('/', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// PUT /api/profile - Update user profile
+/**
+ * @swagger
+ * /api/profile:
+ *   put:
+ *     summary: Update user profile
+ *     description: Update the current user's profile information
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 description: Username
+ *                 example: "john_doe"
+ *               firstName:
+ *                 type: string
+ *                 description: First name
+ *                 example: "John"
+ *               lastName:
+ *                 type: string
+ *                 description: Last name
+ *                 example: "Doe"
+ *               displayName:
+ *                 type: string
+ *                 description: Display name
+ *                 example: "John Doe"
+ *               photoURL:
+ *                 type: string
+ *                 format: uri
+ *                 description: Profile photo URL
+ *                 example: "https://example.com/photo.jpg"
+ *               phoneNumber:
+ *                 type: string
+ *                 description: Phone number
+ *                 example: "+1234567890"
+ *               emailPreferences:
+ *                 type: object
+ *                 description: Email preferences
+ *                 properties:
+ *                   weeklyUpdates:
+ *                     type: boolean
+ *                   announcements:
+ *                     type: boolean
+ *                   newAgents:
+ *                     type: boolean
+ *                   newTools:
+ *                     type: boolean
+ *                   marketingEmails:
+ *                     type: boolean
+ *               onboarding:
+ *                 type: object
+ *                 description: Onboarding status
+ *                 properties:
+ *                   completed:
+ *                     type: boolean
+ *                   currentStep:
+ *                     type: string
+ *                   profileComplete:
+ *                     type: boolean
+ *                   phoneNumberAdded:
+ *                     type: boolean
+ *                   profileImageAdded:
+ *                     type: boolean
+ *     responses:
+ *       200:
+ *         description: Profile updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 uid:
+ *                   type: string
+ *                   example: "user-123"
+ *                 email:
+ *                   type: string
+ *                   format: email
+ *                 username:
+ *                   type: string
+ *                 displayName:
+ *                   type: string
+ *                 photoURL:
+ *                   type: string
+ *                   format: uri
+ *                 firstName:
+ *                   type: string
+ *                 lastName:
+ *                   type: string
+ *                 role:
+ *                   type: string
+ *                 phoneNumber:
+ *                   type: string
+ *                 interests:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 notifications:
+ *                   type: object
+ *                 emailPreferences:
+ *                   type: object
+ *                 onboarding:
+ *                   type: object
+ *                 status:
+ *                   type: string
+ *                 createdAt:
+ *                   type: string
+ *                   format: date-time
+ *                 updatedAt:
+ *                   type: string
+ *                   format: date-time
+ *       400:
+ *         description: Bad request - Invalid input data
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       500:
+ *         description: Internal server error
+ */
 router.put('/', validateFirebaseToken, async (req, res) => {
   try {
     const userRef = db.collection('users').doc(req.user.uid);
@@ -273,7 +496,67 @@ router.put('/', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// Updated upload-avatar endpoint
+/**
+ * @swagger
+ * /api/profile/upload-avatar:
+ *   put:
+ *     summary: Upload avatar image
+ *     description: Upload and update user's profile avatar image
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - avatar
+ *             properties:
+ *               avatar:
+ *                 type: string
+ *                 format: binary
+ *                 description: Avatar image file (JPEG, PNG, GIF)
+ *     responses:
+ *       200:
+ *         description: Avatar uploaded successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 photoURL:
+ *                   type: string
+ *                   format: uri
+ *                   description: Public URL of the uploaded avatar
+ *                   example: "https://firebasestorage.googleapis.com/v0/b/bucket/o/avatars/hash-filename.jpg?alt=media"
+ *       400:
+ *         description: Bad request - No file uploaded or invalid file type
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "No file uploaded."
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Failed to upload avatar to storage."
+ *                 details:
+ *                   type: string
+ *                   description: Detailed error message (development only)
+ */
 router.put('/upload-avatar', validateFirebaseToken, upload.single('avatar'), async (req, res) => {
   try {
     console.log('Upload avatar request received');
@@ -346,7 +629,72 @@ router.put('/upload-avatar', validateFirebaseToken, upload.single('avatar'), asy
   }
 });
 
-// PUT /api/profile/interests - Update topics of interest.
+/**
+ * @swagger
+ * /api/profile/interests:
+ *   put:
+ *     summary: Update user interests
+ *     description: Update the current user's topics of interest
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - interests
+ *             properties:
+ *               interests:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   enum: [
+ *                     "Trends", "Latest Tech", "AI Tools", "Tutorials", "News",
+ *                     "Quantum Computing", "AI", "Text to Image", "Image to Video",
+ *                     "Text to Video", "Text to Sound", "Text to Song", "Speech to Song",
+ *                     "Editing Tools", "VR", "Health", "Finance", "Automation", "VR and AG"
+ *                   ]
+ *                 description: Array of interest categories
+ *                 example: ["AI", "Tech", "Development", "Tutorials"]
+ *     responses:
+ *       200:
+ *         description: Interests updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 interests:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                   example: ["AI", "Tech", "Development", "Tutorials"]
+ *       400:
+ *         description: Bad request - Invalid interests format or invalid categories
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Interests must be an array"
+ *                 invalidInterests:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                   description: List of invalid interest categories
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       500:
+ *         description: Internal server error
+ */
 router.put('/interests', validateFirebaseToken, async (req, res) => {
   try {
     const { interests } = req.body;
@@ -405,7 +753,42 @@ router.put('/interests', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// GET /api/profile/notifications - Get current notification settings.
+/**
+ * @swagger
+ * /api/profile/notifications:
+ *   get:
+ *     summary: Get notification settings
+ *     description: Retrieve the current user's notification preferences
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     responses:
+ *       200:
+ *         description: Notification settings retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 email:
+ *                   type: boolean
+ *                   description: Email notifications enabled
+ *                   example: true
+ *                 inApp:
+ *                   type: boolean
+ *                   description: In-app notifications enabled
+ *                   example: true
+ *                 push:
+ *                   type: boolean
+ *                   description: Push notifications enabled
+ *                   example: false
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/notifications', validateFirebaseToken, async (req, res) => {
   try {
     const userDoc = await db.collection('users').doc(req.user.uid).get();
@@ -419,7 +802,53 @@ router.get('/notifications', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// PUT /api/profile/notifications - Update notification settings.
+/**
+ * @swagger
+ * /api/profile/notifications:
+ *   put:
+ *     summary: Update notification settings
+ *     description: Update the current user's notification preferences
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email:
+ *                 type: boolean
+ *                 description: Enable email notifications
+ *                 example: true
+ *               inApp:
+ *                 type: boolean
+ *                 description: Enable in-app notifications
+ *                 example: true
+ *               push:
+ *                 type: boolean
+ *                 description: Enable push notifications
+ *                 example: false
+ *     responses:
+ *       200:
+ *         description: Notification settings updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 email:
+ *                   type: boolean
+ *                 inApp:
+ *                   type: boolean
+ *                 push:
+ *                   type: boolean
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       500:
+ *         description: Internal server error
+ */
 router.put('/notifications', validateFirebaseToken, async (req, res) => {
   try {
     const { notifications } = req.body; // notifications should be an object, e.g., { email: true, inApp: false }
@@ -431,7 +860,54 @@ router.put('/notifications', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// GET /api/profile/subscriptions - Get user's subscriptions.
+/**
+ * @swagger
+ * /api/profile/subscriptions:
+ *   get:
+ *     summary: Get user subscriptions
+ *     description: Retrieve the current user's active subscriptions
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     responses:
+ *       200:
+ *         description: Subscriptions retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id:
+ *                     type: string
+ *                     example: "sub-123"
+ *                   planId:
+ *                     type: string
+ *                     example: "premium-monthly"
+ *                   status:
+ *                     type: string
+ *                     enum: [active, cancelled, expired, pending]
+ *                     example: "active"
+ *                   startDate:
+ *                     type: string
+ *                     format: date-time
+ *                   endDate:
+ *                     type: string
+ *                     format: date-time
+ *                   price:
+ *                     type: number
+ *                     example: 9.99
+ *                   currency:
+ *                     type: string
+ *                     example: "USD"
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/subscriptions', validateFirebaseToken, async (req, res) => {
   try {
     const userDoc = await db.collection('users').doc(req.user.uid).get();
@@ -445,7 +921,33 @@ router.get('/subscriptions', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// GET /api/profile/favorites - Get the list of bookmarked articles.
+/**
+ * @swagger
+ * /api/profile/favorites:
+ *   get:
+ *     summary: Get user favorites
+ *     description: Retrieve the current user's favorite items (articles, agents, etc.)
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     responses:
+ *       200:
+ *         description: Favorites retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: string
+ *                 description: Array of favorite item IDs
+ *                 example: ["agent-123", "article-456", "tool-789"]
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/favorites', validateFirebaseToken, async (req, res) => {
   try {
     const userDoc = await db.collection('users').doc(req.user.uid).get();
@@ -459,7 +961,46 @@ router.get('/favorites', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// POST /api/profile/favorites - Add an article to favorites.
+/**
+ * @swagger
+ * /api/profile/favorites:
+ *   post:
+ *     summary: Add item to favorites
+ *     description: Add an item (article, agent, tool, etc.) to the user's favorites
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - favoriteId
+ *             properties:
+ *               favoriteId:
+ *                 type: string
+ *                 description: ID of the item to add to favorites
+ *                 example: "agent-123"
+ *     responses:
+ *       200:
+ *         description: Item added to favorites successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: string
+ *               description: Updated list of favorite item IDs
+ *               example: ["agent-123", "article-456", "tool-789"]
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/favorites', validateFirebaseToken, async (req, res) => {
   try {
     const { favoriteId } = req.body;
@@ -480,7 +1021,41 @@ router.post('/favorites', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// DELETE /api/profile/favorites/:id - Remove an article from favorites.
+/**
+ * @swagger
+ * /api/profile/favorites/{id}:
+ *   delete:
+ *     summary: Remove item from favorites
+ *     description: Remove an item from the user's favorites list
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID of the item to remove from favorites
+ *         example: "agent-123"
+ *     responses:
+ *       200:
+ *         description: Item removed from favorites successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: string
+ *               description: Updated list of favorite item IDs
+ *               example: ["article-456", "tool-789"]
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal server error
+ */
 router.delete('/favorites/:id', validateFirebaseToken, async (req, res) => {
   try {
     const favoriteId = req.params.id;
@@ -499,7 +1074,47 @@ router.delete('/favorites/:id', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// GET /api/profile/settings - Get user settings
+/**
+ * @swagger
+ * /api/profile/settings:
+ *   get:
+ *     summary: Get user settings
+ *     description: Retrieve the current user's application settings
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     responses:
+ *       200:
+ *         description: Settings retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 language:
+ *                   type: string
+ *                   description: User's preferred language
+ *                   example: "en"
+ *                 theme:
+ *                   type: string
+ *                   description: User's preferred theme
+ *                   example: "light"
+ *                 notifications:
+ *                   type: object
+ *                   properties:
+ *                     email:
+ *                       type: boolean
+ *                       example: true
+ *                     inApp:
+ *                       type: boolean
+ *                       example: true
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/settings', validateFirebaseToken, async (req, res) => {
   try {
     const userDoc = await db.collection('users').doc(req.user.uid).get();
@@ -519,7 +1134,78 @@ router.get('/settings', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// PUT /api/profile/settings - Update user settings
+/**
+ * @swagger
+ * /api/profile/settings:
+ *   put:
+ *     summary: Update user settings
+ *     description: Update the current user's application settings
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               language:
+ *                 type: string
+ *                 enum: [en, es, fr, de, it, pt, ru, zh, ja, ko]
+ *                 description: User's preferred language
+ *                 example: "en"
+ *               theme:
+ *                 type: string
+ *                 enum: [light, dark, auto]
+ *                 description: User's preferred theme
+ *                 example: "light"
+ *               notifications:
+ *                 type: object
+ *                 properties:
+ *                   email:
+ *                     type: boolean
+ *                     description: Enable email notifications
+ *                     example: true
+ *                   inApp:
+ *                     type: boolean
+ *                     description: Enable in-app notifications
+ *                     example: true
+ *     responses:
+ *       200:
+ *         description: Settings updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 settings:
+ *                   type: object
+ *                   properties:
+ *                     language:
+ *                       type: string
+ *                     theme:
+ *                       type: string
+ *                     notifications:
+ *                       type: object
+ *       400:
+ *         description: Bad request - Invalid language selection
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Invalid language selection"
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       500:
+ *         description: Internal server error
+ */
 router.put('/settings', validateFirebaseToken, async (req, res) => {
   try {
     const { language, theme, notifications } = req.body;
@@ -548,7 +1234,51 @@ router.put('/settings', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// GET /api/profile/community - Get community links and info
+/**
+ * @swagger
+ * /api/profile/community:
+ *   get:
+ *     summary: Get community information
+ *     description: Retrieve community links and benefits information
+ *     tags: [Profile]
+ *     security:
+ *       - FirebaseAuth: []
+ *     responses:
+ *       200:
+ *         description: Community information retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 discordLink:
+ *                   type: string
+ *                   format: uri
+ *                   description: Discord community invite link
+ *                   example: "https://discord.com/channels/1377544516579491891/1377544516579491894"
+ *                 paymentLink:
+ *                   type: string
+ *                   format: uri
+ *                   description: Payment provider link
+ *                   example: "https://payment-provider.com/your-payment-link"
+ *                 communityBenefits:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                   description: List of community benefits
+ *                   example: [
+ *                     "Access to exclusive content",
+ *                     "Direct interaction with experts",
+ *                     "Early access to new features",
+ *                     "Premium support"
+ *                   ]
+ *       401:
+ *         description: Unauthorized - Invalid or missing Firebase token
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/community', validateFirebaseToken, async (req, res) => {
   try {
     const userDoc = await db.collection('users').doc(req.user.uid).get();

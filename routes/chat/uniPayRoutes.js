@@ -27,6 +27,33 @@ const PAYPAL_BASE_URL = process.env.NODE_ENV === 'production'
 /**
  * Health check endpoint
  */
+/**
+ * @swagger
+ * /api/chat/unipay/health:
+ *   get:
+ *     summary: UniPay health check
+ *     description: Check the health of the UniPay service
+ *     tags: [UniPay Integration]
+ *     responses:
+ *       200:
+ *         description: UniPay service is healthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "success"
+ *                 service:
+ *                   type: string
+ *                   example: "unipay"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *       500:
+ *         description: UniPay service unhealthy
+ */
 router.get('/health', async (req, res) => {
   try {
     const healthCheck = await uniPayService.healthCheck();
@@ -49,105 +76,30 @@ router.get('/health', async (req, res) => {
 });
 
 /**
- * Create payment session (Updated for Official API)
- */
-router.post('/create-session', async (req, res) => {
-  try {
-    const { amount, currency, items, customerInfo, metadata = {} } = req.body;
-    
-    if (!amount || !items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ 
-        error: 'Invalid request: amount and items are required' 
-      });
-    }
-
-    // Generate order ID
-    const orderId = metadata.orderId || uuidv4();
-    
-    // Log payment session creation
-    logger.info('Creating UniPay payment session', {
-      orderId,
-      amount,
-      currency: currency || 'USD',
-      itemCount: items.length,
-      customerCountry: customerInfo?.country
-    });
-
-    // Prepare order data
-    const orderData = {
-      amount: parseFloat(amount),
-      currency: currency?.toUpperCase() || 'USD',
-      orderId,
-      items,
-      customerInfo: customerInfo || {},
-      metadata: {
-        ...metadata,
-        items: JSON.stringify(items),
-        orderId
-      }
-    };
-
-    // Create UniPay session
-    const sessionResult = await uniPayService.createPaymentSession(orderData);
-    
-    // Get available payment methods
-    const methodsResult = await uniPayService.getPaymentMethods(sessionResult.orderHashId);
-    
-    // Store session in database for tracking
-    const sessionData = {
-      orderHashId: sessionResult.orderHashId,
-      merchantOrderId: sessionResult.merchantOrderId,
-      orderId,
-      amount: sessionResult.amount,
-      originalAmount: sessionResult.originalAmount,
-      originalCurrency: sessionResult.originalCurrency,
-      currency: sessionResult.currency,
-      items,
-      customerInfo,
-      metadata,
-      status: 'created',
-      createdAt: new Date().toISOString(),
-      vatInfo: sessionResult.vatInfo || null,
-      conversionInfo: sessionResult.conversionInfo || null,
-      paymentUrl: sessionResult.paymentUrl || null
-    };
-    
-    await db.collection('uniPayOrders').doc(sessionResult.orderHashId).set(sessionData);
-    
-    logger.info(`Created UniPay session: ${sessionResult.orderHashId}`, {
-      merchantOrderId: sessionResult.merchantOrderId,
-      orderId,
-      availableMethods: methodsResult.methods,
-      amount: sessionResult.amount
-    });
-
-    return res.status(200).json({
-      success: true,
-      sessionId: sessionResult.orderHashId, // For compatibility with existing frontend
-      orderHashId: sessionResult.orderHashId,
-      merchantOrderId: sessionResult.merchantOrderId,
-      orderId,
-      amount: sessionResult.amount,
-      originalAmount: sessionResult.originalAmount,
-      currency: sessionResult.currency,
-      originalCurrency: sessionResult.originalCurrency,
-      paymentUrl: sessionResult.paymentUrl,
-      availableMethods: methodsResult.methods || [],
-      vatInfo: sessionResult.vatInfo || null,
-      conversionInfo: sessionResult.conversionInfo || null,
-      ...sessionResult
-    });
-  } catch (error) {
-    logger.error('Error creating UniPay session:', error);
-    return res.status(500).json({
-      error: 'Failed to create payment session',
-      details: error.message
-    });
-  }
-});
-
-/**
  * Get available payment methods for session
+ */
+/**
+ * @swagger
+ * /api/chat/unipay/methods/{orderHashId}:
+ *   get:
+ *     summary: Get payment methods
+ *     description: Get available payment methods for an order
+ *     tags: [UniPay Integration]
+ *     parameters:
+ *       - in: path
+ *         name: orderHashId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Order hash ID
+ *         example: "order_hash_123"
+ *     responses:
+ *       200:
+ *         description: Payment methods retrieved successfully
+ *       400:
+ *         description: Bad request - Invalid order hash
+ *       500:
+ *         description: Internal server error
  */
 router.get('/methods/:orderHashId', async (req, res) => {
   try {
@@ -172,6 +124,42 @@ router.get('/methods/:orderHashId', async (req, res) => {
 
 /**
  * Process payment redirect (UniPay specific)
+ */
+/**
+ * @swagger
+ * /api/chat/unipay/process-redirect:
+ *   post:
+ *     summary: Process payment redirect
+ *     description: Process a payment redirect from UniPay
+ *     tags: [UniPay Integration]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - orderHashId
+ *               - paymentMethod
+ *             properties:
+ *               orderHashId:
+ *                 type: string
+ *                 description: Order hash ID
+ *                 example: "order_hash_123"
+ *               paymentMethod:
+ *                 type: string
+ *                 description: Payment method
+ *                 example: "card"
+ *               redirectData:
+ *                 type: object
+ *                 description: Redirect data from payment provider
+ *     responses:
+ *       200:
+ *         description: Payment redirect processed successfully
+ *       400:
+ *         description: Bad request - Invalid redirect data
+ *       500:
+ *         description: Internal server error
  */
 router.post('/process-redirect', async (req, res) => {
   try {
@@ -213,6 +201,47 @@ router.post('/process-redirect', async (req, res) => {
 
 /**
  * Confirm order (for preauth)
+ */
+/**
+ * @swagger
+ * /api/chat/unipay/confirm-order:
+ *   post:
+ *     summary: Confirm order
+ *     description: Confirm a payment order
+ *     tags: [UniPay Integration]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - orderHashId
+ *               - paymentId
+ *             properties:
+ *               orderHashId:
+ *                 type: string
+ *                 description: Order hash ID
+ *                 example: "order_hash_123"
+ *               paymentId:
+ *                 type: string
+ *                 description: Payment ID
+ *                 example: "payment_123"
+ *               amount:
+ *                 type: number
+ *                 description: Payment amount
+ *                 example: 29.99
+ *               currency:
+ *                 type: string
+ *                 description: Currency code
+ *                 example: "USD"
+ *     responses:
+ *       200:
+ *         description: Order confirmed successfully
+ *       400:
+ *         description: Bad request - Invalid order data
+ *       500:
+ *         description: Internal server error
  */
 router.post('/confirm-order', async (req, res) => {
   try {
@@ -256,6 +285,29 @@ router.post('/confirm-order', async (req, res) => {
 /**
  * Get payment status
  */
+/**
+ * @swagger
+ * /api/chat/unipay/status/{orderHashId}:
+ *   get:
+ *     summary: Get payment status
+ *     description: Get the status of a payment by order hash ID
+ *     tags: [UniPay Integration]
+ *     parameters:
+ *       - in: path
+ *         name: orderHashId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Order hash ID
+ *         example: "order_hash_123"
+ *     responses:
+ *       200:
+ *         description: Payment status retrieved successfully
+ *       404:
+ *         description: Order not found
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/status/:orderHashId', async (req, res) => {
   try {
     const { orderHashId } = req.params;
@@ -285,6 +337,43 @@ router.get('/status/:orderHashId', async (req, res) => {
 
 /**
  * Create refund
+ */
+/**
+ * @swagger
+ * /api/chat/unipay/refund:
+ *   post:
+ *     summary: Create refund
+ *     description: Create a refund for a payment
+ *     tags: [UniPay Integration]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - paymentId
+ *               - amount
+ *             properties:
+ *               paymentId:
+ *                 type: string
+ *                 description: Payment ID to refund
+ *                 example: "payment_123"
+ *               amount:
+ *                 type: number
+ *                 description: Refund amount
+ *                 example: 29.99
+ *               reason:
+ *                 type: string
+ *                 description: Refund reason
+ *                 example: "Customer requested refund"
+ *     responses:
+ *       200:
+ *         description: Refund created successfully
+ *       400:
+ *         description: Bad request - Invalid refund data
+ *       500:
+ *         description: Internal server error
  */
 router.post('/refund', async (req, res) => {
   try {
@@ -350,6 +439,28 @@ router.post('/refund', async (req, res) => {
 /**
  * Webhook handler for UniPay events
  */
+/**
+ * @swagger
+ * /api/chat/unipay/webhook:
+ *   post:
+ *     summary: UniPay webhook handler
+ *     description: Handle UniPay webhook events
+ *     tags: [UniPay Integration]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             description: UniPay webhook event data
+ *     responses:
+ *       200:
+ *         description: Webhook processed successfully
+ *       400:
+ *         description: Bad request - Invalid webhook data
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
     const payload = req.body.toString();
@@ -399,6 +510,34 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 /**
  * Success callback endpoint (for redirect handling)
  */
+/**
+ * @swagger
+ * /api/chat/unipay/success:
+ *   get:
+ *     summary: Payment success callback
+ *     description: Handle successful payment redirect
+ *     tags: [UniPay Integration]
+ *     parameters:
+ *       - in: query
+ *         name: orderHashId
+ *         schema:
+ *           type: string
+ *         description: Order hash ID
+ *         example: "order_hash_123"
+ *       - in: query
+ *         name: paymentId
+ *         schema:
+ *           type: string
+ *         description: Payment ID
+ *         example: "payment_123"
+ *     responses:
+ *       200:
+ *         description: Success page displayed
+ *       400:
+ *         description: Bad request - Missing parameters
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/success', async (req, res) => {
   try {
     const { payment_id, status, order_hash_id } = req.query;
@@ -426,6 +565,26 @@ router.get('/success', async (req, res) => {
 
 /**
  * Cancel callback endpoint
+ */
+/**
+ * @swagger
+ * /api/chat/unipay/cancel:
+ *   get:
+ *     summary: Payment cancel callback
+ *     description: Handle canceled payment redirect
+ *     tags: [UniPay Integration]
+ *     parameters:
+ *       - in: query
+ *         name: orderHashId
+ *         schema:
+ *           type: string
+ *         description: Order hash ID
+ *         example: "order_hash_123"
+ *     responses:
+ *       200:
+ *         description: Cancel page displayed
+ *       500:
+ *         description: Internal server error
  */
 router.get('/cancel', async (req, res) => {
   try {
@@ -457,6 +616,41 @@ router.get('/cancel', async (req, res) => {
 /**
  * Get error list
  */
+/**
+ * @swagger
+ * /api/chat/unipay/errors:
+ *   get:
+ *     summary: Get error list
+ *     description: Get list of payment errors
+ *     tags: [UniPay Integration]
+ *     responses:
+ *       200:
+ *         description: Error list retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 errors:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       code:
+ *                         type: string
+ *                         example: "PAYMENT_FAILED"
+ *                       message:
+ *                         type: string
+ *                         example: "Payment processing failed"
+ *                       description:
+ *                         type: string
+ *                         example: "The payment could not be processed"
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/errors', async (req, res) => {
   try {
     const result = await uniPayService.getErrorList();
@@ -476,6 +670,41 @@ router.get('/errors', async (req, res) => {
 
 /**
  * Get status list
+ */
+/**
+ * @swagger
+ * /api/chat/unipay/statuses:
+ *   get:
+ *     summary: Get status list
+ *     description: Get list of payment statuses
+ *     tags: [UniPay Integration]
+ *     responses:
+ *       200:
+ *         description: Status list retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 statuses:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       code:
+ *                         type: string
+ *                         example: "PENDING"
+ *                       name:
+ *                         type: string
+ *                         example: "Pending"
+ *                       description:
+ *                         type: string
+ *                         example: "Payment is pending"
+ *       500:
+ *         description: Internal server error
  */
 router.get('/statuses', async (req, res) => {
   try {
@@ -520,6 +749,53 @@ async function generatePayPalAccessToken() {
 }
 
 // Create PayPal order
+/**
+ * @swagger
+ * /api/chat/unipay/paypal/create-order:
+ *   post:
+ *     summary: Create PayPal order via UniPay
+ *     description: Create a PayPal order through UniPay integration
+ *     tags: [UniPay Integration]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - amount
+ *               - currency
+ *             properties:
+ *               amount:
+ *                 type: number
+ *                 description: Order amount
+ *                 example: 29.99
+ *               currency:
+ *                 type: string
+ *                 description: Currency code
+ *                 example: "USD"
+ *               items:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     name:
+ *                       type: string
+ *                       example: "AI Agent License"
+ *                     quantity:
+ *                       type: integer
+ *                       example: 1
+ *                     price:
+ *                       type: number
+ *                       example: 29.99
+ *     responses:
+ *       200:
+ *         description: PayPal order created successfully
+ *       400:
+ *         description: Bad request - Invalid order data
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/paypal/create-order', async (req, res) => {
   try {
     const { amount, currency, items, customerInfo, metadata = {} } = req.body;
@@ -625,6 +901,38 @@ router.post('/paypal/create-order', async (req, res) => {
 });
 
 // Capture PayPal payment
+/**
+ * @swagger
+ * /api/chat/unipay/paypal/capture:
+ *   post:
+ *     summary: Capture PayPal payment via UniPay
+ *     description: Capture a PayPal payment through UniPay integration
+ *     tags: [UniPay Integration]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - orderId
+ *             properties:
+ *               orderId:
+ *                 type: string
+ *                 description: PayPal order ID
+ *                 example: "PAYPAL-ORDER-123"
+ *               amount:
+ *                 type: number
+ *                 description: Capture amount
+ *                 example: 29.99
+ *     responses:
+ *       200:
+ *         description: PayPal payment captured successfully
+ *       400:
+ *         description: Bad request - Invalid capture data
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/paypal/capture', async (req, res) => {
   try {
     const { orderID } = req.body;

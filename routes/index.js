@@ -26,15 +26,15 @@ const { router: promptsRoutes } = require('./ai-tools/prompts');
 
 // NEW: Import cache management routes
 const cacheRoutes = require('./api/cacheRoutes');
+const imageCacheRoutes = require('./api/imageCacheRoutes');
 
 const adminRoutes = require('./admin/admin');
 const adminEmailRoutes = require('./admin/adminEmailRoutes');
 const emailRoutes = require('./api/emailRoutes');
 const healthRoutes = require('./health');
 const videosRoutes = require('./videos/videos');
-const tokenRoutes = require('./api/tokenRoutes');
-const testAuthRoutes = require('./api/testAuthRoutes');
-const simpleTokenRoutes = require('./api/simpleTokenRoutes');
+// Old insecure token routes removed for security
+const secureTokenService = require('./api/secureTokenService');
 
 // Mount routes - these will all be under /api in the main app
 // IMPORTANT: Mount specific routes before catch-all routes
@@ -64,8 +64,8 @@ router.use('/ai-tools', aiToolsRoutes);
 // NEW: Mount prompts routes - completely separate from ai-tools
 router.use('/prompts', promptsRoutes);
 
-// Payment system routes (updated)
-router.use('/payments', paymentsRoutes);    // Main payment endpoints + UniPay subroutes
+// Payment system routes (PayPal only)
+router.use('/payments', paymentsRoutes);
 router.use('/invoices', invoiceRoutes);     // Invoice management API
 router.use('/templates', templateRoutes);   // Secure template downloads
 
@@ -76,13 +76,13 @@ router.use('/admin/email', adminEmailRoutes);
 // Utility routes
 router.use('/email', emailRoutes);
 router.use('/health', healthRoutes);
-router.use('/tokens', tokenRoutes);
-router.use('/test-auth', testAuthRoutes);
-router.use('/simple-tokens', simpleTokenRoutes);
+// Old insecure token routes removed - use /secure-tokens instead
+router.use('/secure-tokens', secureTokenService);
 router.use('/test', testRoutes);
 
 // NEW: Mount cache management routes
 router.use('/cache', cacheRoutes);
+router.use('/cache/images', imageCacheRoutes);
 
 // Note: /api/chat is mounted separately in the main app file
 

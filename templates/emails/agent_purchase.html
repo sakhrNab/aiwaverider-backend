@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Your AI Agent Template is Ready</title>
+  <title>Your AI Agent Workflow is Ready</title>
   <style>
     /* Reset styles */
     body, p, h1, h2, h3, h4, h5, h6, ul, ol, li {
@@ -266,8 +266,8 @@
       
       {{#if downloadUrl}}
         <div class="download-info">
-          <a href="{{downloadUrl}}" class="download-button">Download Your Template</a>
-          <p class="download-note">This download link will remain active for 30 days.</p>
+          <!-- <a href="{{downloadUrl}}" class="download-button">Download Your Template</a> -->
+          <p class="download-note">This download link is now active.</p>
         </div>
       {{/if}}
       
@@ -286,7 +286,10 @@
       
       <p>If you have any questions or need assistance with your agent template, please don't hesitate to contact our support team.</p>
       
-      <a href="mailto:{{supportEmail}}" class="button">Contact Support</a>
+      <!-- <a href="{{#if downloadUrl}}{{downloadUrl}}&format=download{{else}}{{websiteUrl}}/account/orders/{{orderId}}{{/if}}" class="button">Download Your Template</a> -->
+      <p class="download-note">Your template is also attached to this email, along with a README.txt setup guide.</p>
+      
+      <a href="mailto:{{supportEmail}}" class="button" style="background-color:#555;margin-left:10px;">Contact Support</a>
     </div>
     
     <div class="footer">

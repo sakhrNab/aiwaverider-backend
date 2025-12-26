@@ -11,9 +11,55 @@ const fs = require('fs');
 const COLLECTION_NAME = 'ai_tools';
 
 /**
- * @route   GET /api/ai-tools
- * @desc    Get all AI tools
- * @access  Public
+ * @swagger
+ * /api/ai-tools:
+ *   get:
+ *     summary: Get all AI tools
+ *     description: Retrieve a list of all AI tools available in the system
+ *     tags: [AI Tools]
+ *     parameters:
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *         description: Filter by category
+ *         example: "Development"
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search term for tool title and description
+ *         example: "code generator"
+ *       - in: query
+ *         name: tags
+ *         schema:
+ *           type: string
+ *         description: Comma-separated list of tags to filter by
+ *         example: "development,coding"
+ *     responses:
+ *       200:
+ *         description: AI tools retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 count:
+ *                   type: integer
+ *                   example: 25
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/AITool'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.get('/', async (req, res) => {
   try {
@@ -47,9 +93,61 @@ router.get('/', async (req, res) => {
 });
 
 /**
- * @route   GET /api/ai-tools/:id
- * @desc    Get a single AI tool by ID
- * @access  Public
+ * @swagger
+ * /api/ai-tools/{id}:
+ *   get:
+ *     summary: Get AI tool by ID
+ *     description: Get a single AI tool by its ID
+ *     tags: [AI Tools]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: AI tool ID
+ *         example: "tool-123"
+ *     responses:
+ *       200:
+ *         description: AI tool retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   $ref: '#/components/schemas/AITool'
+ *       400:
+ *         description: Bad request - Invalid ID
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 error:
+ *                   type: string
+ *                   example: "Invalid ID provided"
+ *       404:
+ *         description: AI tool not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 error:
+ *                   type: string
+ *                   example: "AI tool with ID tool-123 not found"
+ *       500:
+ *         description: Internal server error
  */
 router.get('/:id', async (req, res) => {
   try {
@@ -108,9 +206,78 @@ router.get('/:id', async (req, res) => {
 });
 
 /**
- * @route   POST /api/ai-tools
- * @desc    Create a new AI tool
- * @access  Private (Admin only)
+ * @swagger
+ * /api/ai-tools:
+ *   post:
+ *     summary: Create new AI tool
+ *     description: Create a new AI tool (Admin only)
+ *     tags: [AI Tools]
+ *     security:
+ *       - FirebaseAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - title
+ *               - description
+ *             properties:
+ *               title:
+ *                 type: string
+ *                 description: AI tool title
+ *                 example: "Code Generator"
+ *               description:
+ *                 type: string
+ *                 description: AI tool description
+ *                 example: "An AI-powered code generation tool"
+ *               link:
+ *                 type: string
+ *                 description: Tool URL
+ *                 example: "https://example.com/tool"
+ *               keywords:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Keywords (array of strings)
+ *                 example: ["coding", "development", "ai"]
+ *               category:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Tool categories (array of strings)
+ *                 example: ["Productivity", "AI Tools"]
+ *               tags:
+ *                 type: string
+ *                 description: Comma-separated tags
+ *                 example: "ai,coding,productivity"
+ *               additionalHTML:
+ *                 type: string
+ *                 description: Additional HTML content
+ *               image:
+ *                 type: string
+ *                 format: binary
+ *                 description: Tool image
+ *     responses:
+ *       201:
+ *         description: AI tool created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   $ref: '#/components/schemas/AITool'
+ *       400:
+ *         description: Bad request - Missing required fields
+ *       403:
+ *         description: Forbidden - Admin privileges required
+ *       500:
+ *         description: Internal server error
  */
 router.post('/', auth, upload.single('image'), async (req, res) => {
   try {
@@ -125,7 +292,7 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
     }
     
     // Extract fields from request body
-    const { title, description, link, keyword, category, additionalHTML } = req.body;
+    const { title, description, link, keyword, keywords, category, additionalHTML } = req.body;
     
     // Handle tags which might be a string, array, or missing
     let tags = [];
@@ -143,16 +310,32 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
     }
     
     // Handle keywords which might be a string, array, or missing
-    let keywords = [];
-    if (keyword) {
-      if (Array.isArray(keyword)) {
-        keywords = keyword;
-      } else if (typeof keyword === 'string') {
+    let processedKeywords = [];
+    const keywordsInput = keywords || keyword; // Support both 'keywords' and 'keyword' for backward compatibility
+    if (keywordsInput) {
+      if (Array.isArray(keywordsInput)) {
+        processedKeywords = keywordsInput;
+      } else if (typeof keywordsInput === 'string') {
         // If it's a comma-separated string, split it
-        if (keyword.includes(',')) {
-          keywords = keyword.split(',').map(kw => kw.trim());
+        if (keywordsInput.includes(',')) {
+          processedKeywords = keywordsInput.split(',').map(kw => kw.trim());
         } else {
-          keywords = [keyword];
+          processedKeywords = [keywordsInput];
+        }
+      }
+    }
+    
+    // Handle category which might be a string, array, or missing
+    let processedCategory = [];
+    if (category) {
+      if (Array.isArray(category)) {
+        processedCategory = category;
+      } else if (typeof category === 'string') {
+        // If it's a comma-separated string, split it
+        if (category.includes(',')) {
+          processedCategory = category.split(',').map(cat => cat.trim());
+        } else {
+          processedCategory = [category];
         }
       }
     }
@@ -162,8 +345,8 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
     console.log('Title:', title);
     console.log('Description:', description);
     console.log('Link:', link);
-    console.log('Keyword:', keyword);
-    console.log('Category:', category);
+    console.log('Keywords:', processedKeywords);
+    console.log('Category:', processedCategory);
     console.log('Additional HTML:', additionalHTML);
     console.log('Tags:', tags);
     console.log('Image file:', req.file);
@@ -239,9 +422,9 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
       description,
       link: safeLink,
       image: imageUrl || '',
-      keywords: keywords || [],  // Store as array of keywords
+      keywords: processedKeywords,  // Store as array of keywords
       tags: tags || [],
-      category: category || '',
+      category: processedCategory,  // Store as array of categories
       additionalHTML: additionalHTML || '',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -271,9 +454,83 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
 });
 
 /**
- * @route   PUT /api/ai-tools/:id
- * @desc    Update an AI tool
- * @access  Private (Admin only)
+ * @swagger
+ * /api/ai-tools/{id}:
+ *   put:
+ *     summary: Update AI tool
+ *     description: Update an existing AI tool (Admin only)
+ *     tags: [AI Tools]
+ *     security:
+ *       - FirebaseAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: AI tool ID
+ *         example: "tool-123"
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title:
+ *                 type: string
+ *                 description: AI tool title
+ *                 example: "Updated Code Generator"
+ *               description:
+ *                 type: string
+ *                 description: AI tool description
+ *                 example: "An updated AI-powered code generation tool"
+ *               link:
+ *                 type: string
+ *                 description: Tool URL
+ *                 example: "https://example.com/updated-tool"
+ *               keywords:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Keywords (array of strings)
+ *                 example: ["coding", "development", "ai", "updated"]
+ *               category:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Tool categories (array of strings)
+ *                 example: ["Productivity", "AI Tools"]
+ *               tags:
+ *                 type: string
+ *                 description: Comma-separated tags
+ *                 example: "ai,coding,productivity,updated"
+ *               additionalHTML:
+ *                 type: string
+ *                 description: Additional HTML content
+ *               image:
+ *                 type: string
+ *                 format: binary
+ *                 description: Tool image
+ *     responses:
+ *       200:
+ *         description: AI tool updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   $ref: '#/components/schemas/AITool'
+ *       403:
+ *         description: Forbidden - Admin privileges required
+ *       404:
+ *         description: AI tool not found
+ *       500:
+ *         description: Internal server error
  */
 router.put('/:id', auth, upload.single('image'), async (req, res) => {
   try {
@@ -305,15 +562,31 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
     
     // Handle keywords which might be a string, array, or missing
     let keywords = undefined;
-    if (keyword) {
-      if (Array.isArray(keyword)) {
-        keywords = keyword;
-      } else if (typeof keyword === 'string') {
+    const keywordsInput = req.body.keywords || keyword; // Support both 'keywords' and 'keyword' for backward compatibility
+    if (keywordsInput) {
+      if (Array.isArray(keywordsInput)) {
+        keywords = keywordsInput;
+      } else if (typeof keywordsInput === 'string') {
         // If it's a comma-separated string, split it
-        if (keyword.includes(',')) {
-          keywords = keyword.split(',').map(kw => kw.trim());
+        if (keywordsInput.includes(',')) {
+          keywords = keywordsInput.split(',').map(kw => kw.trim());
         } else {
-          keywords = [keyword];
+          keywords = [keywordsInput];
+        }
+      }
+    }
+
+    // Handle category which might be a string, array, or missing
+    let processedCategory = undefined;
+    if (category) {
+      if (Array.isArray(category)) {
+        processedCategory = category;
+      } else if (typeof category === 'string') {
+        // If it's a comma-separated string, split it
+        if (category.includes(',')) {
+          processedCategory = category.split(',').map(cat => cat.trim());
+        } else {
+          processedCategory = [category];
         }
       }
     }
@@ -391,7 +664,7 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
       ...(imageUrl && { image: imageUrl }),
       ...(keywords && { keywords }),  // Store as array of keywords
       ...(tags && { tags }),
-      ...(category && { category }),
+      ...(processedCategory && { category: processedCategory }), // Store as array of categories
       ...(additionalHTML && { additionalHTML }),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedBy: req.user.uid
@@ -420,9 +693,42 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
 });
 
 /**
- * @route   DELETE /api/ai-tools/:id
- * @desc    Delete an AI tool
- * @access  Private (Admin only)
+ * @swagger
+ * /api/ai-tools/{id}:
+ *   delete:
+ *     summary: Delete AI tool
+ *     description: Delete an AI tool (Admin only)
+ *     tags: [AI Tools]
+ *     security:
+ *       - FirebaseAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: AI tool ID
+ *         example: "tool-123"
+ *     responses:
+ *       200:
+ *         description: AI tool deleted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "AI tool tool-123 has been deleted"
+ *       403:
+ *         description: Forbidden - Admin privileges required
+ *       404:
+ *         description: AI tool not found
+ *       500:
+ *         description: Internal server error
  */
 router.delete('/:id', auth, async (req, res) => {
   try {

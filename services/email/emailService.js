@@ -471,6 +471,9 @@ exports.sendAgentPurchaseEmail = async (purchaseData) => {
       }
     };
     
+    // Initialize attachments array
+    mailOptions.attachments = mailOptions.attachments || [];
+
     // Add attachment for the template file (enhanced logic)
     if (purchaseData.templateContent && !purchaseData.isSepaPayment) {
       try {
@@ -502,18 +505,18 @@ exports.sendAgentPurchaseEmail = async (purchaseData) => {
         }
         
         // Attach the file
-        mailOptions.attachments = [{
+        mailOptions.attachments.push({
           filename: filename,
           content: content
-        }];
+        });
         logger.info(`Attaching template for ${purchaseData.agentName} as ${filename}`);
       } catch (formatError) {
         logger.error(`Error formatting template content: ${formatError.message}`);
         // Still attach the original content if there's an error in formatting
-        mailOptions.attachments = [{
+        mailOptions.attachments.push({
           filename: `${purchaseData.agentName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_template.txt`,
           content: purchaseData.templateContent
-        }];
+        });
       }
     } else if (purchaseData.agentId && !purchaseData.isSepaPayment) {
       try {
@@ -530,10 +533,10 @@ exports.sendAgentPurchaseEmail = async (purchaseData) => {
           const filename = `${purchaseData.agentName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_template.json`;
           
           // Attach the file - templateContent should already be properly formatted JSON
-          mailOptions.attachments = [{
+          mailOptions.attachments.push({
             filename: filename,
             content: templateContent
-          }];
+          });
           logger.info(`Attaching REAL template from orderController for agent ${agentId}`);
         } else {
           logger.warn(`No template content returned from getAgentTemplate for agent ${agentId}`);
@@ -541,6 +544,21 @@ exports.sendAgentPurchaseEmail = async (purchaseData) => {
       } catch (fetchError) {
         logger.error(`Error fetching template content: ${fetchError.message}`);
       }
+    }
+
+    // Always attach README/Setup guide if available and not SEPA
+    try {
+      if (!purchaseData.isSepaPayment) {
+        const readmeContent = `AI Waverider - Setup Guide\n\nThank you for your purchase!\n\nHow to use your template:\n1) Download the attached JSON file.\n2) Open it with a text editor and copy its content.\n3) Paste into your N8N.\n4) Follow any notes inside the template.\n\nNeed help? Contact: ${config.supportEmail}\nWebsite: ${config.websiteUrl}\n`;
+        mailOptions.attachments.push({
+          filename: 'README.txt',
+          content: readmeContent,
+          contentType: 'text/plain'
+        });
+        logger.info('Attached README.txt setup guide');
+      }
+    } catch (readmeErr) {
+      logger.warn('Failed to attach README.txt:', readmeErr.message);
     }
     
     // Send the email
@@ -562,7 +580,7 @@ function getPaymentMethodDisplayInfo(paymentMethod, paymentProcessor) {
   const methodMap = {
     'card': {
       displayName: 'Credit/Debit Card',
-      processorName: paymentProcessor === 'unipay' ? 'UniPay' : 'Stripe',
+      processorName: 'PayPal',
       note: null
     },
     'paypal': {
@@ -572,34 +590,30 @@ function getPaymentMethodDisplayInfo(paymentMethod, paymentProcessor) {
     },
     'google_pay': {
       displayName: 'Google Pay',
-      processorName: paymentProcessor === 'google_direct' ? 'Google Pay Direct' : 'UniPay',
+      processorName: 'google_direct',
       note: 'Payment processed through your Google Pay wallet.'
     },
-    'apple_pay': {
-      displayName: 'Apple Pay',
-      processorName: paymentProcessor === 'apple_direct' ? 'Apple Pay Direct' : 'UniPay',
-      note: 'Payment processed through your Apple Pay wallet.'
-    },
+    
     'sepa': {
       displayName: 'SEPA Bank Transfer',
-      processorName: paymentProcessor === 'unipay' ? 'UniPay' : 'Stripe',
+      processorName: 'PayPal',
       note: 'Bank transfer processed through the SEPA network.'
     },
     'sepa_debit': {
       displayName: 'SEPA Direct Debit',
-      processorName: paymentProcessor === 'unipay' ? 'UniPay' : 'Stripe',
+      processorName: 'PayPal',
       note: 'Direct debit from your bank account.'
     },
     'sepa_credit_transfer': {
       displayName: 'SEPA Credit Transfer',
-      processorName: paymentProcessor === 'unipay' ? 'UniPay' : 'Manual',
+      processorName: 'Manual',
       note: 'Bank transfer will be processed within 1-2 business days.'
     }
   };
 
   return methodMap[paymentMethod] || {
     displayName: 'Payment',
-    processorName: paymentProcessor || 'Unknown',
+    processorName: paymentProcessor || 'PayPal',
     note: null
   };
 }

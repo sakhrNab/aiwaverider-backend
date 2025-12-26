@@ -10,14 +10,14 @@ const router = express.Router();
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 
-// Import UniPay routes
-const unipayRoutes = require('./unipay');
+// Import UniPay routes (removed)
+// const unipayRoutes = null;
 
 // Services and Controllers
 const logger = require('../../utils/logger');
 const orderController = require('../../controllers/payment/orderController');
 const invoiceService = require('../../services/invoice/invoiceService');
-const uniPayService = require('../../services/payment/uniPayService');
+// const uniPayService = null;
 const { db } = require('../../config/firebase');
 
 /**
@@ -50,13 +50,50 @@ const isProduction = process.env.NODE_ENV === 'production' && process.env.UNIPAY
 
 // Log environment on startup
 logger.info(`Payment system initialized in ${isProduction ? 'PRODUCTION' : 'TEST'} mode`, {
-  uniPayConfigured: !!(process.env.UNIPAY_MERCHANT_ID || process.env.UNIPAY_TEST_MERCHANT_ID),
   paypalConfigured: !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id'),
   environment: isProduction ? 'production' : 'test'
 });
 
 /**
- * Test endpoint - health check for the entire payment system
+ * @swagger
+ * /api/payments/test:
+ *   get:
+ *     summary: Test payment system
+ *     description: Health check endpoint for the entire payment system
+ *     tags: [Payments]
+ *     responses:
+ *       200:
+ *         description: Payment system is operational
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "success"
+ *                 message:
+ *                   type: string
+ *                   example: "Payment routes are working correctly"
+ *                 environment:
+ *                   type: string
+ *                   example: "test"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                   example: "2024-01-15T10:30:00Z"
+ *                 availableProviders:
+ *                   type: object
+ *                   properties:
+ *                     paypal:
+ *                       type: boolean
+ *                       example: true
+ *                     directGooglePay:
+ *                       type: boolean
+ *                       example: true
+ *                     directApplePay:
+ *                       type: boolean
+ *                       example: true
  */
 router.get('/test', (req, res) => {
   logger.info('Payment routes test endpoint accessed');
@@ -67,7 +104,6 @@ router.get('/test', (req, res) => {
     environment: isProduction ? 'production' : 'test',
     timestamp: new Date().toISOString(),
     availableProviders: {
-      unipay: !!(process.env.UNIPAY_MERCHANT_ID || process.env.UNIPAY_TEST_MERCHANT_ID),
       paypal: !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id'),
       directGooglePay: true, // Available through frontend SDK
       directApplePay: true   // Available through frontend SDK
@@ -78,184 +114,221 @@ router.get('/test', (req, res) => {
 /**
  * Get supported payment methods for a region/country
  */
+/**
+ * @swagger
+ * /api/payments/payment-methods:
+ *   get:
+ *     summary: Get supported payment methods
+ *     description: Get supported payment methods for a region/country
+ *     tags: [Payments]
+ *     parameters:
+ *       - in: query
+ *         name: country
+ *         schema:
+ *           type: string
+ *         description: Country code
+ *         example: "US"
+ *       - in: query
+ *         name: currency
+ *         schema:
+ *           type: string
+ *         description: Currency code
+ *         example: "USD"
+ *     responses:
+ *       200:
+ *         description: Payment methods retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 methods:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                         example: "paypal"
+ *                       name:
+ *                         type: string
+ *                         example: "PayPal"
+ *                       enabled:
+ *                         type: boolean
+ *                         example: true
+ *                       icon:
+ *                         type: string
+ *                         example: "https://example.com/paypal-icon.png"
+ *       500:
+ *         description: Internal server error
+ */
 router.get('/payment-methods', async (req, res) => {
   try {
-    const { countryCode = 'US', amount, currency } = req.query;
-    
-    // Base payment methods always available
-    const methods = {
-      unipay_card: {
-        name: 'Credit/Debit Card (UniPay)',
-        provider: 'unipay',
-        available: !!(process.env.UNIPAY_MERCHANT_ID || process.env.UNIPAY_TEST_MERCHANT_ID),
-        requirements: ['Any country'],
-        description: 'Pyment gateway - Visa, Mastercard, and other major cards',
-        redirect: true // UniPay uses redirect flow
-      },
-      paypal: {
-        name: 'PayPal',
-        provider: 'paypal_direct',
-        available: !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id'),
-        requirements: ['Any country'],
-        description: 'Pay with your PayPal account'
-      },
-      google_pay: {
-        name: 'Google Pay',
-        provider: 'google_direct',
-        available: true,
-        requirements: ['Android devices', 'Chrome browser'],
-        description: 'Pay with Google Pay wallet'
-      },
-      apple_pay: {
-        name: 'Apple Pay',
-        provider: 'apple_direct',
-        available: true,
-        requirements: ['iOS devices', 'Safari browser', 'macOS Safari'],
-        description: 'Pay with Apple Pay wallet'
-      }
-    };
-
-    // UniPay is primarily for Georgian and regional markets
-    if (['GE', 'AM', 'AZ', 'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR',
-      'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL',
-      'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE'].includes(countryCode)) {
-      methods.unipay_card.priority = 1;
-      methods.unipay_card.recommended = true;
-    }
-
-    logger.info(`Payment methods requested for country: ${countryCode}`);
-
     return res.status(200).json({
       status: 'success',
-      countryCode,
-      currency: currency || 'USD',
-      amount: amount || null,
-      availableMethods: Object.keys(methods).filter(key => methods[key].available),
-      methodDetails: methods,
-      recommendation: getRecommendedMethod(countryCode),
+      availableMethods: ['paypal'],
+      methodDetails: {
+        paypal: {
+          name: 'PayPal',
+          provider: 'paypal_direct',
+          available: !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id'),
+          description: 'Pay with your PayPal account or cards via PayPal'
+        }, 
+        google_pay: {
+          name: 'Google Pay',
+          provider: 'google_direct',
+          available: true,
+          requirements: ['Android devices', 'Chrome browser'],
+          description: 'Pay with Google Pay wallet'
+        },
+      },
+      recommendation: 'paypal',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    logger.error('Error getting payment methods:', error);
-    return res.status(500).json({
-      error: 'Failed to get payment methods',
-      details: error.message
-    });
+    return res.status(500).json({ error: 'Failed to get payment methods' });
   }
 });
 
 /**
  * Create unified payment session (Updated for UniPay v3)
  */
+/**
+ * @swagger
+ * /api/payments/create-session:
+ *   post:
+ *     summary: Create payment session
+ *     description: Create a new payment session
+ *     tags: [Payments]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - amount
+ *               - currency
+ *             properties:
+ *               amount:
+ *                 type: number
+ *                 description: Payment amount
+ *                 example: 29.99
+ *               currency:
+ *                 type: string
+ *                 description: Currency code
+ *                 example: "USD"
+ *               items:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     name:
+ *                       type: string
+ *                       example: "AI Agent License"
+ *                     quantity:
+ *                       type: integer
+ *                       example: 1
+ *                     price:
+ *                       type: number
+ *                       example: 29.99
+ *               customerInfo:
+ *                 type: object
+ *                 properties:
+ *                   email:
+ *                     type: string
+ *                     format: email
+ *                     example: "customer@example.com"
+ *                   name:
+ *                     type: string
+ *                     example: "John Doe"
+ *     responses:
+ *       200:
+ *         description: Payment session created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 sessionId:
+ *                   type: string
+ *                   example: "cs_test_123"
+ *                 clientSecret:
+ *                   type: string
+ *                   example: "cs_test_123_secret_456"
+ *       400:
+ *         description: Bad request - Invalid payment data
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/create-session', async (req, res) => {
+  // Deprecated: Only PayPal is supported; instruct client to use PayPal order creation
   try {
-    const { amount, currency, items, customerInfo, metadata = {}, preferredProvider } = req.body;
-    
-    if (!amount || !items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({
-        error: 'Invalid request: amount and items are required'
-      });
-    }
-
-    const orderId = metadata.orderId || uuidv4();
-    
-    logger.info('Creating unified payment session', {
+    const orderId = req.body?.metadata?.orderId || uuidv4();
+    return res.status(200).json({
+      success: true,
+      provider: 'paypal_direct',
+      sessionType: 'paypal',
       orderId,
-      amount,
-      currency: currency || 'USD',
-      itemCount: items.length,
-      preferredProvider
+      message: 'Use /api/payments/paypal/create-order to create PayPal order'
     });
-
-    // Default to UniPay for card payments (Updated)
-    if (!preferredProvider || preferredProvider === 'unipay') {
-      try {
-        // Create UniPay session (Updated API call)
-        const result = await uniPayService.createPaymentSession({
-          amount: parseFloat(amount),
-          currency: currency?.toUpperCase() || 'USD',
-          orderId,
-          items,
-          customerInfo: customerInfo || {},
-          metadata: {
-            ...metadata,
-            items: JSON.stringify(items),
-            orderId
-          }
-        });
-
-        return res.status(200).json({
-          success: true,
-          provider: 'unipay',
-          sessionType: 'unipay',
-          sessionId: result.orderHashId, // Updated: UniPay uses orderHashId
-          orderHashId: result.orderHashId,
-          merchantOrderId: result.merchantOrderId,
-          orderId,
-          paymentUrl: result.paymentUrl, // Redirect URL for payment
-          amount: result.amount,
-          originalAmount: result.originalAmount,
-          currency: result.currency,
-          originalCurrency: result.originalCurrency,
-          vatInfo: result.vatInfo,
-          conversionInfo: result.conversionInfo,
-          redirect: true, // Indicate this needs redirect
-          ...result
-        });
-      } catch (uniPayError) {
-        logger.error('UniPay session creation failed:', uniPayError);
-        return res.status(500).json({
-          error: 'Failed to create payment session',
-          details: uniPayError.message
-        });
-      }
-    }
-
-    // Handle other providers (unchanged)
-    switch (preferredProvider) {
-      case 'paypal_direct':
-        return res.status(200).json({
-          success: true,
-          provider: 'paypal_direct',
-          sessionType: 'paypal',
-          orderId,
-          message: 'Use /api/payments/unipay/paypal/create-order to create PayPal order'
-        });
-        
-      case 'google_direct':
-        return res.status(200).json({
-          success: true,
-          provider: 'google_direct',
-          sessionType: 'google_pay',
-          orderId,
-          message: 'Initialize Google Pay on frontend'
-        });
-        
-      case 'apple_direct':
-        return res.status(200).json({
-          success: true,
-          provider: 'apple_direct',
-          sessionType: 'apple_pay',
-          orderId,
-          message: 'Initialize Apple Pay on frontend'
-        });
-        
-      default:
-        return res.status(400).json({
-          error: `Unsupported provider: ${preferredProvider}`
-        });
-    }
   } catch (error) {
-    logger.error('Error creating payment session:', error);
-    return res.status(500).json({
-      error: 'Failed to create payment session',
-      details: error.message
-    });
+    return res.status(500).json({ error: 'Failed to create session' });
   }
 });
 
 /**
  * Direct Google Pay processing (cost-optimized) - UNCHANGED
+ */
+/**
+ * @swagger
+ * /api/payments/process-google-pay-direct:
+ *   post:
+ *     summary: Process Google Pay payment
+ *     description: Process a direct Google Pay payment
+ *     tags: [Payments]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - paymentToken
+ *               - amount
+ *             properties:
+ *               paymentToken:
+ *                 type: string
+ *                 description: Google Pay payment token
+ *                 example: "google_pay_token_123"
+ *               amount:
+ *                 type: number
+ *                 description: Payment amount
+ *                 example: 29.99
+ *               currency:
+ *                 type: string
+ *                 description: Currency code
+ *                 example: "USD"
+ *               customerInfo:
+ *                 type: object
+ *                 properties:
+ *                   email:
+ *                     type: string
+ *                     format: email
+ *                     example: "customer@example.com"
+ *     responses:
+ *       200:
+ *         description: Google Pay payment processed successfully
+ *       400:
+ *         description: Bad request - Invalid payment data
+ *       500:
+ *         description: Internal server error
  */
 router.post('/process-google-pay-direct', async (req, res) => {
   try {
@@ -339,6 +412,50 @@ router.post('/process-google-pay-direct', async (req, res) => {
 /**
  * Direct Apple Pay processing (cost-optimized) - UNCHANGED
  */
+/**
+ * @swagger
+ * /api/payments/process-apple-pay-direct:
+ *   post:
+ *     summary: Process Apple Pay payment
+ *     description: Process a direct Apple Pay payment
+ *     tags: [Payments]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - paymentData
+ *               - amount
+ *             properties:
+ *               paymentData:
+ *                 type: string
+ *                 description: Apple Pay payment data
+ *                 example: "apple_pay_data_123"
+ *               amount:
+ *                 type: number
+ *                 description: Payment amount
+ *                 example: 29.99
+ *               currency:
+ *                 type: string
+ *                 description: Currency code
+ *                 example: "USD"
+ *               customerInfo:
+ *                 type: object
+ *                 properties:
+ *                   email:
+ *                     type: string
+ *                     format: email
+ *                     example: "customer@example.com"
+ *     responses:
+ *       200:
+ *         description: Apple Pay payment processed successfully
+ *       400:
+ *         description: Bad request - Invalid payment data
+ *       500:
+ *         description: Internal server error
+ */
 router.post('/process-apple-pay-direct', async (req, res) => {
   try {
     const { paymentData, orderDetails, customerInfo, metadata = {} } = req.body;
@@ -420,6 +537,53 @@ router.post('/process-apple-pay-direct', async (req, res) => {
 
 /**
  * Get payment/order status by ID (Updated for UniPay)
+ */
+/**
+ * @swagger
+ * /api/payments/status/{id}:
+ *   get:
+ *     summary: Get payment status
+ *     description: Get the status of a payment by ID
+ *     tags: [Payments]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Payment ID
+ *         example: "pay_123"
+ *     responses:
+ *       200:
+ *         description: Payment status retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 paymentId:
+ *                   type: string
+ *                   example: "pay_123"
+ *                 status:
+ *                   type: string
+ *                   enum: [pending, succeeded, failed, canceled]
+ *                   example: "succeeded"
+ *                 amount:
+ *                   type: number
+ *                   example: 29.99
+ *                 currency:
+ *                   type: string
+ *                   example: "USD"
+ *                 createdAt:
+ *                   type: string
+ *                   format: date-time
+ *       404:
+ *         description: Payment not found
+ *       500:
+ *         description: Internal server error
  */
 router.get('/status/:id', async (req, res) => {
   try {
@@ -570,6 +734,42 @@ router.post('/switch-environment', async (req, res) => {
 /**
  * System health check - all payment providers (Updated)
  */
+/**
+ * @swagger
+ * /api/payments/health:
+ *   get:
+ *     summary: Payment system health check
+ *     description: Check the health of the payment system
+ *     tags: [Payments]
+ *     responses:
+ *       200:
+ *         description: Payment system is healthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "healthy"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                 services:
+ *                   type: object
+ *                   properties:
+ *                     paypal:
+ *                       type: string
+ *                       example: "operational"
+ *                     googlePay:
+ *                       type: string
+ *                       example: "operational"
+ *                     applePay:
+ *                       type: string
+ *                       example: "operational"
+ *       500:
+ *         description: Payment system unhealthy
+ */
 router.get('/health', async (req, res) => {
   try {
     const health = {
@@ -578,47 +778,31 @@ router.get('/health', async (req, res) => {
       timestamp: new Date().toISOString(),
       providers: {}
     };
-
-    // Check UniPay (Updated)
-    try {
-      const uniPayHealth = await uniPayService.healthCheck();
-      health.providers.unipay = {
-        status: uniPayHealth.success ? 'healthy' : 'unhealthy',
-        ...uniPayHealth
-      };
-    } catch (uniPayError) {
-      health.providers.unipay = {
-        status: 'unhealthy',
-        error: uniPayError.message
-      };
-    }
-
-    // Check PayPal configuration
     health.providers.paypal = {
       status: (process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id') ? 'configured' : 'not_configured',
       configured: !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id')
     };
-
-    // Direct providers (always available)
-    health.providers.google_pay_direct = { status: 'available' };
-    health.providers.apple_pay_direct = { status: 'available' };
-
-    // Overall status
-    const unhealthyProviders = Object.values(health.providers).filter(p => p.status === 'unhealthy');
-    if (unhealthyProviders.length > 0) {
-      health.status = 'degraded';
-    }
-
     return res.status(200).json(health);
   } catch (error) {
-    logger.error('Error checking payment system health:', error);
-    return res.status(500).json({
-      status: 'unhealthy',
-      error: 'Health check failed',
-      details: error.message,
-      timestamp: new Date().toISOString()
-    });
+    return res.status(500).json({ status: 'unhealthy' });
   }
+});
+
+/**
+ * Provider-specific health check aliases (to match frontend paths)
+ */
+router.get('/providers/paypal/health', (req, res) => {
+  const configured = !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id');
+  return res.status(200).json({ provider: 'paypal', configured, status: configured ? 'configured' : 'not_configured' });
+});
+
+router.get('/providers/:provider/health', (req, res) => {
+  const { provider } = req.params;
+  if (provider === 'paypal') {
+    const configured = !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_ID !== 'test_client_id');
+    return res.status(200).json({ provider: 'paypal', configured, status: configured ? 'configured' : 'not_configured' });
+  }
+  return res.status(404).json({ error: 'Provider not supported', provider });
 });
 
 /**
@@ -643,6 +827,10 @@ function getRecommendedMethod(countryCode) {
 }
 
 // Mount UniPay routes
-router.use('/unipay', unipayRoutes);
+// router.use('/unipay', unipayRoutes); // Removed UniPay routes
+
+// Mount PayPal routes
+const paypalRoutes = require('./paypal');
+router.use('/paypal', paypalRoutes);
 
 module.exports = router;

@@ -5,6 +5,70 @@ const { getCache, setCache, deleteCacheByPattern } = require('../utils/cache');
 const VIDEO_CACHE_TTL = parseInt(process.env.VIDEO_CACHE_TTL) || 300;
 const PAGE_SIZE = 50;
 
+// ==========================================
+// IN-MEMORY CACHE FOR VIDEOS (by platform)
+// ==========================================
+let videosCacheByPlatform = {
+  youtube: [],
+  tiktok: [],
+  instagram: []
+};
+let videosCacheLastUpdated = {
+  youtube: null,
+  tiktok: null,
+  instagram: null
+};
+const VIDEO_CACHE_REFRESH_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+
+const normalizeVideoDoc = (doc) => {
+  const data = doc.data();
+  const normalized = {
+    id: doc.id,
+    ...data
+  };
+  // Normalize timestamps to ISO strings for consistent transport
+  if (normalized.createdAt && normalized.createdAt.toDate) {
+    normalized.createdAt = normalized.createdAt.toDate().toISOString();
+  }
+  if (normalized.lastFetched && normalized.lastFetched.toDate) {
+    normalized.lastFetched = normalized.lastFetched.toDate().toISOString();
+  }
+  return normalized;
+};
+
+const refreshVideosCache = async (platform) => {
+  const platformKey = (platform || '').toLowerCase();
+  if (!['youtube', 'tiktok', 'instagram'].includes(platformKey)) return false;
+  try {
+    const snapshot = await db
+      .collection('videos')
+      .where('platform', '==', platformKey)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const list = [];
+    snapshot.forEach((doc) => list.push(normalizeVideoDoc(doc)));
+
+    videosCacheByPlatform[platformKey] = list;
+    videosCacheLastUpdated[platformKey] = new Date();
+    return true;
+  } catch (e) {
+    console.error('Error refreshing videos cache:', e);
+    return false;
+  }
+};
+
+const ensureVideosCacheLoaded = async (platform) => {
+  const platformKey = (platform || '').toLowerCase();
+  if (!['youtube', 'tiktok', 'instagram'].includes(platformKey)) return false;
+  const last = videosCacheLastUpdated[platformKey];
+  const needsRefresh = !last || (Date.now() - new Date(last).getTime() > VIDEO_CACHE_REFRESH_INTERVAL);
+  if (!videosCacheByPlatform[platformKey] || needsRefresh) {
+    return await refreshVideosCache(platformKey);
+  }
+  return true;
+};
+
 /**
  * Add a new video (Admin only)
  * POST /api/videos
@@ -80,6 +144,7 @@ const addVideo = async (req, res) => {
       thumbnailUrl: metadata.thumbnailUrl,
       views: metadata.views,
       likes: metadata.likes,
+      description: metadata.description || '',
       addedBy: req.user.email, // Use authenticated user's email
       addedByUid: req.user.uid, // Also store the user ID
       createdAt: new Date(),
@@ -94,11 +159,14 @@ const addVideo = async (req, res) => {
     await deleteCacheByPattern(`video_list:${platform}:*`);
     console.log(`Invalidated cache for platform: ${platform}`);
 
+    // Refresh in-memory cache for this platform
+    await refreshVideosCache(platform);
+
     console.log(`Successfully added ${platform} video with ID: ${docRef.id} by ${req.user.email}`);
     
     res.status(201).json({
       message: 'Video added successfully',
-      video: savedVideo
+      video: { ...savedVideo, id: docRef.id }
     });
 
   } catch (error) {
@@ -142,7 +210,7 @@ const listVideos = async (req, res) => {
       });
     }
 
-    // Check cache first
+    // Check Redis cache first
     const cacheKey = `video_list:${platform}:page=${pageNum}`;
     const cached = await getCache(cacheKey);
     if (cached) {
@@ -150,16 +218,17 @@ const listVideos = async (req, res) => {
       return res.json(cached);
     }
 
-    console.log(`Fetching ${platform} videos from database, page ${pageNum}`);
+    console.log(`Fetching ${platform} videos (cache miss), page ${pageNum}`);
 
-    // Get total count for pagination
-    const totalQuery = await db.collection('videos')
-      .where('platform', '==', platform)
-      .get();
-    const totalVideos = totalQuery.size;
+    // Ensure in-memory cache loaded for this platform
+    await ensureVideosCacheLoaded(platform);
+
+    // Compute totals from in-memory cache
+    const allForPlatform = videosCacheByPlatform[platform] || [];
+    const totalVideos = allForPlatform.length;
     const totalPages = Math.ceil(totalVideos / PAGE_SIZE);
 
-    // Get paginated videos using offset-based pagination (simplified)
+    // Paginate from in-memory cache
     const offset = (pageNum - 1) * PAGE_SIZE;
     
     let videos = [];
@@ -203,9 +272,9 @@ const listVideos = async (req, res) => {
             } else {
               console.warn(`Video ${videoData.id} has undefined originalUrl, skipping metadata refresh`);
             }
-          } catch (error) {
-            console.warn(`Could not extract video ID for ${videoData.originalUrl}:`, error.message);
           }
+        } catch (error) {
+          console.warn(`Could not extract video ID for ${videoData.originalUrl}:`, error.message);
         }
 
         // Convert Firestore timestamps to ISO strings
@@ -245,7 +314,7 @@ const listVideos = async (req, res) => {
     }
 
     const response = {
-      videos,
+      videos: paginated,
       currentPage: pageNum,
       totalPages,
       totalVideos,
@@ -332,6 +401,9 @@ const refreshVideoStats = async (req, res) => {
     await deleteCacheByPattern(`video_list:${platform}:*`);
     console.log(`Invalidated cache for platform: ${platform} after refresh`);
 
+    // Refresh in-memory cache for this platform to reflect new stats
+    await refreshVideosCache(platform);
+
     console.log(`Successfully refreshed stats for video ${id}: ${metadata.views} views, ${metadata.likes} likes`);
 
     res.json({
@@ -353,8 +425,44 @@ const refreshVideoStats = async (req, res) => {
   }
 };
 
+/**
+ * Delete a video (Admin only)
+ * DELETE /api/videos/:id
+ */
+const deleteVideo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ error: 'Missing video ID', message: 'Video ID is required' });
+    }
+
+    const docRef = db.collection('videos').doc(id);
+    const docSnap = await docRef.get();
+    if (!docSnap.exists) {
+      return res.status(404).json({ error: 'Video not found', message: 'No video with this ID' });
+    }
+
+    const data = docSnap.data();
+    const platform = data.platform;
+
+    await docRef.delete();
+
+    // Invalidate caches related to this platform
+    await deleteCacheByPattern(`video_list:${platform}:*`);
+
+    // Refresh in-memory cache for this platform
+    await refreshVideosCache(platform);
+
+    return res.json({ success: true, message: 'Video deleted', id });
+  } catch (error) {
+    console.error('Error deleting video:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Failed to delete video' });
+  }
+};
+
 module.exports = {
   addVideo,
   listVideos,
-  refreshVideoStats
-}; 
+  refreshVideoStats,
+  deleteVideo
+};

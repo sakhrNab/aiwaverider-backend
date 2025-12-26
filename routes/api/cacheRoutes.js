@@ -13,9 +13,79 @@ const AI_TOOLS_COLLECTION = 'ai_tools';
 const PROMPTS_COLLECTION = 'prompts';
 
 /**
- * @route   POST /api/cache/refresh
- * @desc    Refresh all caches from Firebase
- * @access  Private (Admin only)
+ * @swagger
+ * /api/cache/refresh:
+ *   post:
+ *     summary: Refresh all caches
+ *     description: Refresh all caches from Firebase (Admin only)
+ *     tags: [Cache Management]
+ *     security:
+ *       - FirebaseAuth: []
+ *     responses:
+ *       200:
+ *         description: All caches refreshed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "All caches refreshed successfully"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                 duration:
+ *                   type: string
+ *                   example: "1250ms"
+ *                 results:
+ *                   type: object
+ *                   properties:
+ *                     aiTools:
+ *                       type: object
+ *                       properties:
+ *                         success:
+ *                           type: boolean
+ *                         count:
+ *                           type: integer
+ *                         error:
+ *                           type: string
+ *                     prompts:
+ *                       type: object
+ *                       properties:
+ *                         success:
+ *                           type: boolean
+ *                         count:
+ *                           type: integer
+ *                         error:
+ *                           type: string
+ *                     cacheCleared:
+ *                       type: object
+ *                       properties:
+ *                         success:
+ *                           type: boolean
+ *                         patterns:
+ *                           type: array
+ *                           items:
+ *                             type: string
+ *                 summary:
+ *                   type: object
+ *                   properties:
+ *                     totalAITools:
+ *                       type: integer
+ *                     totalPrompts:
+ *                       type: integer
+ *                     cachePatternsCleaned:
+ *                       type: integer
+ *       207:
+ *         description: Cache refresh completed with some errors
+ *       403:
+ *         description: Forbidden - Admin privileges required
+ *       500:
+ *         description: Internal server error
  */
 router.post('/refresh', auth, async (req, res) => {
   try {
@@ -183,9 +253,37 @@ router.post('/refresh', auth, async (req, res) => {
 });
 
 /**
- * @route   POST /api/cache/refresh/ai-tools
- * @desc    Refresh only AI Tools cache
- * @access  Private (Admin only)
+ * @swagger
+ * /api/cache/refresh/ai-tools:
+ *   post:
+ *     summary: Refresh AI Tools cache
+ *     description: Refresh only AI Tools cache from Firebase
+ *     tags: [Cache Management]
+ *     responses:
+ *       200:
+ *         description: AI Tools cache refreshed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "AI Tools cache refreshed successfully"
+ *                 count:
+ *                   type: integer
+ *                   example: 25
+ *                 duration:
+ *                   type: string
+ *                   example: "500ms"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *       500:
+ *         description: Internal server error
  */
 router.post('/refresh/ai-tools', async (req, res) => {
   try {
@@ -242,9 +340,40 @@ router.post('/refresh/ai-tools', async (req, res) => {
 });
 
 /**
- * @route   POST /api/cache/refresh/prompts
- * @desc    Refresh only Prompts cache
- * @access  Private (Admin only)
+ * @swagger
+ * /api/cache/refresh/prompts:
+ *   post:
+ *     summary: Refresh Prompts cache
+ *     description: Refresh only Prompts cache from Firebase
+ *     tags: [Cache Management]
+ *     responses:
+ *       200:
+ *         description: Prompts cache refreshed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Prompts cache refreshed successfully"
+ *                 count:
+ *                   type: integer
+ *                   example: 50
+ *                 featuredCount:
+ *                   type: integer
+ *                   example: 5
+ *                 duration:
+ *                   type: string
+ *                   example: "750ms"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *       500:
+ *         description: Internal server error
  */
 router.post('/refresh/prompts', async (req, res) => {
   try {
@@ -306,9 +435,43 @@ router.post('/refresh/prompts', async (req, res) => {
 });
 
 /**
- * @route   DELETE /api/cache/clear
- * @desc    Clear all caches (no refresh)
- * @access  Private (Admin only)
+ * @swagger
+ * /api/cache/clear:
+ *   delete:
+ *     summary: Clear all caches
+ *     description: Clear all caches without refreshing (Admin only)
+ *     tags: [Cache Management]
+ *     security:
+ *       - FirebaseAuth: []
+ *     responses:
+ *       200:
+ *         description: All caches cleared successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "All caches cleared successfully"
+ *                 clearedPatterns:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                   example: ["ai_tools:*", "prompts:*"]
+ *                 duration:
+ *                   type: string
+ *                   example: "200ms"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *       403:
+ *         description: Forbidden - Admin privileges required
+ *       500:
+ *         description: Internal server error
  */
 router.delete('/clear', auth, async (req, res) => {
   try {
@@ -359,9 +522,53 @@ router.delete('/clear', auth, async (req, res) => {
 });
 
 /**
- * @route   GET /api/cache/status
- * @desc    Get cache status and statistics
- * @access  Private (Admin only)
+ * @swagger
+ * /api/cache/status:
+ *   get:
+ *     summary: Get cache status
+ *     description: Get cache status and statistics (Admin only)
+ *     tags: [Cache Management]
+ *     security:
+ *       - FirebaseAuth: []
+ *     responses:
+ *       200:
+ *         description: Cache status retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 status:
+ *                   type: object
+ *                   properties:
+ *                     redis:
+ *                       type: object
+ *                       properties:
+ *                         connected:
+ *                           type: boolean
+ *                           example: true
+ *                         uptime:
+ *                           type: string
+ *                           example: "N/A"
+ *                     lastRefresh:
+ *                       type: object
+ *                       properties:
+ *                         aiTools:
+ *                           type: string
+ *                           example: "Unknown"
+ *                         prompts:
+ *                           type: string
+ *                           example: "Unknown"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *       403:
+ *         description: Forbidden - Admin privileges required
+ *       500:
+ *         description: Internal server error
  */
 router.get('/status', auth, async (req, res) => {
   try {

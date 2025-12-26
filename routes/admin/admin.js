@@ -17,8 +17,41 @@ router.use(validateFirebaseToken);
 router.use(isAdmin);
 
 /**
- * GET /api/admin/settings
- * Get site settings (admin only)
+ * @swagger
+ * /api/admin/settings:
+ *   get:
+ *     summary: Get site settings
+ *     description: Retrieve current site settings (admin only)
+ *     tags: [Admin]
+ *     security:
+ *       - FirebaseAuth: []
+ *       - AdminToken: []
+ *     responses:
+ *       200:
+ *         description: Site settings retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   description: Site settings object
+ *       401:
+ *         description: Unauthorized - Admin access required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.get('/settings', async (req, res) => {
   try {

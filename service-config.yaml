@@ -50,6 +50,8 @@ spec:
           value: "pk_test_51R2112HlDxuwLTKvZuzoJTkH5l9gKERbMTvhYVVROWdmkzcN6WzLCMvZa8j71BSeOVDtrWAYGbCfDmb8AGjKr0YS00m8aH9BD8"
         - name: PAYPAL_CLIENT_ID
           value: "ARKmoVvHgdgebkNzZaxX1xmTtMGewjV0aX2RvWBxubTenIlDc_s9FHD3SPm0FpMen-_rn9qNOrzk7rho"
+        - name: PAYPAL_ENV
+          value: "live"
         - name: SMTP_HOST
           value: "smtp.zoho.com"
         - name: SMTP_PORT
@@ -61,7 +63,7 @@ spec:
         - name: EMAIL_FROM
           value: "support@aiwaverider.com"
         - name: EMAIL_FROM_NAME
-          value: "AI Wave Rider"
+          value: "AI Waverider"
         - name: WEBSITE_URL
           value: "https://aiwaverider.com"
         - name: SUPPORT_EMAIL
@@ -114,3 +116,19 @@ spec:
           valueFrom: { secretKeyRef: { name: ADMIN_TOKEN, key: latest } }
         - name: VIDEO_CACHE_TTL
           value: "300"
+        - name: PAYPAL_WEBHOOK_ID
+          valueFrom: { secretKeyRef: { name: PAYPAL_WEBHOOK_ID, key: latest } }
+        - name: PAYPAL_SUBS_PLAN_ID
+          valueFrom: { secretKeyRef: { name: PAYPAL_SUBS_PLAN_ID, key: latest } }
+        - name: FIREBASE_PROJECT_ID
+          value: "aiwaverider"
+        - name: AUTHORIZED_ADMIN_EMAILS
+          value: { secretKeyRef: { name: AUTHORIZED_ADMIN_EMAILS, key: latest } }
+        - name: DEV_SECRET_KEY
+          valueFrom: { secretKeyRef: { name: DEV_SECRET_KEY, key: latest } }
+        - name: SECURE_TOKEN_API_KEY
+          valueFrom: { secretKeyRef: { name: SECURE_TOKEN_API_KEY, key: latest } }
+        - name: N8N_ALLOWED_IPS
+          valueFrom: { secretKeyRef: { name: N8N_ALLOWED_IPS, key: latest } }
+        - name: FIREBASE_WEB_API_KEY
+          valueFrom: { secretKeyRef: { name: FIREBASE_WEB_API_KEY, key: latest } }

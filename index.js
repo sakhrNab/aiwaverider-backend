@@ -17,6 +17,10 @@ const admin = require('firebase-admin');
 const cron = require('node-cron');
 const { syncAllChannels } = require('./services/videoSync');
 
+// Swagger configuration
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./config/swagger');
+
 // Initialize express
 const app = express();
 
@@ -39,10 +43,38 @@ app.locals.upload = uploadMiddleware;
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// ------------------ Swagger Documentation ------------------
+// Serve Swagger UI in both development and production
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: 'AIWaverider API Documentation',
+  swaggerOptions: {
+    persistAuthorization: true,
+    displayRequestDuration: true,
+    filter: true,
+    showExtensions: true,
+    showCommonExtensions: true,
+    // Enable CORS for Swagger UI
+    requestInterceptor: (req) => {
+      req.headers['Access-Control-Allow-Origin'] = '*';
+      req.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS';
+      req.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With';
+      return req;
+    }
+  }
+}));
+
+// Serve raw Swagger JSON
+app.get('/api-docs.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.send(swaggerSpec);
+});
+
 // ------------------ CORS Configuration ------------------
 const allowedOrigins = isProduction
   ? (process.env.CORS_ORIGINS || '').split(',').map(origin => origin.trim())
-  : ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:45977']; // Frontend origins
+  : ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:45977', 'http://localhost:4000', 'http://127.0.0.1:4000']; // Frontend origins + backend self-requests
 
 // Create a CORS middleware function with proper configuration
 const corsOptions = {
@@ -50,13 +82,16 @@ const corsOptions = {
     // Allow requests with no origin (like mobile apps, curl requests, or same origin)
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
+    } else if (isDevelopment && origin && origin.includes('localhost')) {
+      // In development, allow any localhost origin
+      callback(null, true);
     } else {
       logger.warn(`CORS blocked request from origin: ${origin}`);
       callback(new Error(`CORS policy: Origin ${origin} not allowed`));
     }
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cache-Control', 'Pragma'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cache-Control', 'Pragma', 'X-Admin-Token', 'x-admin-token'],
   credentials: true,
   maxAge: 86400 // 24 hours
 };
@@ -67,6 +102,8 @@ logger.info(`Server running in ${process.env.NODE_ENV || 'development'} mode on 
 
 // Apply middleware
 app.use(cors(corsOptions));
+// Ensure preflight requests are handled
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
@@ -175,17 +212,8 @@ app.get('/thankyou', (req, res) => {
   return res.redirect(redirectUrl);
 });
 
-// For Stripe webhook handling, we need to preserve the raw body
-// This middleware needs to be set before any routes that expect JSON payloads
-app.use((req, res, next) => {
-  if (req.originalUrl === '/api/payments/stripe-webhook') {
-    // Use raw body for Stripe webhook verification
-    next();
-  } else {
-    // Use standard JSON parsing for all other routes
-    express.json()(req, res, next);
-  }
-});
+// Standard JSON parsing for all routes
+app.use(express.json());
 
 // 404 handler for API routes
 app.use('/api/*', (req, res) => {

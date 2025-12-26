@@ -5,8 +5,39 @@ const validateFirebaseToken = require('../../middleware/authenticationMiddleware
 const logger = require('../../utils/logger');
 
 /**
- * GET /api/recommendations/test
- * A test endpoint that returns valid recommendations for testing
+ * @swagger
+ * /api/recommendations/test:
+ *   get:
+ *     summary: Test recommendations endpoint
+ *     description: A test endpoint that returns valid recommendations for testing
+ *     tags: [Recommendations]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 10
+ *           default: 3
+ *         description: Maximum number of recommendations to return
+ *     responses:
+ *       200:
+ *         description: Test recommendations retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 recommendations:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Agent'
+ *                 source:
+ *                   type: string
+ *                   enum: [test-valid, test-query, test-hardcoded]
+ *                   description: Source of the recommendations
+ *       500:
+ *         description: Internal server error
  */
 router.get('/test', async (req, res) => {
   console.log('Test recommendations endpoint hit!');
@@ -119,8 +150,38 @@ router.get('/test', async (req, res) => {
 });
 
 /**
- * GET /api/recommendations/diagnostic
- * A diagnostic endpoint to check what agents are available in the database
+ * @swagger
+ * /api/recommendations/diagnostic:
+ *   get:
+ *     summary: Diagnostic endpoint for recommendations
+ *     description: A diagnostic endpoint to check what agents are available in the database
+ *     tags: [Recommendations]
+ *     responses:
+ *       200:
+ *         description: Diagnostic information retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   enum: [success, warning]
+ *                 message:
+ *                   type: string
+ *                   description: Status message
+ *                 agents:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Agent'
+ *                   description: Sample agents from database
+ *                 collections:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                   description: Available collections in database
+ *       500:
+ *         description: Internal server error
  */
 router.get('/diagnostic', async (req, res) => {
   console.log('Diagnostic endpoint hit!');
@@ -169,13 +230,66 @@ router.get('/diagnostic', async (req, res) => {
 });
 
 /**
- * GET /api/recommendations
- * Get personalized recommendations for the current user
- * 
- * Query parameters:
- * - limit: Maximum number of recommendations to return (default: 3)
- * - exclude: Product ID to exclude from recommendations
- * - useHistory: Whether to include user history in recommendation algorithm (default: true)
+ * @swagger
+ * /api/recommendations:
+ *   get:
+ *     summary: Get personalized recommendations
+ *     description: Get personalized recommendations for the current user based on their history and preferences
+ *     tags: [Recommendations]
+ *     security:
+ *       - FirebaseAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 20
+ *           default: 3
+ *         description: Maximum number of recommendations to return
+ *       - in: query
+ *         name: exclude
+ *         schema:
+ *           type: string
+ *         description: Product ID to exclude from recommendations
+ *         example: "agent-123"
+ *       - in: query
+ *         name: useHistory
+ *         schema:
+ *           type: boolean
+ *           default: true
+ *         description: Whether to include user history in recommendation algorithm
+ *     responses:
+ *       200:
+ *         description: Recommendations retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 recommendations:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Agent'
+ *                 source:
+ *                   type: string
+ *                   enum: [personalized, popular]
+ *                   description: Source of the recommendations
+ *       404:
+ *         description: No agents found in database
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "No agents found in database"
+ *                 recommendations:
+ *                   type: array
+ *                   items: {}
+ *       500:
+ *         description: Internal server error
  */
 router.get('/', async (req, res) => {
   console.log('Recommendations endpoint hit!', { 
@@ -685,8 +799,50 @@ async function getPopularAgents(limit, excludeId) {
 }
 
 /**
- * POST /api/recommendations/track-view
- * Track when a user views a product to improve recommendations
+ * @swagger
+ * /api/recommendations/track-view:
+ *   post:
+ *     summary: Track product view
+ *     description: Track when a user views a product to improve recommendations
+ *     tags: [Recommendations]
+ *     security:
+ *       - FirebaseAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - productId
+ *             properties:
+ *               productId:
+ *                 type: string
+ *                 description: ID of the product being viewed
+ *                 example: "agent-123"
+ *     responses:
+ *       200:
+ *         description: View tracked successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *       400:
+ *         description: Bad request - Product ID is required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Product ID is required"
+ *       500:
+ *         description: Internal server error
  */
 router.post('/track-view', async (req, res) => {
   console.log('Track view endpoint hit!', { 
@@ -752,8 +908,39 @@ router.post('/track-view', async (req, res) => {
 });
 
 /**
- * GET /api/recommendations/real-agents
- * Forces returning only valid real agents from the database, never debug or mock data
+ * @swagger
+ * /api/recommendations/real-agents:
+ *   get:
+ *     summary: Get real agents only
+ *     description: Forces returning only valid real agents from the database, never debug or mock data
+ *     tags: [Recommendations]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 20
+ *           default: 3
+ *         description: Maximum number of agents to return
+ *     responses:
+ *       200:
+ *         description: Real agents retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 recommendations:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Agent'
+ *                 source:
+ *                   type: string
+ *                   example: "real-agents"
+ *                   description: Source of the recommendations
+ *       500:
+ *         description: Internal server error
  */
 router.get('/real-agents', async (req, res) => {
   console.log('Real agents endpoint hit!');

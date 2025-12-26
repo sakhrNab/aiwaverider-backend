@@ -7,6 +7,11 @@ const publicCacheMiddleware = require('../../middleware/publicCacheMiddleware');
 const upload = require('../../middleware/upload');
 const { db } = require('../../config/firebase');
 const admin = require('firebase-admin');
+<<<<<<< HEAD
+=======
+const { auth } = require('../../middleware/authenticationMiddleware');
+const { getCache, setCache, deleteCache, deleteCacheByPattern, generateAgentCacheKey } = require('../../utils/cache');
+>>>>>>> 9bd340e791e081fb76ba546ea35c18019b188998
 
 // Helper function to increment agent download count
 async function incrementAgentDownloadCount(agentId) {
@@ -64,19 +69,288 @@ router.get('/refresh-cache', validateFirebaseToken, (req, res) => {
 // ==========================================
 
 // IMPORTANT: Specific routes must come before dynamic parameter routes
-// Main agents endpoint - now uses in-memory cache and searches integrations properly
+/**
+ * @swagger
+ * /api/agents:
+ *   get:
+ *     summary: Get all agents
+ *     description: Retrieve a paginated list of all AI agents with optional filtering and search
+ *     tags: [Agents]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           default: 1
+ *         description: Page number for pagination
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *           default: 10
+ *         description: Number of agents per page
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *         description: Filter by category
+ *         example: "Writing"
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search term for agent title and description
+ *         example: "writing assistant"
+ *       - in: query
+ *         name: sortBy
+ *         schema:
+ *           type: string
+ *           enum: [createdAt, downloadCount, title, price]
+ *           default: createdAt
+ *         description: Sort field
+ *       - in: query
+ *         name: sortOrder
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
+ *           default: desc
+ *         description: Sort order
+ *       - in: query
+ *         name: priceMin
+ *         schema:
+ *           type: number
+ *           minimum: 0
+ *         description: Minimum price filter
+ *       - in: query
+ *         name: priceMax
+ *         schema:
+ *           type: number
+ *           minimum: 0
+ *         description: Maximum price filter
+ *       - in: query
+ *         name: tags
+ *         schema:
+ *           type: string
+ *         description: Comma-separated list of tags to filter by
+ *         example: "writing,content,ai"
+ *       - in: query
+ *         name: refresh
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: Force refresh the agents cache from database (useful for development and testing)
+ *         example: true
+ *     responses:
+ *       200:
+ *         description: List of agents retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/PaginationResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/Agent'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getAgents);
 
-// Featured agents
+/**
+ * @swagger
+ * /api/agents/featured:
+ *   get:
+ *     summary: Get featured agents
+ *     description: Retrieve a list of featured AI agents
+ *     tags: [Agents]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 50
+ *           default: 10
+ *         description: Number of featured agents to return
+ *       - in: query
+ *         name: refresh
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: Force refresh the agents cache from database (useful for development and testing)
+ *         example: true
+ *     responses:
+ *       200:
+ *         description: Featured agents retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Agent'
+ *                 count:
+ *                   type: integer
+ *                   example: 5
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/featured', publicCacheMiddleware({ duration: getFeaturedCacheDuration() }), agentsController.getFeaturedAgents);
 
-// Latest agents
+/**
+ * @swagger
+ * /api/agents/latest:
+ *   get:
+ *     summary: Get latest agents
+ *     description: Retrieve the most recently created AI agents
+ *     tags: [Agents]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 50
+ *           default: 10
+ *         description: Number of latest agents to return
+ *       - in: query
+ *         name: refresh
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: Force refresh the agents cache from database (useful for development and testing)
+ *         example: true
+ *     responses:
+ *       200:
+ *         description: Latest agents retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Agent'
+ *                 count:
+ *                   type: integer
+ *                   example: 10
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/latest', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getLatestAgentsRoute);
 
-// Agent count - NEW
+/**
+ * @swagger
+ * /api/agents/count:
+ *   get:
+ *     summary: Get total agent count
+ *     description: Get the total number of agents in the system
+ *     tags: [Agents]
+ *     parameters:
+ *       - in: query
+ *         name: refresh
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: Force refresh the agents cache from database (useful for development and testing)
+ *         example: true
+ *     responses:
+ *       200:
+ *         description: Agent count retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 count:
+ *                   type: integer
+ *                   example: 150
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/count', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getAgentCount);
 
-// Search count endpoint - matches frontend pattern: /api/agents/search/count?q=telegram&category=All
+/**
+ * @swagger
+ * /api/agents/search/count:
+ *   get:
+ *     summary: Get search results count
+ *     description: Get the count of agents matching search criteria
+ *     tags: [Agents]
+ *     parameters:
+ *       - in: query
+ *         name: q
+ *         schema:
+ *           type: string
+ *         description: Search query
+ *         example: "writing assistant"
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *         description: Category filter
+ *         example: "Writing"
+ *       - in: query
+ *         name: tags
+ *         schema:
+ *           type: string
+ *         description: Comma-separated tags
+ *         example: "writing,content"
+ *     responses:
+ *       200:
+ *         description: Search count retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 count:
+ *                   type: integer
+ *                   example: 25
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/search/count', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getSearchResultsCount);
 
 // ==========================================
@@ -164,13 +438,9 @@ router.put('/:agentId', validateFirebaseToken, isAdmin, upload.fields([
 router.delete('/:agentId', validateFirebaseToken, isAdmin, agentsController.deleteAgent);
 
 // ==========================================
-// REVIEW ENDPOINTS - UPDATED
+// REVIEW ENDPOINTS
 // ==========================================
-
-// Add a review to an agent
 router.post('/:agentId/reviews', validateFirebaseToken, agentsController.addAgentReview_controller);
-
-// Delete a review (admin only or review owner)
 router.delete('/:agentId/reviews/:reviewId', validateFirebaseToken, agentsController.deleteAgentReview_controller);
 
 // ==========================================
@@ -226,6 +496,13 @@ router.post('/:agentId/toggle-like', validateFirebaseToken, async (req, res) => 
       likes: updatedLikes
     });
     
+    // Invalidate user-like-status cache for this user+agent
+    try {
+      await deleteCache(`agent:${agentId}:user:${userId}:like`);
+      await deleteCache(generateAgentCacheKey(agentId));
+      await deleteCacheByPattern('agents:results:*');
+    } catch (e) {}
+    
     res.json({
       success: true,
       liked,
@@ -238,11 +515,18 @@ router.post('/:agentId/toggle-like', validateFirebaseToken, async (req, res) => 
   }
 });
 
-// Check if user has liked an agent
+// Check if user has liked an agent (cached per user+agent)
 router.get('/:id/user-like-status', validateFirebaseToken, async (req, res) => {
   try {
     const agentId = req.params.id;
     const userId = req.user.uid;
+    const cacheKey = `agent:${agentId}:user:${userId}:like`;
+    
+    // Try cache first
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
     
     // Get the agent document to check if the user is in the likes array
     const agentRef = db.collection('agents').doc(agentId);
@@ -257,14 +541,14 @@ router.get('/:id/user-like-status', validateFirebaseToken, async (req, res) => {
     const liked = Array.isArray(likes) ? likes.includes(userId) : false;
     const likesCount = Array.isArray(likes) ? likes.length : 0;
     
-    return res.json({
-      liked,
-      likesCount
-    });
+    const result = { liked, likesCount };
+    // Cache with a short TTL via setCache auto TTL selection
+    await setCache(cacheKey, result);
     
+    return res.json(result);
   } catch (error) {
-    console.error('Error checking like status:', error);
-    res.status(500).json({ error: 'Failed to check like status' });
+    console.error('Error fetching user like status:', error);
+    return res.status(500).json({ error: 'Failed to fetch like status' });
   }
 });
 
@@ -307,7 +591,7 @@ router.post('/:agentId/increment-downloads', async (req, res) => {
   }
 });
 
-// Agent Downloads
+// Agent Downloads (requires authentication)
 router.post('/:id/download', validateFirebaseToken, async (req, res) => {
   const agentId = req.params.id;
   const userId = req.user.uid;
@@ -381,10 +665,34 @@ router.post('/:id/download', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// Free Agent Download
-router.post('/:id/free-download', validateFirebaseToken, async (req, res) => {
+// Free Agent Download (no authentication required but optional)
+router.post('/:id/free-download', (req, res, next) => {
+  // Check if there's an authorization header - if yes, validate it, if no, continue without auth
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    // User is trying to authenticate - validate the token
+    console.log('[FREE-DOWNLOAD] Authentication header found, attempting to validate');
+    validateFirebaseToken(req, res, (err) => {
+      if (err) {
+        // Authentication failed, but for free downloads, we'll continue without auth
+        console.log('[FREE-DOWNLOAD] Authentication failed, continuing without auth. Error:', err.message || err);
+        req.user = null;
+      } else {
+        console.log('[FREE-DOWNLOAD] Authentication successful for user:', req.user?.uid);
+      }
+      next();
+    });
+  } else {
+    // No authentication header - continue without auth
+    console.log('[FREE-DOWNLOAD] No authentication header, proceeding without auth');
+    req.user = null;
+    next();
+  }
+}, async (req, res) => {
   const agentId = req.params.id;
-  const userId = req.user.uid;
+  const userId = req.user?.uid; // Optional - user might not be authenticated
+  const userAgent = req.headers['user-agent'] || '';
+  const isMobileRequest = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
   
   try {
     // Create a JavaScript Date object for the download timestamp
@@ -404,30 +712,32 @@ router.post('/:id/free-download', validateFirebaseToken, async (req, res) => {
       return res.status(403).json({ success: false, message: 'This agent is not free' });
     }
     
-    // Update user's downloads array
-    const userRef = db.collection('users').doc(userId);
-    const userDoc = await userRef.get();
-    
-    if (userDoc.exists) {
-      const userData = userDoc.data();
-      const downloads = userData.downloads || [];
+    // Update user's downloads array if authenticated
+    if (userId) {
+      const userRef = db.collection('users').doc(userId);
+      const userDoc = await userRef.get();
       
-      // Check if user already has this download recorded
-      const existingDownload = downloads.find(d => d.agentId === agentId);
-      
-      if (!existingDownload) {
-        // Add to downloads array - using regular Date instead of serverTimestamp
-        await userRef.update({
-          downloads: admin.firestore.FieldValue.arrayUnion({
-            agentId,
-            id: agentId,
-            title: agentData.title || 'Unknown Agent',
-            imageUrl: agentData.imageUrl || null,
-            downloadDate: jsDate, // Use JavaScript Date instead of serverTimestamp
-            price: 0,
-            isFree: true
-          })
-        });
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        const downloads = userData.downloads || [];
+        
+        // Check if user already has this download recorded
+        const existingDownload = downloads.find(d => d.agentId === agentId);
+        
+        if (!existingDownload) {
+          // Add to downloads array - using regular Date instead of serverTimestamp
+          await userRef.update({
+            downloads: admin.firestore.FieldValue.arrayUnion({
+              agentId,
+              id: agentId,
+              title: agentData.title || 'Unknown Agent',
+              imageUrl: agentData.imageUrl || null,
+              downloadDate: jsDate, // Use JavaScript Date instead of serverTimestamp
+              price: 0,
+              isFree: true
+            })
+          });
+        }
       }
     }
     
@@ -435,16 +745,29 @@ router.post('/:id/free-download', validateFirebaseToken, async (req, res) => {
     await incrementAgentDownloadCount(agentId);
     
     // Return success with download info
-    res.json({
+    const downloadUrl = agentData.jsonFileUrl || agentData.downloadUrl || agentData.fileUrl;
+    
+    console.log(`[FREE-DOWNLOAD] Preparing response for agent ${agentId}:`);
+    console.log(`[FREE-DOWNLOAD] - jsonFileUrl: ${agentData.jsonFileUrl}`);
+    console.log(`[FREE-DOWNLOAD] - downloadUrl: ${agentData.downloadUrl}`);
+    console.log(`[FREE-DOWNLOAD] - fileUrl: ${agentData.fileUrl}`);
+    console.log(`[FREE-DOWNLOAD] - Final downloadUrl: ${downloadUrl}`);
+    console.log(`[FREE-DOWNLOAD] - Is mobile request: ${isMobileRequest}`);
+    
+    const responseData = {
       success: true,
       message: 'Free agent download processed successfully',
-      downloadUrl: agentData.jsonFileUrl || agentData.downloadUrl || agentData.fileUrl,
+      downloadUrl: downloadUrl,
       agent: {
         id: agentId,
         ...agentData,
         downloadDate: new Date() // Also use a regular Date here
       }
-    });
+    };
+    
+    console.log(`[FREE-DOWNLOAD] Sending response with downloadUrl: ${responseData.downloadUrl}`);
+    
+    res.json(responseData);
   } catch (error) {
     console.error('Error processing free download:', error);
     res.status(500).json({ 
@@ -455,17 +778,64 @@ router.post('/:id/free-download', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// Download file proxy endpoint
-router.get('/:id/download-file', async (req, res) => {
+// Test route to verify download endpoint is accessible
+router.get('/:id/download-test', async (req, res) => {
+  console.log(`[DOWNLOAD TEST] Route hit for agent: ${req.params.id}`);
+  res.json({ 
+    success: true, 
+    message: 'Download test route working!', 
+    agentId: req.params.id,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// OPTIONS handler for CORS preflight requests
+router.options('/:id/download', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+  res.status(200).end();
+});
+
+// Download file proxy endpoint (no authentication required)
+router.get('/:id/download', async (req, res) => {
+  console.log(`[DOWNLOAD PROXY] ======= ROUTE HIT =======`);
+  console.log(`[DOWNLOAD PROXY] Request method: ${req.method}`);
+  console.log(`[DOWNLOAD PROXY] Request URL: ${req.url}`);
+  console.log(`[DOWNLOAD PROXY] Request path: ${req.path}`);
+  console.log(`[DOWNLOAD PROXY] Agent ID param: ${req.params.id}`);
+  console.log(`[DOWNLOAD PROXY] Query params:`, req.query);
+  console.log(`[DOWNLOAD PROXY] ======= PROCESSING =======`);
+  
   try {
+    // Set CORS headers immediately for mobile compatibility
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length');
+    
     const fileUrl = req.query.url;
     const agentId = req.params.id;
+    const userAgent = req.headers['user-agent'] || '';
+    const isMobileRequest = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
     
     console.log(`[DOWNLOAD PROXY] Request received for agent ${agentId}, URL: ${fileUrl}`);
+    console.log(`[DOWNLOAD PROXY] User-Agent: ${userAgent}`);
+    console.log(`[DOWNLOAD PROXY] Is mobile request: ${isMobileRequest}`);
+    console.log(`[DOWNLOAD PROXY] Request headers:`, JSON.stringify(req.headers, null, 2));
+    console.log(`[DOWNLOAD PROXY] Referer: ${req.headers.referer || 'None'}`);
+    console.log(`[DOWNLOAD PROXY] Origin: ${req.headers.origin || 'None'}`);
     
     if (!fileUrl) {
       console.log('[DOWNLOAD PROXY] Missing URL parameter');
       return res.status(400).json({ success: false, message: 'File URL is required' });
+    }
+    
+    // Validate that this is a Google Storage URL for security
+    if (!fileUrl.includes('storage.googleapis.com') && !fileUrl.includes('firebasestorage.app')) {
+      console.log('[DOWNLOAD PROXY] Invalid URL - not a Google Storage URL');
+      return res.status(400).json({ success: false, message: 'Invalid file URL' });
     }
     
     // Log the request details to help debug
@@ -476,7 +846,8 @@ router.get('/:id/download-file', async (req, res) => {
     const response = await axios({
       method: 'GET',
       url: fileUrl,
-      responseType: 'stream'
+      responseType: 'stream',
+      timeout: 30000 // 30 second timeout
     });
     
     console.log(`[DOWNLOAD PROXY] File fetched successfully, status: ${response.status}`);
@@ -484,10 +855,27 @@ router.get('/:id/download-file', async (req, res) => {
     
     // Get the filename from the URL
     const urlParts = fileUrl.split('/');
-    const filename = urlParts[urlParts.length - 1];
+    let filename = urlParts[urlParts.length - 1];
     
-    // Set headers to force download
+    // Clean up filename (remove query parameters)
+    if (filename.includes('?')) {
+      filename = filename.split('?')[0];
+    }
+    
+    // Ensure filename has proper extension
+    if (!filename.includes('.')) {
+      filename = `${agentId}.json`;
+    }
+    
+    // Set headers to force download with mobile browser compatibility
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    
+    // Additional headers for mobile download support
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Accept-Ranges', 'bytes');
     
     // If content type is in the response, use it
     if (response.headers['content-type']) {
@@ -505,6 +893,8 @@ router.get('/:id/download-file', async (req, res) => {
     
     // Pipe the file stream to the response
     response.data.pipe(res);
+    
+    console.log(`[DOWNLOAD PROXY] File download completed successfully for ${filename}`);
   } catch (error) {
     console.error('[DOWNLOAD PROXY] Error proxying file download:', error);
     
@@ -522,88 +912,7 @@ router.get('/:id/download-file', async (req, res) => {
 // REVIEW ELIGIBILITY ENDPOINTS
 // ==========================================
 
-// Check if user can review an agent
-router.get('/:id/can-review', validateFirebaseToken, async (req, res) => {
-  try {
-    const agentId = req.params.id;
-    const userId = req.user.uid;
-    
-    // Get user data
-    const userDoc = await db.collection('users').doc(userId).get();
-    
-    if (!userDoc.exists) {
-      return res.status(404).json({ 
-        canReview: false, 
-        reason: 'User not found' 
-      });
-    }
-    
-    const userData = userDoc.data();
-    
-    // Check if user is admin
-    if (userData.role === 'admin') {
-      return res.json({ 
-        canReview: true, 
-        reason: 'Admin user' 
-      });
-    }
-    
-    // Check if user has purchased the agent
-    if (userData.purchases && Array.isArray(userData.purchases)) {
-      const hasPurchased = userData.purchases.some(
-        purchase => purchase.agentId === agentId || purchase.productId === agentId
-      );
-      
-      if (hasPurchased) {
-        return res.json({ 
-          canReview: true, 
-          reason: 'Verified purchase' 
-        });
-      }
-    }
-    
-    // Check if user has downloaded the agent
-    if (userData.downloads && Array.isArray(userData.downloads)) {
-      const hasDownloaded = userData.downloads.some(
-        download => download.agentId === agentId || download.id === agentId
-      );
-      
-      if (hasDownloaded) {
-        return res.json({ 
-          canReview: true, 
-          reason: 'Downloaded agent' 
-        });
-      }
-    }
-    
-    // Check downloads collection as backup
-    const downloadsQuery = await db.collection('agent_downloads')
-      .where('agentId', '==', agentId)
-      .where('userId', '==', userId)
-      .limit(1)
-      .get();
-    
-    if (!downloadsQuery.empty) {
-      return res.json({ 
-        canReview: true, 
-        reason: 'Downloaded agent' 
-      });
-    }
-    
-    // User hasn't purchased or downloaded
-    return res.json({ 
-      canReview: false, 
-      reason: 'You must purchase or download this agent before reviewing' 
-    });
-    
-  } catch (error) {
-    console.error('Error checking review eligibility:', error);
-    res.status(500).json({ 
-      canReview: false, 
-      reason: 'Error checking eligibility' 
-    });
-  }
-});
+// Remove deprecated can-review endpoint (eligibility handled client-side and enforced on submission)
 
 // ==========================================
 // UTILITY/ADMIN ENDPOINTS
@@ -634,6 +943,47 @@ if (process.env.NODE_ENV === 'development') {
 // DYNAMIC AGENT ID ROUTE - MUST BE LAST
 // ==========================================
 
+/**
+ * @swagger
+ * /api/agents/{agentId}:
+ *   get:
+ *     summary: Get agent by ID
+ *     description: Retrieve a specific AI agent by its ID
+ *     tags: [Agents]
+ *     parameters:
+ *       - in: path
+ *         name: agentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Agent ID
+ *         example: "agent-123"
+ *     responses:
+ *       200:
+ *         description: Agent retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   $ref: '#/components/schemas/Agent'
+ *       404:
+ *         description: Agent not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 // IMPORTANT: This dynamic route must come LAST to avoid catching specific routes like /count
 router.get('/:agentId', publicCacheMiddleware({ duration: getDefaultCacheDuration() }), agentsController.getAgentById);
 
