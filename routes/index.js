@@ -24,6 +24,9 @@ const aiToolsRoutes = require('./ai-tools/ai-tools');
 // NEW: Import prompts routes - destructure the router from the exported object
 const { router: promptsRoutes } = require('./ai-tools/prompts');
 
+// NEW: Import apps routes
+const appsRoutes = require('./apps/apps');
+
 // NEW: Import cache management routes
 const cacheRoutes = require('./api/cacheRoutes');
 const imageCacheRoutes = require('./api/imageCacheRoutes');
@@ -63,6 +66,9 @@ router.use('/recommendations', recommendationsRoutes);
 router.use('/ai-tools', aiToolsRoutes);
 // NEW: Mount prompts routes - completely separate from ai-tools
 router.use('/prompts', promptsRoutes);
+
+// Apps routes
+router.use('/apps', appsRoutes);
 
 // Payment system routes (PayPal only)
 router.use('/payments', paymentsRoutes);

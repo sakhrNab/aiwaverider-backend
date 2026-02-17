@@ -1,0 +1,48 @@
+##
+## AI Waverider — Local PostgreSQL + pgAdmin
+##
+## Usage:
+##   docker compose up -d
+##   docker compose down          # stop
+##   docker compose down -v       # stop + delete data volume
+##
+## PostgreSQL will auto-run 001_schema.sql and 002_indices.sql on first start.
+##
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aiwaverider-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aiwaverider
+      POSTGRES_PASSWORD: aiwaverider
+      POSTGRES_DB: aiwaverider
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+      - ./002_indices.sql:/docker-entrypoint-initdb.d/002_indices.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiwaverider"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: aiwaverider-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@aiwaverider.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_LISTEN_PORT: 5050
+    ports:
+      - "5050:5050"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
