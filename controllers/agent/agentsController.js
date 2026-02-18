@@ -348,7 +348,7 @@ const filterAgents = (agents, filters) => {
   if (filters.rating !== undefined && filters.rating !== null && filters.rating > 0) {
     const minRating = parseFloat(filters.rating);
     filtered = filtered.filter(agent => {
-      const agentRating = agent.rating?.average || agent.rating || 0;
+      const agentRating = agent.averageRating || 0;
       return agentRating >= minRating;
     });
     appliedFilters.push(`rating:${minRating}+`);
@@ -371,11 +371,15 @@ const filterAgents = (agents, filters) => {
   if (filters.features && Array.isArray(filters.features) && filters.features.length > 0) {
     filtered = filtered.filter(agent => {
       const agentFeatures = agent.features || [];
-      return filters.features.some(feature =>
-        agentFeatures.some(agentFeature =>
-          agentFeature && typeof agentFeature === 'string' && agentFeature.toLowerCase() === feature.toLowerCase()
-        )
-      );
+      return filters.features.some(feature => {
+        const f = feature.toLowerCase();
+        // "Free" and "Subscription" are price-based, not in the features array
+        if (f === 'free') return agent.isFree === true || parseFloat(agent.price) === 0;
+        if (f === 'subscription') return agent.isSubscription === true;
+        return agentFeatures.some(agentFeature =>
+          agentFeature && typeof agentFeature === 'string' && agentFeature.toLowerCase() === f
+        );
+      });
     });
     appliedFilters.push(`features:${filters.features.join(',')}`);
   }
