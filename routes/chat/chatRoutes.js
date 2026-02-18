@@ -83,5 +83,6 @@ const chatLimiter = rateLimit({
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/', chatLimiter, chatController.processChat);
+router.post('/stream', chatLimiter, chatController.processChatStream);
 
-module.exports = router; 
+module.exports = router;

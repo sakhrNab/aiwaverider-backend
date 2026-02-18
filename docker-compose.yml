@@ -63,6 +63,8 @@ services:
       - UNIPAY_TEST_API_KEY=${UNIPAY_TEST_API_KEY:-}
       # OpenAI
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Qdrant
+      - QDRANT_URL=http://qdrant:6333
       # Email (SMTP)
       - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT:-465}
@@ -150,6 +152,15 @@ services:
       timeout: 5s
       retries: 5
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    expose:
+      - "6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
+  qdrant_data:
