@@ -1,6 +1,59 @@
 // Import the newer OpenAI SDK
 const OpenAI = require('openai');
 const { searchRelevant } = require('../../services/rag/qdrantService');
+const { pool } = require('../../config/database');
+
+/**
+ * Look up missing detail-page data from PostgreSQL so the chatbot
+ * always knows which product the user is viewing.
+ */
+async function resolvePageContext(pageContext) {
+  if (!pageContext?.data) return pageContext;
+
+  try {
+    const { page, data } = pageContext;
+
+    if (page === 'agent-detail' && data.agentId && !data.agentName) {
+      const { rows } = await pool.query(
+        'SELECT name, price, category, description FROM agents WHERE id = $1 LIMIT 1',
+        [data.agentId]
+      );
+      if (rows[0]) {
+        data.agentName = rows[0].name;
+        data.agentPrice = rows[0].price;
+        data.agentCategory = rows[0].category;
+        data.agentDescription = (rows[0].description || '').slice(0, 200);
+      }
+    }
+
+    if (page === 'app-detail' && data.appId && !data.appTitle) {
+      const { rows } = await pool.query(
+        'SELECT title, price, category, description FROM apps WHERE id = $1 LIMIT 1',
+        [data.appId]
+      );
+      if (rows[0]) {
+        data.appTitle = rows[0].title;
+        data.appPrice = rows[0].price;
+        data.appCategory = rows[0].category;
+      }
+    }
+
+    if (page === 'prompt-detail' && data.promptId && !data.promptName) {
+      const { rows } = await pool.query(
+        'SELECT title, category, description FROM prompts WHERE id = $1 LIMIT 1',
+        [data.promptId]
+      );
+      if (rows[0]) {
+        data.promptName = rows[0].title;
+      }
+    }
+  } catch (err) {
+    // Non-critical — chatbot still works without enrichment
+    console.warn('resolvePageContext lookup failed:', err.message);
+  }
+
+  return pageContext;
+}
 
 const BASE_SYSTEM_PROMPT = `You are a helpful AI assistant for the AI Waverider website, founded by Sakhr Al-Absi (CS degree from TU Berlin, 7+ years enterprise experience, Fortune 500 background, hackathon winner). Your purpose is to assist users in navigating the site, understanding our offerings, and answering questions.
 
@@ -22,7 +75,8 @@ Available pages and what they contain:
 - Home (/): Hero section, founder credentials, tool stack (Claude Code + Cursor + N8N), 4 AI business models, 6 common challenges addressed, learning path, 6 apps showcase, agent library, FAQ
 - About (/about): Mission statement, core values (Build First, Nobody Builds Alone, Speed Is the New Skill, Open by Default), founder bio, what we offer (6 apps, workflow marketplace, prompts, videos, community, B2B services)
 - Agents/Workflows (/agents): Browse 5,600+ N8N AI workflows with search, filtering by category, and sorting
-- Apps (/apps): Browse production AI apps and tools with filtering
+- AI Tools (/ai-tools): Curated directory of external third-party AI tools (NOT our own products — these are tools users can visit externally)
+- Apps (/apps): Browse production AI apps and tools BUILT by AI Waverider (our own apps)
 - Prompts (/prompts): Browse 50+ AI prompts for various use cases
 - Posts/Tech News (/posts): Latest tech news, tutorials, and articles
 - Videos (/videos): YouTube tutorials, build-alongs, tool reviews, launch demos
@@ -102,8 +156,11 @@ function buildSystemPrompt(pageContext, ragResults) {
           prompt += `\nThey are viewing a prompt called "${pageContext.data.promptName || 'unknown'}".`;
         }
         break;
+      case 'ai-tools':
+        prompt += '\nThis is the AI Tools Directory page. It shows a curated collection of EXTERNAL third-party AI tools (not our own products). These are external tools users can visit. Help them discover and compare AI tools for their needs. This is NOT the prompts page and NOT the apps page — it is a directory of external AI tools.';
+        break;
       case 'apps':
-        prompt += '\nThis page shows production AI apps and tools. Help them explore, compare, or understand the apps.';
+        prompt += '\nThis page shows production AI apps and tools built by AI Waverider. Help them explore, compare, or understand the apps.';
         break;
       case 'app-detail':
         if (pageContext.data) {
@@ -170,7 +227,8 @@ function buildSystemPrompt(pageContext, ragResults) {
  */
 exports.processChat = async (req, res) => {
   try {
-    const { messages, pageContext } = req.body;
+    let { messages, pageContext } = req.body;
+    pageContext = await resolvePageContext(pageContext);
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({
@@ -243,7 +301,8 @@ exports.processChat = async (req, res) => {
  */
 exports.processChatStream = async (req, res) => {
   try {
-    const { messages, pageContext } = req.body;
+    let { messages, pageContext } = req.body;
+    pageContext = await resolvePageContext(pageContext);
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({
