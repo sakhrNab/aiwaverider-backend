@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../config/firebase');
+const { pool } = require('../config/database');
 
 // Simple GET handler
 router.get('/agent-price-test', (req, res) => {

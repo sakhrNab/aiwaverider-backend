@@ -32,12 +32,36 @@ function getOpenAI() {
   return openai;
 }
 
+// Simple LRU cache for search query embeddings (saves repeated OpenAI calls)
+const EMBED_CACHE_MAX = 100;
+const EMBED_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const embedCache = new Map();
+
 async function embed(text) {
   const response = await getOpenAI().embeddings.create({
     model: EMBEDDING_MODEL,
     input: text,
   });
   return response.data[0].embedding;
+}
+
+/**
+ * Cached embed for search queries. Indexing bypasses cache (uses embed/embedBatch directly).
+ */
+async function embedCached(text) {
+  const key = text.slice(0, 200); // Normalize key length
+  const cached = embedCache.get(key);
+  if (cached && Date.now() - cached.ts < EMBED_CACHE_TTL) {
+    return cached.vector;
+  }
+  const vector = await embed(text);
+  // Evict oldest if at capacity
+  if (embedCache.size >= EMBED_CACHE_MAX) {
+    const oldest = embedCache.keys().next().value;
+    embedCache.delete(oldest);
+  }
+  embedCache.set(key, { vector, ts: Date.now() });
+  return vector;
 }
 
 /**
@@ -274,7 +298,7 @@ const SCORE_THRESHOLD = 0.35; // Minimum similarity score to include a result
 async function searchRelevant(query, limit = 5) {
   let vector;
   try {
-    vector = await embed(query);
+    vector = await embedCached(query);
   } catch (err) {
     logger.warn(`Embedding failed for search query, returning empty: ${err.message}`);
     return [];
