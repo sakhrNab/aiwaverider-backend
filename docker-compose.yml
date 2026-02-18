@@ -14,11 +14,9 @@ services:
       - PGPASSWORD=${PGPASSWORD:-aiwaverider_secret}
       - PGDATABASE=aiwaverider
       - PG_POOL_MAX=20
-      # Redis (defaults to internal container; override with external IP in Coolify)
-      - REDIS_HOST=${REDIS_HOST:-redis}
-      - REDIS_PORT=${REDIS_PORT:-6379}
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - REDIS_TLS=${REDIS_TLS:-false}
+      # Redis (internal container, no auth needed)
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       # Firebase
       - FIREBASE_SERVICE_ACCOUNT_PATH=server/aiwaverider8-privatekey.json
       - FIREBASE_SERVICE_ACCOUNT_JSON=${FIREBASE_SERVICE_ACCOUNT_JSON:-}
