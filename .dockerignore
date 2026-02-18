@@ -56,6 +56,5 @@ logs
 tests
 test
 
-# Server directory (except Firebase private key needed at runtime)
+# Server directory (credentials injected via env vars in production)
 server
-!server/aiwaverider8-privatekey.json
