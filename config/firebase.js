@@ -22,7 +22,12 @@ const initializeFirebase = () => {
   let serviceAccount;
 
   if (process.env.NODE_ENV === 'production') {
-    const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+    let serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+    // Coolify's UI textarea can insert spaces when long values wrap —
+    // strip wrapping quotes and fix corrupted whitespace before parsing
+    if (serviceAccountJson) {
+      serviceAccountJson = serviceAccountJson.trim().replace(/^['"]|['"]$/g, '');
+    }
     if (!serviceAccountJson) {
       console.error('FIREBASE_SERVICE_ACCOUNT_JSON environment variable is not set.');
       console.warn('Attempting to initialize Firebase without credentials...');
@@ -41,7 +46,29 @@ const initializeFirebase = () => {
 
     try {
       console.log('Parsing service account JSON...');
-      serviceAccount = JSON.parse(serviceAccountJson);
+      // First try direct parse; if Coolify UI corrupted the JSON with extra
+      // whitespace, fix known corruption patterns and retry
+      try {
+        serviceAccount = JSON.parse(serviceAccountJson);
+      } catch (firstError) {
+        console.warn('Direct JSON parse failed, attempting to fix Coolify whitespace corruption...');
+        const fixed = serviceAccountJson
+          .replace(/-----BEGIN PRIVATE\s+KEY-----/g, '-----BEGIN PRIVATE KEY-----')
+          .replace(/-----END PRIVATE\s+KEY-----/g, '-----END PRIVATE KEY-----')
+          .replace(/\\n\s+/g, '\\n')
+          .replace(/\s+\\n/g, '\\n')
+          .replace(/":\s*"\s+https/g, '":"https')
+          .replace(/client_x509_cer\s+t_url/g, 'client_x509_cert_url')
+          .replace(/([A-Za-z0-9+/=])\s+([A-Za-z0-9+/=])/g, '$1$2'); // remove spaces in base64
+        serviceAccount = JSON.parse(fixed);
+        console.log('Successfully parsed after whitespace cleanup');
+      }
+      // Clean any remaining spaces inside the private key value
+      if (serviceAccount && serviceAccount.private_key) {
+        serviceAccount.private_key = serviceAccount.private_key
+          .replace(/-----BEGIN PRIVATE\s+KEY-----/, '-----BEGIN PRIVATE KEY-----')
+          .replace(/-----END PRIVATE\s+KEY-----/, '-----END PRIVATE KEY-----');
+      }
       console.log('Successfully parsed service account JSON');
     } catch (error) {
       console.error('Failed to parse service account JSON:', error);

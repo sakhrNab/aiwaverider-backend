@@ -394,6 +394,16 @@ const server = app.listen(PORT, async () => {
     }
   }
 
+  // Initialize Qdrant collections (RAG)
+  try {
+    console.log('🔄 Initializing Qdrant collections...');
+    const { initCollections } = require('./services/rag/qdrantService');
+    await initCollections();
+    console.log('✅ Qdrant collections initialized');
+  } catch (error) {
+    console.warn('⚠️ Qdrant initialization skipped (service may not be running):', error.message);
+  }
+
   // Initialize video channel sync
   try {
     console.log('🔄 Setting up video channel sync...');

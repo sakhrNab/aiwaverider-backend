@@ -519,10 +519,13 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
       // Store event ID for deduplication
       processedWebhookEvents.add(event.id);
 
-      // Prevent unbounded memory growth - keep last 10,000 events
+      // Prevent unbounded memory growth - prune oldest 50% when exceeding 10,000
       if (processedWebhookEvents.size > 10000) {
-        const firstEntry = processedWebhookEvents.values().next().value;
-        processedWebhookEvents.delete(firstEntry);
+        const deleteCount = Math.floor(processedWebhookEvents.size / 2);
+        const iterator = processedWebhookEvents.values();
+        for (let i = 0; i < deleteCount; i++) {
+          processedWebhookEvents.delete(iterator.next().value);
+        }
       }
 
       logger.info(`Processing webhook event: ${event.id}`, {

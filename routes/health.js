@@ -14,12 +14,7 @@ router.get('/', async (req, res) => {
     let databaseStatus = 'ok';
     try {
       // Attempt to query PostgreSQL
-      const { rows } = await pool.query(
-        `INSERT INTO system (id, last_checked, status)
-         VALUES ('health', NOW(), 'ok')
-         ON CONFLICT (id) DO UPDATE SET last_checked = NOW(), status = 'ok'
-         RETURNING *`
-      );
+      await pool.query('SELECT 1');
     } catch (error) {
       logger.error('Health check: PostgreSQL connection error', error);
       databaseStatus = 'error';
