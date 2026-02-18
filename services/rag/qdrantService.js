@@ -176,14 +176,15 @@ async function indexPrompts() {
 
 async function indexPosts() {
   const { rows } = await pool.query(
-    `SELECT id, title, description, category FROM posts`
+    `SELECT id, title, description, category, additional_html FROM posts`
   );
 
   if (rows.length === 0) return 0;
   console.log(`  Found ${rows.length} posts to index...`);
 
   const texts = rows.map((row) => {
-    return `[post] ${row.title}: ${(row.description || '').slice(0, 500)}. Category: ${row.category || ''}`;
+    const bodyText = stripHtml(row.additional_html).slice(0, 1000);
+    return sanitize(`[post] ${row.title}: ${(row.description || '').slice(0, 500)}. Category: ${row.category || ''}. Content: ${bodyText}`);
   });
 
   const vectors = await embedBatch(texts);
@@ -194,8 +195,9 @@ async function indexPosts() {
       id: row.id,
       type: 'post',
       name: sanitize(row.title),
-      description: sanitize((row.description || '').slice(0, 200)),
+      description: sanitize((row.description || '').slice(0, 300)),
       category: sanitize(row.category || ''),
+      body_excerpt: sanitize(stripHtml(row.additional_html).slice(0, 500)),
       url_path: `/posts/${row.id}`,
     },
   }));
@@ -311,6 +313,23 @@ async function searchRelevant(query, limit = 5) {
 }
 
 // --- Helpers ---
+
+/**
+ * Strip HTML tags and collapse whitespace to get plain text.
+ */
+function stripHtml(html) {
+  if (!html) return '';
+  return html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 /**
  * Sanitize a string for safe JSON serialization to Qdrant.
@@ -432,7 +451,8 @@ async function indexSingleApp(app) {
 
 async function indexSinglePost(post) {
   try {
-    const text = sanitize(`[post] ${post.title}: ${(post.description || '').slice(0, 500)}. Category: ${post.category || ''}`);
+    const bodyText = stripHtml(post.additional_html || '').slice(0, 1000);
+    const text = sanitize(`[post] ${post.title}: ${(post.description || '').slice(0, 500)}. Category: ${post.category || ''}. Content: ${bodyText}`);
     const vector = await embed(text);
 
     await getQdrantClient().upsert('posts', {
@@ -443,8 +463,9 @@ async function indexSinglePost(post) {
           id: String(post.id),
           type: 'post',
           name: sanitize(post.title || ''),
-          description: sanitize((post.description || '').slice(0, 200)),
+          description: sanitize((post.description || '').slice(0, 300)),
           category: sanitize(post.category || ''),
+          body_excerpt: sanitize(stripHtml(post.additional_html || '').slice(0, 500)),
           url_path: `/posts/${post.id}`,
         },
       }],

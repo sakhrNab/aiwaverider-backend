@@ -263,6 +263,7 @@ function buildSystemPrompt(pageContext, ragResults) {
     for (const r of ragResults) {
       prompt += `\n- [${r.type}] ${r.name}`;
       if (r.description) prompt += `: ${r.description}`;
+      if (r.body_excerpt) prompt += `\n  Excerpt: ${r.body_excerpt}`;
       if (r.category) prompt += ` (Category: ${r.category})`;
       if (r.price !== undefined && r.price > 0) prompt += ` — $${r.price}`;
       if (r.is_free) prompt += ' — FREE';
