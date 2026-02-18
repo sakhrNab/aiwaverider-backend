@@ -17,7 +17,8 @@
     "check:collections": "node scripts/checkAndSeedAgents.js",
     "migrate:prices": "node scripts/migratePrices.js",
     "seed": "node ./scripts/seedData.js",
-    "cleanup:prices": "node ./scripts/runCleanup.js"
+    "cleanup:prices": "node ./scripts/runCleanup.js",
+    "index:qdrant": "node scripts/indexContent.js"
   },
   "keywords": [],
   "author": "",
@@ -26,6 +27,7 @@
   "dependencies": {
     "@google-cloud/storage": "^7.15.1",
     "@octokit/rest": "^21.0.2",
+    "@qdrant/js-client-rest": "^1.16.2",
     "axios": "^1.8.3",
     "bcrypt": "^5.1.1",
     "body-parser": "^2.2.0",
@@ -39,6 +41,7 @@
     "express-session": "^1.18.0",
     "firebase-admin": "^13.0.2",
     "fuse.js": "^7.1.0",
+    "graphql": "^16.12.0",
     "graphql-request": "^7.2.0",
     "handlebars": "^4.7.8",
     "helmet": "^7.0.0",
