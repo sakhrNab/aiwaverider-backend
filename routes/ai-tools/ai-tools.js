@@ -26,7 +26,7 @@ const mapRowToTool = (row) => {
     image: row.image || '',
     keywords: row.keywords || [],
     tags: row.tags || [],
-    category: row.category ? [row.category] : [],  // DB stores TEXT, API expects array
+    category: parseCategory(row.category),
     additionalHTML: row.additional_html || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -34,6 +34,23 @@ const mapRowToTool = (row) => {
     updatedBy: row.updated_by,
   };
 };
+
+/**
+ * Parse category from DB which may be:
+ *  - null/undefined → []
+ *  - a plain string like "AI Art" → ["AI Art"]
+ *  - a PostgreSQL array literal like '{"AI Art","Content Creation"}' → ["AI Art", "Content Creation"]
+ */
+function parseCategory(val) {
+  if (!val) return [];
+  if (typeof val === 'string' && val.startsWith('{') && val.endsWith('}')) {
+    // PostgreSQL array literal – strip braces, split on comma, remove quotes
+    return val.slice(1, -1)
+      .match(/("(?:[^"\\]|\\.)*"|[^,]+)/g)
+      ?.map(s => s.replace(/^"|"$/g, '').replace(/\\"/g, '"')) || [];
+  }
+  return [val];
+}
 
 /**
  * @swagger
