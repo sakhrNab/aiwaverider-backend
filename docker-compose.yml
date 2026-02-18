@@ -63,8 +63,6 @@ services:
       - UNIPAY_TEST_API_KEY=${UNIPAY_TEST_API_KEY:-}
       # OpenAI
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      # Qdrant
-      - QDRANT_URL=http://qdrant:6333
       # Email (SMTP)
       - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT:-465}
@@ -105,6 +103,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
@@ -166,6 +166,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
 volumes:
   postgres_data:
