@@ -1,14 +1,39 @@
 const express = require('express');
 const router = express.Router();
-const admin = require('firebase-admin');
+const admin = require('firebase-admin'); // Kept for Firebase Storage only
+const { pool } = require('../../config/database');
 const { auth } = require('../../middleware/authenticationMiddleware');
 const upload = require('../../middleware/upload');
 const path = require('path');
-const crypto = require('crypto');
 const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
 
-// Collection reference - AI Tools only (exactly as before)
-const COLLECTION_NAME = 'ai_tools';
+// ==========================================
+// COLUMN MAPPING HELPERS
+// ==========================================
+
+/**
+ * Maps a PostgreSQL row (snake_case) from the ai_tools table to the
+ * camelCase format the AI Tools API expects.
+ */
+const mapRowToTool = (row) => {
+  if (!row) return null;
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    link: row.link || '',
+    image: row.image || '',
+    keywords: row.keywords || [],
+    tags: row.tags || [],
+    category: row.category ? [row.category] : [],  // DB stores TEXT, API expects array
+    additionalHTML: row.additional_html || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    createdBy: row.created_by,
+    updatedBy: row.updated_by,
+  };
+};
 
 /**
  * @swagger
@@ -64,20 +89,13 @@ const COLLECTION_NAME = 'ai_tools';
 router.get('/', async (req, res) => {
   try {
     console.log('Fetching all AI tools...');
-    
-    // Get tools with optional filtering
-    const query = admin.firestore().collection(COLLECTION_NAME)
-      .orderBy('createdAt', 'desc');
-    
-    // Execute query
-    const snapshot = await query.get();
-    
-    // Map the documents
-    const tools = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
-    
+
+    const result = await pool.query(
+      "SELECT * FROM ai_tools WHERE 1=1 ORDER BY created_at DESC"
+    );
+
+    const tools = result.rows.map(row => mapRowToTool(row));
+
     return res.json({
       success: true,
       count: tools.length,
@@ -153,7 +171,7 @@ router.get('/:id', async (req, res) => {
   try {
     console.log(`Fetching AI tool with ID: ${req.params.id}`);
     const id = req.params.id;
-    
+
     if (!id) {
       console.error('Invalid ID provided:', id);
       return res.status(400).json({
@@ -161,39 +179,33 @@ router.get('/:id', async (req, res) => {
         error: 'Invalid ID provided'
       });
     }
-    
-    // Get the document
-    console.log(`Attempting to fetch document from collection: ${COLLECTION_NAME}, with ID: ${id}`);
-    const doc = await admin.firestore().collection(COLLECTION_NAME).doc(id).get();
-    
-    // Check if the document exists
-    if (!doc.exists) {
-      console.error(`Document with ID ${id} not found in collection ${COLLECTION_NAME}`);
+
+    console.log(`Attempting to fetch tool from ai_tools table with ID: ${id}`);
+    const result = await pool.query(
+      "SELECT * FROM ai_tools WHERE id = $1",
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      console.error(`Tool with ID ${id} not found in ai_tools table`);
       return res.status(404).json({
         success: false,
         error: `AI tool with ID ${id} not found`
       });
     }
-    
-    // Log successful retrieval
-    console.log(`Successfully retrieved document with ID: ${id}`);
-    
-    // Get document data
-    const data = doc.data();
-    console.log(`Document data fields: ${Object.keys(data).join(', ')}`);
-    
+
+    const data = mapRowToTool(result.rows[0]);
+    console.log(`Successfully retrieved tool with ID: ${id}`);
+    console.log(`Tool data fields: ${Object.keys(data).join(', ')}`);
+
     return res.json({
       success: true,
-      data: {
-        id: doc.id,
-        ...data
-      }
+      data
     });
   } catch (error) {
     console.error(`Error fetching AI tool ${req.params.id}:`, error);
     console.error('Error stack:', error.stack);
-    
-    // Provide more detailed error information
+
     return res.status(500).json({
       success: false,
       error: 'Server error while fetching AI tool',
@@ -282,7 +294,7 @@ router.get('/:id', async (req, res) => {
 router.post('/', auth, upload.single('image'), async (req, res) => {
   try {
     console.log('Creating AI tool with data:', req.body);
-    
+
     // Check if user is admin
     if (!req.user.isAdmin) {
       return res.status(403).json({
@@ -290,10 +302,10 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
         error: 'Access denied. Admin privileges required.'
       });
     }
-    
+
     // Extract fields from request body
     const { title, description, link, keyword, keywords, category, additionalHTML } = req.body;
-    
+
     // Handle tags which might be a string, array, or missing
     let tags = [];
     if (req.body.tags) {
@@ -308,7 +320,7 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
         }
       }
     }
-    
+
     // Handle keywords which might be a string, array, or missing
     let processedKeywords = [];
     const keywordsInput = keywords || keyword; // Support both 'keywords' and 'keyword' for backward compatibility
@@ -324,22 +336,19 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
         }
       }
     }
-    
+
     // Handle category which might be a string, array, or missing
-    let processedCategory = [];
+    // DB stores category as TEXT (single value); take the first element if array
+    let processedCategory = null;
     if (category) {
       if (Array.isArray(category)) {
-        processedCategory = category;
+        processedCategory = category[0] || null;
       } else if (typeof category === 'string') {
-        // If it's a comma-separated string, split it
-        if (category.includes(',')) {
-          processedCategory = category.split(',').map(cat => cat.trim());
-        } else {
-          processedCategory = [category];
-        }
+        // If it's a comma-separated string, take the first value
+        processedCategory = category.includes(',') ? category.split(',')[0].trim() : category;
       }
     }
-    
+
     // Debug logging
     console.log('Extracted fields:');
     console.log('Title:', title);
@@ -350,7 +359,7 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
     console.log('Additional HTML:', additionalHTML);
     console.log('Tags:', tags);
     console.log('Image file:', req.file);
-    
+
     // Validate required fields
     if (!title || !description) {
       return res.status(400).json({
@@ -358,91 +367,93 @@ router.post('/', auth, upload.single('image'), async (req, res) => {
         error: 'Title and description are required fields'
       });
     }
-    
+
     // Ensure link has a default value if empty
     const safeLink = link || '';
-    
+
     // Get image path if uploaded (same logic as before)
     let imageUrl = '';
     if (req.file) {
       console.log('File received:', req.file.originalname, req.file.mimetype, req.file.size);
-      
+
       const timestamp = Date.now();
       const filename = `${timestamp}-${req.file.originalname.replace(/\s+/g, '-')}`;
-      
+
       try {
         const storage = admin.storage();
         const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
-        
+
         if (bucketName) {
           console.log('Using Firebase Storage bucket:', bucketName);
-          
+
           const bucket = storage.bucket(bucketName);
           const fileName = `ai-tools/${filename}`;
           const fileRef = bucket.file(fileName);
-          
+
           await fileRef.save(req.file.buffer, {
             metadata: {
               contentType: req.file.mimetype,
             },
           });
-          
+
           await fileRef.makePublic();
           imageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
           console.log('Firebase Storage URL:', imageUrl);
         } else {
           console.log('Firebase Storage bucket not configured. Using local storage.');
-          
+
           const uploadsDir = path.join(__dirname, '../../uploads');
           if (!fs.existsSync(uploadsDir)) {
             fs.mkdirSync(uploadsDir, { recursive: true });
           }
-          
+
           fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
           imageUrl = `/uploads/${filename}`;
           console.log('Local storage URL:', imageUrl);
         }
       } catch (error) {
         console.error('Error uploading image:', error);
-        
+
         const uploadsDir = path.join(__dirname, '../../uploads');
         if (!fs.existsSync(uploadsDir)) {
           fs.mkdirSync(uploadsDir, { recursive: true });
         }
-        
+
         fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
         imageUrl = `/uploads/${filename}`;
         console.log('Local storage URL:', imageUrl);
       }
     }
-    
-    // Prepare the document
-    const newTool = {
-      title,
-      description,
-      link: safeLink,
-      image: imageUrl || '',
-      keywords: processedKeywords,  // Store as array of keywords
-      tags: tags || [],
-      category: processedCategory,  // Store as array of categories
-      additionalHTML: additionalHTML || '',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      createdBy: req.user.uid
-    };
-    
-    // Add the document
-    const docRef = await admin.firestore().collection(COLLECTION_NAME).add(newTool);
-    
-    // Get the created document
-    const createdDoc = await docRef.get();
-    
+
+    // Insert into ai_tools table
+    const toolId = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO ai_tools (
+        id, title, description, link, image, keywords, tags,
+        category, additional_html, created_by, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7,
+        $8, $9, $10, NOW(), NOW()
+      ) RETURNING *`,
+      [
+        toolId,
+        title,
+        description,
+        safeLink,
+        imageUrl || '',
+        processedKeywords,   // TEXT[] - pg driver handles JS arrays
+        tags || [],           // TEXT[]
+        processedCategory,    // TEXT (single value)
+        additionalHTML || '',
+        req.user.uid
+      ]
+    );
+
+    const createdTool = mapRowToTool(result.rows[0]);
+
     return res.status(201).json({
       success: true,
-      data: {
-        id: docRef.id,
-        ...createdDoc.data()
-      }
+      data: createdTool
     });
   } catch (error) {
     console.error('Error creating AI tool:', error);
@@ -541,10 +552,10 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
         error: 'Access denied. Admin privileges required.'
       });
     }
-    
+
     const id = req.params.id;
     const { title, description, link, keyword, category, additionalHTML } = req.body;
-    
+
     // Handle tags which might be a string, array, or missing
     let tags = undefined;
     if (req.body.tags) {
@@ -559,7 +570,7 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
         }
       }
     }
-    
+
     // Handle keywords which might be a string, array, or missing
     let keywords = undefined;
     const keywordsInput = req.body.keywords || keyword; // Support both 'keywords' and 'keyword' for backward compatibility
@@ -577,111 +588,143 @@ router.put('/:id', auth, upload.single('image'), async (req, res) => {
     }
 
     // Handle category which might be a string, array, or missing
+    // DB stores category as TEXT (single value); take the first element if array
     let processedCategory = undefined;
     if (category) {
       if (Array.isArray(category)) {
-        processedCategory = category;
+        processedCategory = category[0] || null;
       } else if (typeof category === 'string') {
-        // If it's a comma-separated string, split it
-        if (category.includes(',')) {
-          processedCategory = category.split(',').map(cat => cat.trim());
-        } else {
-          processedCategory = [category];
-        }
+        processedCategory = category.includes(',') ? category.split(',')[0].trim() : category;
       }
     }
-    
+
     // Check if the tool exists
-    const toolRef = admin.firestore().collection(COLLECTION_NAME).doc(id);
-    const doc = await toolRef.get();
-    
-    if (!doc.exists) {
+    const existingResult = await pool.query(
+      "SELECT * FROM ai_tools WHERE id = $1",
+      [id]
+    );
+
+    if (existingResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
         error: 'AI tool not found'
       });
     }
-    
+
     // Handle image upload (same logic as POST)
     let imageUrl = undefined;
     if (req.file) {
       console.log('File received:', req.file.originalname, req.file.mimetype, req.file.size);
-      
+
       const timestamp = Date.now();
       const filename = `${timestamp}-${req.file.originalname.replace(/\s+/g, '-')}`;
-      
+
       try {
         const storage = admin.storage();
         const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
-        
+
         if (bucketName) {
           console.log('Using Firebase Storage bucket:', bucketName);
-          
+
           const bucket = storage.bucket(bucketName);
           const fileName = `ai-tools/${filename}`;
           const fileRef = bucket.file(fileName);
-          
+
           await fileRef.save(req.file.buffer, {
             metadata: {
               contentType: req.file.mimetype,
             },
           });
-          
+
           await fileRef.makePublic();
           imageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
           console.log('Firebase Storage URL:', imageUrl);
         } else {
           console.log('Firebase Storage bucket not configured. Using local storage.');
-          
+
           const uploadsDir = path.join(__dirname, '../../uploads');
           if (!fs.existsSync(uploadsDir)) {
             fs.mkdirSync(uploadsDir, { recursive: true });
           }
-          
+
           fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
           imageUrl = `/uploads/${filename}`;
           console.log('Local storage URL:', imageUrl);
         }
       } catch (error) {
         console.error('Error uploading image:', error);
-        
+
         const uploadsDir = path.join(__dirname, '../../uploads');
         if (!fs.existsSync(uploadsDir)) {
           fs.mkdirSync(uploadsDir, { recursive: true });
         }
-        
+
         fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
         imageUrl = `/uploads/${filename}`;
         console.log('Local storage URL:', imageUrl);
       }
     }
-    
-    // Prepare the update data
-    const updateData = {
-      ...(title && { title }),
-      ...(description && { description }),
-      ...(link && { link }),
-      ...(imageUrl && { image: imageUrl }),
-      ...(keywords && { keywords }),  // Store as array of keywords
-      ...(tags && { tags }),
-      ...(processedCategory && { category: processedCategory }), // Store as array of categories
-      ...(additionalHTML && { additionalHTML }),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedBy: req.user.uid
-    };
-    
-    // Update the document
-    await toolRef.update(updateData);
-    
-    // Get the updated document
-    const updatedDoc = await toolRef.get();
-    
+
+    // Build dynamic UPDATE query with only the provided fields
+    const setClauses = [];
+    const values = [];
+    let paramIndex = 1;
+
+    if (title !== undefined) {
+      setClauses.push(`title = $${paramIndex++}`);
+      values.push(title);
+    }
+    if (description !== undefined) {
+      setClauses.push(`description = $${paramIndex++}`);
+      values.push(description);
+    }
+    if (link !== undefined) {
+      setClauses.push(`link = $${paramIndex++}`);
+      values.push(link);
+    }
+    if (imageUrl !== undefined) {
+      setClauses.push(`image = $${paramIndex++}`);
+      values.push(imageUrl);
+    }
+    if (keywords !== undefined) {
+      setClauses.push(`keywords = $${paramIndex++}`);
+      values.push(keywords);
+    }
+    if (tags !== undefined) {
+      setClauses.push(`tags = $${paramIndex++}`);
+      values.push(tags);
+    }
+    if (processedCategory !== undefined) {
+      setClauses.push(`category = $${paramIndex++}`);
+      values.push(processedCategory);
+    }
+    if (additionalHTML !== undefined) {
+      setClauses.push(`additional_html = $${paramIndex++}`);
+      values.push(additionalHTML);
+    }
+
+    // Always set updated_at and updated_by
+    setClauses.push(`updated_at = NOW()`);
+    setClauses.push(`updated_by = $${paramIndex++}`);
+    values.push(req.user.uid);
+
+    // Add the WHERE clause parameter
+    values.push(id);
+
+    const updateQuery = `
+      UPDATE ai_tools
+      SET ${setClauses.join(', ')}
+      WHERE id = $${paramIndex}
+      RETURNING *
+    `;
+
+    const updateResult = await pool.query(updateQuery, values);
+
+    const updatedTool = mapRowToTool(updateResult.rows[0]);
+
     return res.json({
       success: true,
-      data: {
-        id: updatedDoc.id,
-        ...updatedDoc.data()
-      }
+      data: updatedTool
     });
   } catch (error) {
     console.error(`Error updating AI tool ${req.params.id}:`, error);
@@ -739,23 +782,28 @@ router.delete('/:id', auth, async (req, res) => {
         error: 'Access denied. Admin privileges required.'
       });
     }
-    
+
     const id = req.params.id;
-    
+
     // Check if the tool exists
-    const toolRef = admin.firestore().collection(COLLECTION_NAME).doc(id);
-    const doc = await toolRef.get();
-    
-    if (!doc.exists) {
+    const existingResult = await pool.query(
+      "SELECT id FROM ai_tools WHERE id = $1",
+      [id]
+    );
+
+    if (existingResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
         error: 'AI tool not found'
       });
     }
-    
-    // Delete the document
-    await toolRef.delete();
-    
+
+    // Delete the row
+    await pool.query(
+      "DELETE FROM ai_tools WHERE id = $1",
+      [id]
+    );
+
     return res.json({
       success: true,
       message: `AI tool ${id} has been deleted`

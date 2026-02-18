@@ -1,17 +1,14 @@
 /**
  * Notification Service
- * 
+ *
  * Handles sending notifications through various channels like email, in-app notifications,
  * and potentially SMS or push notifications in the future.
  */
 
-const admin = require('firebase-admin');
+const { pool } = require('../../config/database');
 const logger = require('../../utils/logger');
 const emailService = require('../email/emailService');
 const agentsController = require('../../controllers/agent/agentsController');
-
-// Initialize Firestore
-const db = admin.firestore();
 
 // Notification Types
 const NOTIFICATION_TYPES = {
@@ -46,7 +43,7 @@ const CHANNELS = {
  * @returns {Promise<Object>} - Notification results
  */
 const sendNotification = async (options) => {
-  const { 
+  const {
     type = NOTIFICATION_TYPES.GENERAL,
     channel = CHANNELS.BOTH,
     userId,
@@ -57,7 +54,7 @@ const sendNotification = async (options) => {
   } = options;
 
   logger.info(`Sending ${type} notification via ${channel} to ${userId || email}`);
-  
+
   const results = {
     success: false,
     emailSent: false,
@@ -126,39 +123,12 @@ const sendNotification = async (options) => {
  */
 const sendInAppNotification = async (options) => {
   const { userId, type, title, message, data } = options;
-  
+
   try {
-    // Create notification document
-    const notificationData = {
-      userId,
-      type,
-      title,
-      message,
-      data,
-      read: false,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    // Add to notifications collection
-    await db.collection('notifications').add(notificationData);
-    
-    // Increment user's unread notification count
-    const userRef = db.collection('users').doc(userId);
-    await db.runTransaction(async (transaction) => {
-      const userDoc = await transaction.get(userRef);
-      
-      if (userDoc.exists) {
-        const userData = userDoc.data();
-        const currentCount = userData.unreadNotifications || 0;
-        
-        transaction.update(userRef, {
-          unreadNotifications: currentCount + 1,
-          lastNotificationAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-      }
-    });
-    
-    logger.info(`In-app notification sent to user: ${userId}`);
+    // Note: notifications table not in current schema - log for now
+    // If you need in-app notifications, create a notifications table
+    logger.info(`In-app notification for user ${userId}: ${title} - ${message}`);
+    logger.info(`In-app notification data: ${JSON.stringify(data)}`);
   } catch (error) {
     logger.error(`Error sending in-app notification: ${error.message}`);
     throw error;
@@ -172,7 +142,7 @@ const sendInAppNotification = async (options) => {
  */
 const sendEmailNotification = async (options) => {
   const { email, type, title, message, data } = options;
-  
+
   try {
     // Determine which email template to use based on notification type
     switch (type) {
@@ -195,7 +165,7 @@ const sendEmailNotification = async (options) => {
       default:
         // For general notifications, use a simple email format
         await emailService.sendTestEmail(email);
-    
+
     logger.info(`Email notification sent to: ${email}`);
     }
   } catch (error) {
@@ -212,7 +182,7 @@ const sendEmailNotification = async (options) => {
  */
 const sendOrderSuccessEmail = async (email, data) => {
   const { orderId, items, agent, orderTotal, userName } = data;
-  
+
   try {
     // If there's an agent in the data, use the agent purchase email template
     if (agent) {
@@ -227,11 +197,11 @@ const sendOrderSuccessEmail = async (email, data) => {
       });
       return;
     }
-    
+
     // For non-agent purchases, use the appropriate emailService method when implemented
     // For now, fall back to a basic email
     await emailService.sendTestEmail(email);
-    
+
     logger.info(`Order success email sent to: ${email}`);
   } catch (error) {
     logger.error(`Error sending order success email: ${error.message}`);
@@ -248,14 +218,14 @@ const sendOrderSuccessEmail = async (email, data) => {
 const sendWelcomeEmail = async (email, data) => {
   try {
     const { firstName, lastName, userId } = data;
-    
+
     await emailService.sendWelcomeEmail({
       email,
       userId,
       firstName,
       lastName
     });
-    
+
     logger.info(`Welcome email sent to: ${email}`);
   } catch (error) {
     logger.error(`Error sending welcome email: ${error.message}`);
@@ -272,7 +242,7 @@ const sendWelcomeEmail = async (email, data) => {
 const sendWeeklyUpdateEmail = async (email, data) => {
   try {
     const { firstName, lastName } = data;
-    
+
     await emailService.sendUpdateEmail({
       email,
       firstName,
@@ -281,7 +251,7 @@ const sendWeeklyUpdateEmail = async (email, data) => {
       content: data.content || "Here's what's new this week",
       updateType: 'weekly'
     });
-    
+
     logger.info(`Weekly update email sent to: ${email}`);
   } catch (error) {
     logger.error(`Error sending weekly update email: ${error.message}`);
@@ -300,7 +270,7 @@ const sendWeeklyUpdateEmail = async (email, data) => {
 const sendAnnouncementEmail = async (email, subject, message, data) => {
   try {
     const { firstName, lastName } = data || {};
-    
+
     await emailService.sendGlobalEmail({
       email,
       firstName,
@@ -308,7 +278,7 @@ const sendAnnouncementEmail = async (email, subject, message, data) => {
       title: subject,
       content: message
     });
-    
+
     logger.info(`Announcement email sent to: ${email}`);
   } catch (error) {
     logger.error(`Error sending announcement email: ${error.message}`);
@@ -328,62 +298,54 @@ const sendAnnouncementEmail = async (email, subject, message, data) => {
 const sendContentNotificationEmail = async (email, type, title, message, data) => {
   try {
     const { firstName, lastName } = data || {};
-    
+
     // For agent notifications, use our new template with latest agents
     if (type === NOTIFICATION_TYPES.NEW_AGENT) {
       // Get the latest 5 agents - try multiple methods
       let latestAgents = [];
-      
+
       try {
-        // First method: direct database query
+        // First method: via agentsController
         latestAgents = await agentsController.getLatestAgents(5);
         console.log(`First attempt to get agents found: ${latestAgents.length} agents`);
       } catch (err) {
         console.error('Error getting agents with first method:', err);
       }
-      
-      // If no agents yet, try again with different approach
+
+      // If no agents yet, try again with database query
       if (!latestAgents || latestAgents.length === 0) {
         try {
-          // Second method: use the controller more directly and get any 5 agents
-          const agentsResult = await db.collection('agents').limit(5).get();
-          
-          // Format agents
-          latestAgents = [];
-          agentsResult.forEach(doc => {
-            const agentData = doc.data();
-            latestAgents.push({
-              id: doc.id,
-              url: `${process.env.FRONTEND_URL || 'https://aiwaverider.com'}/agents/${doc.id}`,
-              name: agentData.name || agentData.title || 'AI Agent',
-              imageUrl: agentData.imageUrl || agentData.image || 'https://via.placeholder.com/300x200?text=AI+Agent',
-              description: agentData.description || 'An AI agent to help with your tasks',
-              price: agentData.price || 0,
-              creator: {
-                name: agentData.creator?.name || 'AI Waverider',
-                ...agentData.creator
-              },
-              rating: {
-                average: agentData.rating?.average || 4.5,
-                count: agentData.rating?.count || 0
-              },
-              ...agentData
-            });
-          });
-          
+          const { rows } = await pool.query(
+            `SELECT id, name, title, description, price, image_url, creator
+             FROM agents
+             ORDER BY created_at DESC
+             LIMIT 5`
+          );
+
+          latestAgents = rows.map(row => ({
+            id: row.id,
+            url: `${process.env.FRONTEND_URL || 'https://aiwaverider.com'}/agents/${row.id}`,
+            name: row.name || row.title || 'AI Agent',
+            imageUrl: row.image_url || 'https://via.placeholder.com/300x200?text=AI+Agent',
+            description: row.description || 'An AI agent to help with your tasks',
+            price: row.price || 0,
+            creator: row.creator || { name: 'AI Waverider' },
+            rating: { average: 4.5, count: 0 }
+          }));
+
           console.log(`Second attempt to get agents found: ${latestAgents.length} agents`);
         } catch (err) {
           console.error('Error getting agents with second method:', err);
         }
       }
-      
+
       console.log(`Sending agent notification email with ${latestAgents.length} agents`);
       if (latestAgents.length > 0) {
         console.log(`First agent: ${latestAgents[0].name}, Price: ${latestAgents[0].price}`);
       } else {
         console.log('No agents found for email notification');
       }
-      
+
       // Don't include the bullet points in the message
       let cleanMessage = message;
       if (message && message.includes('Agent 1:')) {
@@ -391,10 +353,10 @@ const sendContentNotificationEmail = async (email, type, title, message, data) =
         cleanMessage = message.split('\n')
           .filter(line => !line.includes('Agent 1:') && !line.includes('Agent 2:') && !line.includes('Agent 3:'))
           .join('\n');
-        
+
         console.log('Removed static agent descriptions from message');
       }
-      
+
       // Send using the new agent update template
       await emailService.sendAgentUpdateEmail({
         email,
@@ -403,12 +365,12 @@ const sendContentNotificationEmail = async (email, type, title, message, data) =
         content: cleanMessage, // Use content directly for the template
         latestAgents
       });
-      
+
       logger.info(`Agent notification email sent to: ${email} with ${latestAgents.length} latest agents`);
     } else {
       // For other notification types, use the standard update template
       const updateType = type === NOTIFICATION_TYPES.NEW_TOOL ? 'new_tools' : 'notification';
-      
+
       await emailService.sendUpdateEmail({
         email,
         firstName,
@@ -417,7 +379,7 @@ const sendContentNotificationEmail = async (email, type, title, message, data) =
         content: message,
         updateType
       });
-      
+
       logger.info(`Content notification email (${type}) sent to: ${email}`);
     }
   } catch (error) {
@@ -433,22 +395,25 @@ const sendContentNotificationEmail = async (email, type, title, message, data) =
  */
 const sendOrderSuccessNotification = async (options) => {
   const { orderId, email, userId, items, orderTotal, agent } = options;
-  
+
   try {
     // Get user's name if available
     let userName = 'Valued Customer';
     if (userId) {
       try {
-        const userDoc = await db.collection('users').doc(userId).get();
-        if (userDoc.exists) {
-          const userData = userDoc.data();
-          userName = userData.firstName || userData.displayName || userData.username || 'Valued Customer';
+        const { rows } = await pool.query(
+          'SELECT first_name, display_name, username FROM users WHERE id = $1',
+          [userId]
+        );
+        if (rows.length > 0) {
+          const userData = rows[0];
+          userName = userData.first_name || userData.display_name || userData.username || 'Valued Customer';
         }
       } catch (userError) {
         logger.warn(`Could not get user data for notification: ${userError.message}`);
       }
     }
-    
+
     // Prepare notification data
     const title = 'Order Confirmed';
   const message = `Your order #${orderId} has been successfully processed.`;
@@ -461,7 +426,7 @@ const sendOrderSuccessNotification = async (options) => {
       type: 'order',
       orderDate: new Date().toISOString()
     };
-    
+
     // Send notifications
     const result = await sendNotification({
       type: NOTIFICATION_TYPES.ORDER_SUCCESS,
@@ -472,7 +437,7 @@ const sendOrderSuccessNotification = async (options) => {
       message,
       data
     });
-    
+
     return result;
   } catch (error) {
     logger.error(`Error sending order success notification: ${error.message}`);
@@ -493,10 +458,10 @@ const sendOrderSuccessNotification = async (options) => {
 const sendWelcomeNotification = async (userData) => {
   try {
     const { uid, email, displayName, firstName, lastName } = userData;
-    
+
     // Prepare user's name
     const userName = firstName || displayName || email.split('@')[0];
-    
+
     // Prepare notification
     const title = 'Welcome to AI Waverider!';
     const message = `We're excited to have you join our community, ${userName}!`;
@@ -506,7 +471,7 @@ const sendWelcomeNotification = async (userData) => {
       firstName: firstName || '',
       email
     };
-    
+
     // Send notifications
     const result = await sendNotification({
       type: NOTIFICATION_TYPES.WELCOME,
@@ -517,7 +482,7 @@ const sendWelcomeNotification = async (userData) => {
       message,
       data: notificationData
     });
-    
+
     return result;
   } catch (error) {
     logger.error(`Error sending welcome notification: ${error.message}`);
@@ -538,10 +503,10 @@ const sendWelcomeNotification = async (userData) => {
 const sendWeeklyUpdate = async (updateData) => {
   try {
     const { newAgents, newTools, featuredContent, weekLabel } = updateData;
-    
+
     // Check if there's anything to send
-    if ((!newAgents || newAgents.length === 0) && 
-        (!newTools || newTools.length === 0) && 
+    if ((!newAgents || newAgents.length === 0) &&
+        (!newTools || newTools.length === 0) &&
         (!featuredContent || featuredContent.length === 0)) {
       logger.warn('No content for weekly update email');
       return {
@@ -550,14 +515,16 @@ const sendWeeklyUpdate = async (updateData) => {
         errors: ['No content for weekly update']
       };
     }
-    
+
     // Get all users who have subscribed to weekly updates
-    const usersSnapshot = await db.collection('users')
-      .where('emailPreferences.weeklyUpdates', '==', true)
-      .where('status', '==', 'active')
-      .get();
-    
-    if (usersSnapshot.empty) {
+    const { rows: users } = await pool.query(
+      `SELECT id, email, first_name, display_name, username, email_preferences
+       FROM users
+       WHERE email_preferences->>'weeklyUpdates' = 'true'
+         AND status = 'active'`
+    );
+
+    if (users.length === 0) {
       logger.info('No users subscribed to weekly updates');
       return {
         success: true,
@@ -565,39 +532,37 @@ const sendWeeklyUpdate = async (updateData) => {
         errors: []
       };
     }
-    
+
     const results = {
       success: true,
       sent: 0,
       failed: 0,
       errors: []
     };
-    
+
     // Send emails to all subscribed users
     const emailPromises = [];
-    usersSnapshot.forEach(doc => {
-      const user = doc.data();
-      
+    for (const user of users) {
       if (!user.email) {
-        results.errors.push(`User ${doc.id} has no email address`);
-        return;
+        results.errors.push(`User ${user.id} has no email address`);
+        continue;
       }
-      
+
       // Prepare user data
       const userData = {
-        name: user.firstName || user.displayName || user.username || user.email.split('@')[0],
+        name: user.first_name || user.display_name || user.username || user.email.split('@')[0],
         newAgents,
         newTools,
         featuredContent,
         weekLabel
       };
-      
+
       // Queue email
       const emailPromise = sendNotification({
         type: NOTIFICATION_TYPES.WEEKLY_UPDATE,
         channel: CHANNELS.EMAIL, // Weekly updates are typically email-only
         email: user.email,
-        userId: doc.id,
+        userId: user.id,
         title: `AI Waverider Weekly: ${weekLabel || 'Latest Updates'}`,
         message: 'Here are this week\'s updates from AI Waverider',
         data: userData
@@ -612,19 +577,19 @@ const sendWeeklyUpdate = async (updateData) => {
         results.failed++;
         results.errors.push(`Error sending to ${user.email}: ${error.message}`);
       });
-      
+
       emailPromises.push(emailPromise);
-    });
-    
+    }
+
     // Wait for all emails to be sent
     await Promise.all(emailPromises);
-    
+
     // Log results
     logger.info(`Weekly update email sent to ${results.sent} users, failed for ${results.failed} users`);
     if (results.errors.length > 0) {
       logger.error(`Weekly update errors: ${results.errors.slice(0, 5).join('; ')}${results.errors.length > 5 ? ` and ${results.errors.length - 5} more` : ''}`);
     }
-    
+
     return results;
   } catch (error) {
     logger.error(`Error sending weekly update: ${error.message}`);
@@ -644,43 +609,41 @@ const sendWeeklyUpdate = async (updateData) => {
  */
 const sendGlobalAnnouncement = async (announcementData) => {
   try {
-    const { 
-      subject, 
-      message, 
-      messageHtml, 
-      ctaText, 
-      ctaUrl, 
+    const {
+      subject,
+      message,
+      messageHtml,
+      ctaText,
+      ctaUrl,
       targetGroups = ['all'],
       sender = 'AI Waverider Team'
     } = announcementData;
-    
+
     // Validate required fields
     if (!subject || (!message && !messageHtml)) {
       throw new Error('Announcement subject and message are required');
     }
-    
-    let userQuery = db.collection('users').where('status', '==', 'active');
-    
+
+    // Build user query based on target groups
+    let userQuery = 'SELECT id, email, first_name, display_name, username, role, email_preferences FROM users WHERE status = $1';
+    const queryParams = ['active'];
+    let paramIndex = 2;
+
     // Apply additional filters based on target groups
-    // Exclude 'all' as it doesn't need filtering
     const filterGroups = targetGroups.filter(group => group !== 'all');
-    
-    if (targetGroups.includes('admin')) {
-      // If 'admin' is specifically targeted and not 'all'
-      if (!targetGroups.includes('all')) {
-        userQuery = userQuery.where('role', '==', 'admin');
-      }
+
+    if (targetGroups.includes('admin') && !targetGroups.includes('all')) {
+      userQuery += ` AND role = $${paramIndex}`;
+      queryParams.push('admin');
+      paramIndex++;
     } else if (filterGroups.length > 0) {
-      // Handle other user groups as needed
-      // This is a simple implementation - extend as needed for your user groups
-      // For complex segmentation, you might need multiple queries and combine results
       logger.info(`Targeting user groups: ${filterGroups.join(', ')}`);
     }
-    
+
     // Execute query
-    const usersSnapshot = await userQuery.get();
-    
-    if (usersSnapshot.empty) {
+    const { rows: users } = await pool.query(userQuery, queryParams);
+
+    if (users.length === 0) {
       logger.info('No users match the criteria for this announcement');
       return {
         success: true,
@@ -688,60 +651,47 @@ const sendGlobalAnnouncement = async (announcementData) => {
         errors: []
       };
     }
-    
+
     const results = {
       success: true,
       sent: 0,
       failed: 0,
       errors: []
     };
-    
-    // Store the announcement in the database
-    const announcementRef = await db.collection('announcements').add({
-      subject,
-      message,
-      messageHtml,
-      ctaText,
-      ctaUrl,
-      targetGroups,
-      sender,
-      sentAt: admin.firestore.FieldValue.serverTimestamp(),
-      sentCount: 0,
-      failedCount: 0
-    });
-    
+
+    // Note: announcements table not in current schema - log the announcement
+    logger.info(`Sending announcement "${subject}" to ${users.length} users`);
+
     // Send to all matching users
     const emailPromises = [];
-    usersSnapshot.forEach(doc => {
-      const user = doc.data();
-      
+    for (const user of users) {
       if (!user.email) {
-        results.errors.push(`User ${doc.id} has no email address`);
-        return;
+        results.errors.push(`User ${user.id} has no email address`);
+        continue;
       }
-      
+
       // Skip users who have opted out, but only if not sending to admins
-      if (!targetGroups.includes('admin') && 
-          user.emailPreferences && 
-          user.emailPreferences.announcements === false) {
-        return;
+      if (!targetGroups.includes('admin') &&
+          user.email_preferences &&
+          user.email_preferences.announcements === false) {
+        continue;
       }
-      
+
       // Prepare user data
       const userData = {
-        name: user.firstName || user.displayName || user.username || user.email.split('@')[0],
+        name: user.first_name || user.display_name || user.username || user.email.split('@')[0],
         messageHtml: messageHtml || `<p>${message}</p>`,
         messageText: message,
         ctaText,
         ctaUrl
       };
-      
+
       // Queue notification
       const emailPromise = sendNotification({
         type: NOTIFICATION_TYPES.GLOBAL_ANNOUNCEMENT,
         channel: CHANNELS.BOTH,  // Send both email and in-app
         email: user.email,
-        userId: doc.id,
+        userId: user.id,
         title: subject,
         message: message,
         data: userData
@@ -756,30 +706,20 @@ const sendGlobalAnnouncement = async (announcementData) => {
         results.failed++;
         results.errors.push(`Error sending to ${user.email}: ${error.message}`);
       });
-      
+
       emailPromises.push(emailPromise);
-    });
-    
+    }
+
     // Wait for all notifications to be sent
     await Promise.all(emailPromises);
-    
-    // Update the announcement record with the final counts
-    await announcementRef.update({
-      sentCount: results.sent,
-      failedCount: results.failed,
-      completedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    
+
     // Log results
     logger.info(`Announcement "${subject}" sent to ${results.sent} users, failed for ${results.failed} users`);
     if (results.errors.length > 0) {
       logger.error(`Announcement errors: ${results.errors.slice(0, 5).join('; ')}${results.errors.length > 5 ? ` and ${results.errors.length - 5} more` : ''}`);
     }
-    
-    return {
-      ...results,
-      announcementId: announcementRef.id
-    };
+
+    return results;
   } catch (error) {
     logger.error(`Error sending global announcement: ${error.message}`);
     return {
@@ -799,4 +739,4 @@ module.exports = {
   sendGlobalAnnouncement,
   NOTIFICATION_TYPES,
   CHANNELS
-}; 
+};

@@ -8,7 +8,6 @@ const express = require('express');
 const router = express.Router();
 const invoiceService = require('../../services/invoice/invoiceService');
 const logger = require('../../utils/logger');
-const { db } = require('../../config/firebase');
 
 /**
  * Get invoice by ID

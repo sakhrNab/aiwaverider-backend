@@ -9,7 +9,7 @@ const emailService = require('../../services/email/emailService');
 const emailNotificationModel = require('../../models/emailNotification');
 const logger = require('../../utils/logger');
 const { validateEmail } = require('../../utils/validators');
-const { db } = require('../../config/firebase');
+const { pool } = require('../../config/database');
 const config = require('../../config/email');
 const agentsController = require('../agent/agentsController');
 
@@ -539,42 +539,49 @@ exports.sendUpdateToUsers = async (req, res) => {
     
     // If we have userIds, fetch user data by IDs
     if (userIds && userIds.length > 0) {
-      const usersSnapshot = await Promise.all(
-        userIds.map(userId => db.collection('users').doc(userId).get())
+      const usersResult = await Promise.all(
+        userIds.map(userId => pool.query('SELECT * FROM users WHERE id = $1', [userId]))
       );
-      
+
       // Filter out non-existent users and prepare user data
-      users = usersSnapshot
-        .filter(doc => doc.exists)
-        .map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        
+      users = usersResult
+        .filter(result => result.rows.length > 0)
+        .map(result => {
+          const row = result.rows[0];
+          return {
+            id: row.id,
+            email: row.email,
+            firstName: row.first_name,
+            lastName: row.last_name,
+            emailPreferences: row.email_preferences,
+            accountType: row.role,
+            ...row
+          };
+        });
+
       logger.info(`Found ${users.length} of ${userIds.length} users by ID`);
     }
     
     // If we have emailAddresses, fetch additional user data by email
     if (emailAddresses && emailAddresses.length > 0) {
       try {
-        // Process emails in batches (Firestore has 'in' query limit)
-        const batchSize = 10;
-        let emailUsers = [];
-        
-        for (let i = 0; i < emailAddresses.length; i += batchSize) {
-          const batch = emailAddresses.slice(i, i + batchSize);
-          const snapshot = await db.collection('users')
-            .where('email', 'in', batch)
-            .get();
-            
-          emailUsers = [...emailUsers, ...snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }))];
-        }
-        
+        const emailResult = await pool.query(
+          'SELECT * FROM users WHERE email = ANY($1)',
+          [emailAddresses]
+        );
+
+        const emailUsers = emailResult.rows.map(row => ({
+          id: row.id,
+          email: row.email,
+          firstName: row.first_name,
+          lastName: row.last_name,
+          emailPreferences: row.email_preferences,
+          accountType: row.role,
+          ...row
+        }));
+
         logger.info(`Found ${emailUsers.length} of ${emailAddresses.length} users by email`);
-        
+
         // Add users found by email, avoiding duplicates
         const existingIds = new Set(users.map(u => u.id));
         emailUsers.forEach(user => {
@@ -583,7 +590,7 @@ exports.sendUpdateToUsers = async (req, res) => {
             existingIds.add(user.id);
           }
         });
-        
+
         // Add placeholder users for emails not found in the database
         const foundEmails = new Set(users.map(u => u.email));
         emailAddresses.forEach(email => {
@@ -627,41 +634,8 @@ exports.sendUpdateToUsers = async (req, res) => {
     // If this is a tool update, fetch the latest tools to include in the email
     let additionalContent = '';
     if (updateType === 'new_tools') {
-      try {
-        // Fetch the 5 most recent tools from the database
-        const toolsSnapshot = await db.collection('tools')
-          .orderBy('createdAt', 'desc')
-          .limit(5)
-          .get();
-        
-        if (!toolsSnapshot.empty) {
-          // Create HTML for the tools section
-          additionalContent = `
-            <div style="margin-top: 20px; margin-bottom: 20px;">
-              <h3 style="color: #4a86e8;">Our Latest AI Tools</h3>
-              <ul style="padding-left: 20px;">
-          `;
-          
-          toolsSnapshot.forEach(doc => {
-            const tool = doc.data();
-            additionalContent += `
-              <li style="margin-bottom: 15px;">
-                <div style="font-weight: bold; color: #333;">${tool.name || 'New Tool'}</div>
-                <div style="color: #666;">${tool.description || 'No description available'}</div>
-              </li>
-            `;
-          });
-          
-          additionalContent += `
-              </ul>
-              <p><a href="${config.websiteUrl}/tools" style="color: #4a86e8; text-decoration: none;">Explore all our AI tools →</a></p>
-            </div>
-          `;
-        }
-      } catch (error) {
-        logger.error(`Error fetching latest tools: ${error.message}`);
-        // Continue without the latest tools if there's an error
-      }
+      // TODO: Tools table does not exist in PostgreSQL yet. Skipping tools fetch.
+      logger.info('Tools table does not exist in PostgreSQL yet - skipping latest tools fetch for email content');
     }
     
     // Send emails to each user who has the preference enabled
@@ -820,19 +794,25 @@ exports.sendCustomEmail = async (req, res) => {
       }
       
       // Get user data for these emails if they exist in our system
-      const usersSnapshot = await db.collection('users')
-        .where('email', 'in', emails.slice(0, 10)) // Firestore limit for 'in' queries
-        .get();
-      
-      users = usersSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
+      const usersResult = await pool.query(
+        'SELECT * FROM users WHERE email = ANY($1)',
+        [emails]
+      );
+
+      users = usersResult.rows.map(row => ({
+        id: row.id,
+        email: row.email,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        emailPreferences: row.email_preferences,
+        accountType: row.role,
+        ...row
       }));
-      
+
       // Add any emails not found as users
       const foundEmails = users.map(u => u.email);
       const notFoundEmails = emails.filter(email => !foundEmails.includes(email));
-      
+
       // Add placeholder users for these emails
       notFoundEmails.forEach(email => {
         users.push({
@@ -844,19 +824,31 @@ exports.sendCustomEmail = async (req, res) => {
       });
     } else {
       // For user groups (all, premium, free)
-      let query = db.collection('users');
-      
+      let queryText = 'SELECT * FROM users';
+      const queryParams = [];
+
       if (recipientType === 'premium') {
-        query = query.where('accountType', '==', 'premium');
+        queryText += ' WHERE role = $1';
+        queryParams.push('premium');
       } else if (recipientType === 'free') {
-        query = query.where('accountType', '==', 'free');
+        queryText += ' WHERE role = $1';
+        queryParams.push('free');
+      } else {
+        // For 'all' users, fetch active users
+        queryText += ' WHERE status = $1';
+        queryParams.push('active');
       }
-      
-      const usersSnapshot = await query.get();
-      
-      users = usersSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
+
+      const usersResult = await pool.query(queryText, queryParams);
+
+      users = usersResult.rows.map(row => ({
+        id: row.id,
+        email: row.email,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        emailPreferences: row.email_preferences,
+        accountType: row.role,
+        ...row
       }));
     }
     
@@ -1304,48 +1296,9 @@ exports.sendTestCustomEmail = async (req, res) => {
  * @returns {Promise<string>} - Enhanced content with latest tools
  */
 async function getLatestToolsContent(content) {
-  let enhancedContent = content;
-  
-  try {
-    // Fetch the 5 most recent tools from the database
-    const toolsSnapshot = await db.collection('tools')
-      .orderBy('createdAt', 'desc')
-      .limit(5)
-      .get();
-    
-    if (!toolsSnapshot.empty) {
-      // Create HTML for the tools section
-      const toolsContent = `
-        <div style="margin-top: 20px; margin-bottom: 20px;">
-          <h3 style="color: #4a86e8;">Our Latest AI Tools</h3>
-          <ul style="padding-left: 20px;">
-      `;
-      
-      let toolsList = '';
-      toolsSnapshot.forEach(doc => {
-        const tool = doc.data();
-        toolsList += `
-          <li style="margin-bottom: 15px;">
-            <div style="font-weight: bold; color: #333;">${tool.name || 'New Tool'}</div>
-            <div style="color: #666;">${tool.description || 'No description available'}</div>
-          </li>
-        `;
-      });
-      
-      const toolsFooter = `
-          </ul>
-          <p><a href="${config.websiteUrl}/tools" style="color: #4a86e8; text-decoration: none;">Explore all our AI tools →</a></p>
-        </div>
-      `;
-      
-      enhancedContent = `${content}${toolsContent}${toolsList}${toolsFooter}`;
-    }
-  } catch (error) {
-    logger.error(`Error fetching latest tools for email: ${error.message}`);
-    // Return original content if there's an error
-  }
-  
-  return enhancedContent;
+  // TODO: Tools table does not exist in PostgreSQL yet. Returning original content.
+  logger.info('Tools table does not exist in PostgreSQL yet - skipping latest tools content enhancement');
+  return content;
 }
 
 /**
@@ -1417,31 +1370,27 @@ exports.sendToolUpdateEmail = async (req, res) => {
       
       // Get user data for these emails if they exist in our system
       try {
-        // Firestore has a limit for 'in' queries, so we may need to process in batches
-        const batchSize = 10; // Firestore limit
-        let processedUsers = [];
-        
-        // Process emails in batches to avoid Firestore limits
-        for (let i = 0; i < emails.length; i += batchSize) {
-          const batch = emails.slice(i, i + batchSize);
-          const usersSnapshot = await db.collection('users')
-            .where('email', 'in', batch)
-            .get();
-          
-          processedUsers = [...processedUsers, ...usersSnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }))];
-        }
-        
-        users = processedUsers;
-        
+        const usersResult = await pool.query(
+          'SELECT * FROM users WHERE email = ANY($1)',
+          [emails]
+        );
+
+        users = usersResult.rows.map(row => ({
+          id: row.id,
+          email: row.email,
+          firstName: row.first_name,
+          lastName: row.last_name,
+          emailPreferences: row.email_preferences,
+          accountType: row.role,
+          ...row
+        }));
+
         // Add any emails not found as users
         const foundEmails = users.map(u => u.email);
         const notFoundEmails = emails.filter(email => !foundEmails.includes(email));
-        
+
         console.log(`Found ${users.length} registered users, adding ${notFoundEmails.length} non-registered emails`);
-        
+
         // Add placeholder users for these emails
         notFoundEmails.forEach(email => {
           users.push({
@@ -1453,7 +1402,7 @@ exports.sendToolUpdateEmail = async (req, res) => {
         });
       } catch (error) {
         logger.error(`Error fetching users for tool update: ${error.message}`);
-        
+
         // Continue with just the emails as a fallback
         users = emails.map(email => ({
           id: null,
@@ -1464,21 +1413,33 @@ exports.sendToolUpdateEmail = async (req, res) => {
       }
     } else {
       // For user groups (all, premium, free)
-      let query = db.collection('users');
-      
+      let queryText = 'SELECT * FROM users';
+      const queryParams = [];
+
       if (recipientType === 'premium') {
-        query = query.where('accountType', '==', 'premium');
+        queryText += ' WHERE role = $1';
+        queryParams.push('premium');
       } else if (recipientType === 'free') {
-        query = query.where('accountType', '==', 'free');
+        queryText += ' WHERE role = $1';
+        queryParams.push('free');
+      } else {
+        // For 'all' users, fetch active users
+        queryText += ' WHERE status = $1';
+        queryParams.push('active');
       }
-      
-      const usersSnapshot = await query.get();
-      
-      users = usersSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
+
+      const usersResult = await pool.query(queryText, queryParams);
+
+      users = usersResult.rows.map(row => ({
+        id: row.id,
+        email: row.email,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        emailPreferences: row.email_preferences,
+        accountType: row.role,
+        ...row
       }));
-      
+
       console.log(`Found ${users.length} users for ${recipientType} recipient type`);
     }
     
@@ -1740,21 +1701,33 @@ exports.sendAgentUpdateEmail = async (req, res) => {
       }
     } else {
       // For user groups (all, premium, free)
-      let query = db.collection('users');
-      
+      let queryText = 'SELECT * FROM users';
+      const queryParams = [];
+
       if (recipientType === 'premium') {
-        query = query.where('accountType', '==', 'premium');
+        queryText += ' WHERE role = $1';
+        queryParams.push('premium');
       } else if (recipientType === 'free') {
-        query = query.where('accountType', '==', 'free');
+        queryText += ' WHERE role = $1';
+        queryParams.push('free');
+      } else {
+        // For 'all' users, fetch active users
+        queryText += ' WHERE status = $1';
+        queryParams.push('active');
       }
-      
-      const usersSnapshot = await query.get();
-      
-      users = usersSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
+
+      const usersResult = await pool.query(queryText, queryParams);
+
+      users = usersResult.rows.map(row => ({
+        id: row.id,
+        email: row.email,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        emailPreferences: row.email_preferences,
+        accountType: row.role,
+        ...row
       }));
-      
+
       console.log(`Found ${users.length} users for ${recipientType} recipient type`);
     }
     

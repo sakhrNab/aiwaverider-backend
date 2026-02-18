@@ -9,7 +9,6 @@ const path = require('path');
 const fs = require('fs').promises;
 const { validateFirebaseToken, isAdmin } = require('../../middleware/authenticationMiddleware');
 const { getSettings, updateSettings, resetSettings } = require('../../models/siteSettings');
-const { db } = require('../../config/firebase');
 const adminController = require('../../controllers/admin/adminController');
 
 // Apply authentication middleware to all admin routes
@@ -55,7 +54,7 @@ router.use(isAdmin);
  */
 router.get('/settings', async (req, res) => {
   try {
-    const settings = await getSettings(db);
+    const settings = await getSettings();
     res.json(settings);
   } catch (error) {
     console.error('Error getting settings:', error);
@@ -69,7 +68,7 @@ router.get('/settings', async (req, res) => {
  */
 router.put('/settings', async (req, res) => {
   try {
-    const updatedSettings = await updateSettings(db, req.body);
+    const updatedSettings = await updateSettings(req.body);
     res.json(updatedSettings);
   } catch (error) {
     console.error('Error updating settings:', error);
@@ -83,7 +82,7 @@ router.put('/settings', async (req, res) => {
  */
 router.post('/settings/reset', async (req, res) => {
   try {
-    const defaultSettings = await resetSettings(db);
+    const defaultSettings = await resetSettings();
     res.json(defaultSettings);
   } catch (error) {
     console.error('Error resetting settings:', error);

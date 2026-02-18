@@ -5,17 +5,16 @@ const agentsController = require('../../controllers/agent/agentsController');
 const { validateFirebaseToken, isAdmin } = require('../../middleware/authenticationMiddleware');
 const publicCacheMiddleware = require('../../middleware/publicCacheMiddleware');
 const upload = require('../../middleware/upload');
-const { db } = require('../../config/firebase');
-const admin = require('firebase-admin');
+const { pool } = require('../../config/database');
 const { getCache, setCache, deleteCache, deleteCacheByPattern, generateAgentCacheKey } = require('../../utils/cache');
 
 // Helper function to increment agent download count
 async function incrementAgentDownloadCount(agentId) {
   try {
-    const agentRef = db.collection('agents').doc(agentId);
-    await agentRef.update({
-      downloadCount: admin.firestore.FieldValue.increment(1)
-    });
+    await pool.query(
+      'UPDATE agents SET download_count = download_count + 1 WHERE id = $1',
+      [agentId]
+    );
     return true;
   } catch (error) {
     console.error(`Error incrementing download count for agent ${agentId}:`, error);
@@ -461,50 +460,55 @@ router.post('/:agentId/toggle-like', validateFirebaseToken, async (req, res) => 
   try {
     const { agentId } = req.params;
     const userId = req.user.uid;
-    
+
     // Check if agent exists
-    const agentRef = db.collection('agents').doc(agentId);
-    const agentDoc = await agentRef.get();
-    
-    if (!agentDoc.exists) {
+    const { rows: agentRows } = await pool.query(
+      'SELECT id, likes FROM agents WHERE id = $1',
+      [agentId]
+    );
+
+    if (agentRows.length === 0) {
       return res.status(404).json({ error: 'Agent not found' });
     }
-    
-    const agentData = agentDoc.data();
+
+    const agentData = agentRows[0];
     const likes = agentData.likes || [];
     const userLikedIndex = likes.indexOf(userId);
-    
+
     let updatedLikes;
     let liked;
-    
+
     if (userLikedIndex >= 0) {
       // User already liked, remove the like
       updatedLikes = likes.filter(id => id !== userId);
       liked = false;
+      await pool.query(
+        'UPDATE agents SET likes = array_remove(likes, $1) WHERE id = $2',
+        [userId, agentId]
+      );
     } else {
       // User hasn't liked, add the like
       updatedLikes = [...likes, userId];
       liked = true;
+      await pool.query(
+        'UPDATE agents SET likes = array_append(likes, $1) WHERE id = $2',
+        [userId, agentId]
+      );
     }
-    
-    // Update agent document
-    await agentRef.update({
-      likes: updatedLikes
-    });
-    
+
     // Invalidate user-like-status cache for this user+agent
     try {
       await deleteCache(`agent:${agentId}:user:${userId}:like`);
       await deleteCache(generateAgentCacheKey(agentId));
       await deleteCacheByPattern('agents:results:*');
     } catch (e) {}
-    
+
     res.json({
       success: true,
       liked,
       likesCount: updatedLikes.length
     });
-    
+
   } catch (error) {
     console.error('Error toggling like:', error);
     res.status(500).json({ error: 'Failed to toggle like' });
@@ -524,15 +528,17 @@ router.get('/:id/user-like-status', validateFirebaseToken, async (req, res) => {
       return res.json(cached);
     }
     
-    // Get the agent document to check if the user is in the likes array
-    const agentRef = db.collection('agents').doc(agentId);
-    const agentDoc = await agentRef.get();
-    
-    if (!agentDoc.exists) {
+    // Get the agent record to check if the user is in the likes array
+    const { rows: agentRows } = await pool.query(
+      'SELECT likes FROM agents WHERE id = $1',
+      [agentId]
+    );
+
+    if (agentRows.length === 0) {
       return res.status(404).json({ error: 'Agent not found' });
     }
-    
-    const agentData = agentDoc.data();
+
+    const agentData = agentRows[0];
     const likes = agentData.likes || [];
     const liked = Array.isArray(likes) ? likes.includes(userId) : false;
     const likesCount = Array.isArray(likes) ? likes.length : 0;
@@ -562,25 +568,22 @@ router.post('/:agentId/downloads', validateFirebaseToken, agentsController.incre
 router.post('/:agentId/increment-downloads', async (req, res) => {
   try {
     const { agentId } = req.params;
-    
-    // Check if agent exists
-    const agentRef = db.collection('agents').doc(agentId);
-    const agentDoc = await agentRef.get();
-    
-    if (!agentDoc.exists) {
+
+    // Check if agent exists and increment
+    const { rowCount } = await pool.query(
+      'UPDATE agents SET download_count = download_count + 1 WHERE id = $1',
+      [agentId]
+    );
+
+    if (rowCount === 0) {
       return res.status(404).json({ error: 'Agent not found' });
     }
-    
-    // Increment download count
-    await agentRef.update({
-      downloadCount: admin.firestore.FieldValue.increment(1)
-    });
-    
-    res.json({ 
+
+    res.json({
       success: true,
       message: 'Download count incremented successfully'
     });
-    
+
   } catch (error) {
     console.error('Error incrementing download count:', error);
     res.status(500).json({ error: 'Failed to increment download count' });
@@ -597,58 +600,63 @@ router.post('/:id/download', validateFirebaseToken, async (req, res) => {
     const jsDate = new Date();
     
     // Get agent data
-    const agentDoc = await db.collection('agents').doc(agentId).get();
-    
-    if (!agentDoc.exists) {
+    const { rows: agentRows } = await pool.query(
+      'SELECT * FROM agents WHERE id = $1',
+      [agentId]
+    );
+
+    if (agentRows.length === 0) {
       return res.status(404).json({ success: false, message: 'Agent not found' });
     }
-    
-    const agentData = agentDoc.data();
-    
-    // Get price - for purchasing tracking
-    const price = typeof agentData.price === 'object' ? 
-      (agentData.price.basePrice || 0) : 
-      (agentData.price || 0);
-    
-    // Update user's downloads array
-    const userRef = db.collection('users').doc(userId);
-    const userDoc = await userRef.get();
-    
-    if (userDoc.exists) {
-      const userData = userDoc.data();
+
+    const agentData = agentRows[0];
+
+    // Get price - for purchasing tracking (parseFloat because PG NUMERIC returns strings)
+    const price = parseFloat(agentData.price) || 0;
+
+    // Check user exists and record download
+    const { rows: userRows } = await pool.query(
+      'SELECT id, downloads FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (userRows.length > 0) {
+      const userData = userRows[0];
       const downloads = userData.downloads || [];
-      
+
       // Check if user already has this download recorded
       const existingDownload = downloads.find(d => d.agentId === agentId);
-      
+
       if (!existingDownload) {
-        // Add to downloads array - using regular Date instead of serverTimestamp
-        await userRef.update({
-          downloads: admin.firestore.FieldValue.arrayUnion({
-            agentId,
-            id: agentId,
-            title: agentData.title || 'Unknown Agent',
-            imageUrl: agentData.imageUrl || null,
-            downloadDate: jsDate, // Use JavaScript Date instead of serverTimestamp
-            price: price,
-            isFree: price === 0
-          })
-        });
+        const newDownload = {
+          agentId,
+          id: agentId,
+          title: agentData.title || 'Unknown Agent',
+          imageUrl: agentData.image_url || null,
+          downloadDate: jsDate.toISOString(),
+          price: price,
+          isFree: price === 0
+        };
+        await pool.query(
+          `UPDATE users SET downloads = COALESCE(downloads, '[]'::jsonb) || $1::jsonb WHERE id = $2`,
+          [JSON.stringify([newDownload]), userId]
+        );
       }
     }
-    
+
     // Increment agent download count
     await incrementAgentDownloadCount(agentId);
-    
+
     // Return success with download URL
+    const downloadUrl = (agentData.json_file && agentData.json_file.url) || agentData.download_url || agentData.file_url;
     res.json({
       success: true,
       message: 'Download processed successfully',
-      downloadUrl: agentData.jsonFileUrl,
+      downloadUrl,
       agent: {
         id: agentId,
         ...agentData,
-        downloadDate: new Date() // Also use a regular Date here
+        downloadDate: new Date()
       }
     });
   } catch (error) {
@@ -695,74 +703,105 @@ router.post('/:id/free-download', (req, res, next) => {
     const jsDate = new Date();
     
     // Get agent data
-    const agentDoc = await db.collection('agents').doc(agentId).get();
-    
-    if (!agentDoc.exists) {
+    const { rows: freeAgentRows } = await pool.query(
+      'SELECT * FROM agents WHERE id = $1',
+      [agentId]
+    );
+
+    if (freeAgentRows.length === 0) {
       return res.status(404).json({ success: false, message: 'Agent not found' });
     }
-    
-    const agentData = agentDoc.data();
-    
-    // Verify agent is free
-    if (agentData.price !== 0) {
+
+    const agentData = freeAgentRows[0];
+
+    // Verify agent is free (parseFloat because PG NUMERIC returns strings)
+    if (parseFloat(agentData.price) !== 0) {
       return res.status(403).json({ success: false, message: 'This agent is not free' });
     }
-    
+
     // Update user's downloads array if authenticated
     if (userId) {
-      const userRef = db.collection('users').doc(userId);
-      const userDoc = await userRef.get();
-      
-      if (userDoc.exists) {
-        const userData = userDoc.data();
+      const { rows: freeUserRows } = await pool.query(
+        'SELECT id, downloads FROM users WHERE id = $1',
+        [userId]
+      );
+
+      if (freeUserRows.length > 0) {
+        const userData = freeUserRows[0];
         const downloads = userData.downloads || [];
-        
+
         // Check if user already has this download recorded
         const existingDownload = downloads.find(d => d.agentId === agentId);
-        
+
         if (!existingDownload) {
-          // Add to downloads array - using regular Date instead of serverTimestamp
-          await userRef.update({
-            downloads: admin.firestore.FieldValue.arrayUnion({
-              agentId,
-              id: agentId,
-              title: agentData.title || 'Unknown Agent',
-              imageUrl: agentData.imageUrl || null,
-              downloadDate: jsDate, // Use JavaScript Date instead of serverTimestamp
-              price: 0,
-              isFree: true
-            })
-          });
+          const newDownload = {
+            agentId,
+            id: agentId,
+            title: agentData.title || 'Unknown Agent',
+            imageUrl: agentData.image_url || null,
+            downloadDate: jsDate.toISOString(),
+            price: 0,
+            isFree: true
+          };
+          await pool.query(
+            `UPDATE users SET downloads = COALESCE(downloads, '[]'::jsonb) || $1::jsonb WHERE id = $2`,
+            [JSON.stringify([newDownload]), userId]
+          );
         }
       }
     }
-    
+
     // Increment agent download count
     await incrementAgentDownloadCount(agentId);
-    
+
     // Return success with download info
-    const downloadUrl = agentData.jsonFileUrl || agentData.downloadUrl || agentData.fileUrl;
-    
+    const downloadUrl = (agentData.json_file && agentData.json_file.url) || agentData.download_url || agentData.file_url;
+
     console.log(`[FREE-DOWNLOAD] Preparing response for agent ${agentId}:`);
-    console.log(`[FREE-DOWNLOAD] - jsonFileUrl: ${agentData.jsonFileUrl}`);
-    console.log(`[FREE-DOWNLOAD] - downloadUrl: ${agentData.downloadUrl}`);
-    console.log(`[FREE-DOWNLOAD] - fileUrl: ${agentData.fileUrl}`);
-    console.log(`[FREE-DOWNLOAD] - Final downloadUrl: ${downloadUrl}`);
-    console.log(`[FREE-DOWNLOAD] - Is mobile request: ${isMobileRequest}`);
-    
+    console.log(`[FREE-DOWNLOAD] - downloadUrl: ${downloadUrl ? downloadUrl.substring(0, 80) : 'NULL'}`);
+
+    // Try to fetch the actual JSON file content so frontend can create ZIP directly
+    let jsonFileContent = null;
+    if (downloadUrl) {
+      try {
+        const axios = require('axios');
+        const fileResponse = await axios.get(downloadUrl, { timeout: 15000, responseType: 'text' });
+        jsonFileContent = fileResponse.data;
+        if (typeof jsonFileContent === 'object') {
+          jsonFileContent = JSON.stringify(jsonFileContent, null, 2);
+        }
+        console.log(`[FREE-DOWNLOAD] Fetched JSON content: ${(jsonFileContent || '').length} chars`);
+      } catch (fetchErr) {
+        console.warn(`[FREE-DOWNLOAD] Could not fetch JSON content: ${fetchErr.message}`);
+      }
+    }
+
+    // Map raw DB row to camelCase for frontend compatibility
+    const agentResponse = {
+      id: agentData.id,
+      name: agentData.name,
+      title: agentData.title,
+      description: agentData.description,
+      category: agentData.category,
+      categories: agentData.categories,
+      price: parseFloat(agentData.price) || 0,
+      isFree: agentData.is_free,
+      jsonFile: agentData.json_file,
+      downloadUrl: downloadUrl,
+      fileUrl: agentData.file_url,
+      imageUrl: agentData.image_url,
+      image: agentData.image,
+      downloadDate: new Date()
+    };
+
     const responseData = {
       success: true,
       message: 'Free agent download processed successfully',
       downloadUrl: downloadUrl,
-      agent: {
-        id: agentId,
-        ...agentData,
-        downloadDate: new Date() // Also use a regular Date here
-      }
+      jsonFileContent: jsonFileContent,
+      agent: agentResponse
     };
-    
-    console.log(`[FREE-DOWNLOAD] Sending response with downloadUrl: ${responseData.downloadUrl}`);
-    
+
     res.json(responseData);
   } catch (error) {
     console.error('Error processing free download:', error);
@@ -794,16 +833,8 @@ router.options('/:id/download', (req, res) => {
   res.status(200).end();
 });
 
-// Download file proxy endpoint (no authentication required)
-router.get('/:id/download', async (req, res) => {
-  console.log(`[DOWNLOAD PROXY] ======= ROUTE HIT =======`);
-  console.log(`[DOWNLOAD PROXY] Request method: ${req.method}`);
-  console.log(`[DOWNLOAD PROXY] Request URL: ${req.url}`);
-  console.log(`[DOWNLOAD PROXY] Request path: ${req.path}`);
-  console.log(`[DOWNLOAD PROXY] Agent ID param: ${req.params.id}`);
-  console.log(`[DOWNLOAD PROXY] Query params:`, req.query);
-  console.log(`[DOWNLOAD PROXY] ======= PROCESSING =======`);
-  
+// Download file proxy handler (shared between /download and /download-file)
+const downloadFileProxy = async (req, res) => {
   try {
     // Set CORS headers immediately for mobile compatibility
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -902,7 +933,11 @@ router.get('/:id/download', async (req, res) => {
       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
-});
+};
+
+// Register the proxy handler on both paths (frontend uses /download-file)
+router.get('/:id/download-file', downloadFileProxy);
+router.get('/:id/download', downloadFileProxy);
 
 // ==========================================
 // REVIEW ELIGIBILITY ENDPOINTS

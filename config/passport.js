@@ -1,23 +1,23 @@
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const { admin, db } = require('./firebase');
+const { admin } = require('./firebase');
+const { pool } = require('./database');
 
 const initializePassport = (passport) => {
-  const usersCollection = db.collection('users');
 
   // Serialize user for the session
   passport.serializeUser((user, done) => {
-    done(null, user.id);
+    done(null, user.id || user.uid);
   });
 
   // Deserialize user from the session
   passport.deserializeUser(async (id, done) => {
     try {
-      const userDoc = await usersCollection.doc(id).get();
-      if (!userDoc.exists) {
+      const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+      if (rows.length === 0) {
         return done(null, null);
       }
-      done(null, { id: userDoc.id, ...userDoc.data() });
+      done(null, { id: rows[0].id, ...rows[0] });
     } catch (error) {
       done(error, null);
     }
@@ -33,15 +33,15 @@ const initializePassport = (passport) => {
   async (req, accessToken, refreshToken, profile, done) => {
     try {
       const email = profile.emails[0].value.toLowerCase();
-      
-      // First check if user exists in Firestore
-      let userQuery = await usersCollection.where('email', '==', email).get();
-      
-      if (userQuery.empty) {
+
+      // First check if user exists in PostgreSQL
+      const { rows: userRows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+
+      if (userRows.length === 0) {
         // User doesn't exist in our database
-        return done(null, false, { 
+        return done(null, false, {
           errorType: 'NO_ACCOUNT',
-          message: 'No account found. Please sign up first.' 
+          message: 'No account found. Please sign up first.'
         });
       }
 
@@ -51,17 +51,16 @@ const initializePassport = (passport) => {
         firebaseUser = await admin.auth().getUserByEmail(email);
       } catch (error) {
         if (error.code === 'auth/user-not-found') {
-          // This shouldn't happen since we found the user in Firestore
-          return done(null, false, { 
+          // This shouldn't happen since we found the user in PostgreSQL
+          return done(null, false, {
             errorType: 'SYSTEM_ERROR',
-            message: 'User system synchronization error' 
+            message: 'User system synchronization error'
           });
         }
         throw error;
       }
 
-      const userDoc = userQuery.docs[0];
-      const userData = userDoc.data();
+      const userData = userRows[0];
 
       return done(null, {
         uid: firebaseUser.uid,

@@ -1,5 +1,5 @@
 const admin = require('firebase-admin');
-const { db } = require('../config/firebase');
+const { pool } = require('../config/database');
 
 /**
  * Authentication middleware for protecting routes
@@ -10,14 +10,14 @@ const auth = async (req, res, next) => {
     // Get token from Authorization header
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'No authentication token provided' 
+      return res.status(401).json({
+        success: false,
+        error: 'No authentication token provided'
       });
     }
 
     const token = authHeader.split('Bearer ')[1];
-    
+
     // Verify the token (handle both ID tokens and custom tokens)
     let decodedToken;
     try {
@@ -29,7 +29,7 @@ const auth = async (req, res, next) => {
         // For custom tokens from our secure token service, we trust them
         // Custom tokens are JWT tokens signed by our Firebase service account
         const jwt = require('jsonwebtoken');
-        
+
         // Decode the token without verification first to check the issuer
         const decoded = jwt.decode(token, { complete: true });
         if (decoded && decoded.payload.iss && decoded.payload.iss.includes('firebase-adminsdk')) {
@@ -41,18 +41,18 @@ const auth = async (req, res, next) => {
       } catch (customTokenError) {
         // If both fail, return authentication error
         console.error('Token verification failed:', customTokenError.message);
-        return res.status(401).json({ 
-          success: false, 
+        return res.status(401).json({
+          success: false,
           error: 'Authentication failed',
           details: 'Invalid token format'
         });
       }
     }
-    
+
     if (!decodedToken) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'Invalid authentication token' 
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid authentication token'
       });
     }
 
@@ -71,11 +71,13 @@ const auth = async (req, res, next) => {
       console.log('✅ Custom token admin user authenticated:', decodedToken.uid);
     } else {
       // Regular Firebase ID token - check database
-      const userDoc = await admin.firestore().collection('users').doc(decodedToken.uid).get();
-      
-      // If user exists in our database, add their role and additional data
-      if (userDoc.exists) {
-        const userData = userDoc.data();
+      const { rows } = await pool.query(
+        'SELECT role, username FROM users WHERE id = $1',
+        [decodedToken.uid]
+      );
+
+      if (rows.length > 0) {
+        const userData = rows[0];
         req.user.isAdmin = userData.role === 'admin';
         req.user.role = userData.role || 'user';
         req.user.username = userData.username;
@@ -89,18 +91,18 @@ const auth = async (req, res, next) => {
     next();
   } catch (error) {
     console.error('Authentication error:', error);
-    
+
     if (error.code === 'auth/id-token-expired') {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'Authentication token expired' 
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication token expired'
       });
     }
-    
-    return res.status(401).json({ 
-      success: false, 
-      error: 'Authentication failed', 
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined 
+
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication failed',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -116,7 +118,7 @@ const validateFirebaseToken = async (req, res, next) => {
       console.log('Request path:', req.path);
       console.log('Request method:', req.method);
     }
-    
+
     // Get token from Authorization header
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -125,7 +127,7 @@ const validateFirebaseToken = async (req, res, next) => {
     }
 
     const token = authHeader.split('Bearer ')[1];
-    
+
     // Verify the token
     const decodedToken = await admin.auth().verifyIdToken(token);
     if (!decodedToken) {
@@ -141,15 +143,19 @@ const validateFirebaseToken = async (req, res, next) => {
       });
     }
 
-    // Get user data from Firestore
-    const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-    if (!userDoc.exists) {
+    // Get user data from PostgreSQL
+    const { rows } = await pool.query(
+      'SELECT role, username FROM users WHERE id = $1',
+      [decodedToken.uid]
+    );
+
+    if (rows.length === 0) {
       console.log('User not found in database for uid:', decodedToken.uid);
       return res.status(404).json({ error: 'User not found in database' });
     }
 
-    const userData = userDoc.data();
-    
+    const userData = rows[0];
+
     // Attach user data to request
     req.user = {
       uid: decodedToken.uid,
@@ -161,23 +167,23 @@ const validateFirebaseToken = async (req, res, next) => {
     next();
   } catch (error) {
     console.error('Token verification failed:', error);
-    
+
     if (error.code === 'auth/id-token-expired') {
-      return res.status(401).json({ 
+      return res.status(401).json({
         error: 'Token expired',
         code: 'TOKEN_EXPIRED'
       });
     }
-    
+
     if (error.code === 'auth/argument-error') {
       // Check for network connectivity errors
       if (error.message && (
-          error.message.includes('ENOTFOUND') || 
+          error.message.includes('ENOTFOUND') ||
           error.message.includes('getaddrinfo') ||
           error.message.includes('connect ETIMEDOUT') ||
           error.message.includes('network error')
         )) {
-        return res.status(503).json({ 
+        return res.status(503).json({
           error: 'Firebase authentication service is currently unreachable',
           code: 'AUTH_SERVICE_UNREACHABLE',
           details: 'The application cannot connect to Google authentication servers. This may be due to network connectivity issues.',
@@ -185,19 +191,19 @@ const validateFirebaseToken = async (req, res, next) => {
           originalError: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
       }
-      
-      return res.status(401).json({ 
+
+      return res.status(401).json({
         error: 'Invalid token format',
         code: 'INVALID_TOKEN_FORMAT'
       });
     }
 
     // Generic network errors
-    if (error.code === 'ENOTFOUND' || 
-        error.code === 'ETIMEDOUT' || 
-        error.code === 'ENETUNREACH' || 
+    if (error.code === 'ENOTFOUND' ||
+        error.code === 'ETIMEDOUT' ||
+        error.code === 'ENETUNREACH' ||
         error.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
+      return res.status(503).json({
         error: 'Network connectivity issue',
         code: 'NETWORK_ERROR',
         details: 'Could not connect to authentication services. Please check your internet connection.',
@@ -206,7 +212,7 @@ const validateFirebaseToken = async (req, res, next) => {
       });
     }
 
-    return res.status(401).json({ 
+    return res.status(401).json({
       error: 'Authentication failed',
       code: error.code || 'UNKNOWN_ERROR',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -230,13 +236,16 @@ const isAdmin = async (req, res, next) => {
     }
 
     // Double-check from database directly
-    const userDoc = await db.collection('users').doc(req.user.uid).get();
-    if (!userDoc.exists) {
+    const { rows } = await pool.query(
+      'SELECT role FROM users WHERE id = $1',
+      [req.user.uid]
+    );
+
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const userData = userDoc.data();
-    if (userData.role === 'admin') {
+    if (rows[0].role === 'admin') {
       // Update user object with admin role
       req.user.role = 'admin';
       return next();
@@ -245,7 +254,7 @@ const isAdmin = async (req, res, next) => {
     return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
   } catch (error) {
     console.error('Admin verification error:', error);
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Server error during admin verification',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
@@ -256,4 +265,4 @@ module.exports = {
   auth,
   validateFirebaseToken,
   isAdmin
-}; 
+};

@@ -4,7 +4,7 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 
 const logger = require('../../utils/logger');
-const { db } = require('../../config/firebase');
+const { pool } = require('../../config/database');
 const orderController = require('../../controllers/payment/orderController');
 const invoiceService = require('../../services/invoice/invoiceService');
 const { validateFirebaseToken } = require('../../middleware/authenticationMiddleware');
@@ -241,17 +241,11 @@ router.post('/create-order', async (req, res) => {
     }
 
     // Store PayPal order in database
-    await db.collection('paypalOrders').doc(response.data.id).set({
-      paypalOrderId: response.data.id,
-      orderId,
-      amount: totalAmount,
-      currency: requestedCurrency,
-      items,
-      customerInfo,
-      metadata,
-      status: 'created',
-      createdAt: new Date().toISOString()
-    });
+    await pool.query(
+      `INSERT INTO paypal_orders (id, paypal_order_id, order_id, amount, currency, items, customer_info, metadata, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
+      [response.data.id, response.data.id, orderId, totalAmount, requestedCurrency, JSON.stringify(items), JSON.stringify(customerInfo), JSON.stringify(metadata), 'created']
+    );
 
     logger.info(`Created PayPal order: ${response.data.id}`, { orderId, amount: totalAmount });
 
@@ -325,8 +319,8 @@ router.post('/capture', async (req, res) => {
     });
 
     // Get our stored order data
-    const paypalOrderDoc = await db.collection('paypalOrders').doc(orderID).get();
-    const paypalOrderData = paypalOrderDoc.exists ? paypalOrderDoc.data() : null;
+    const { rows: paypalOrderRows } = await pool.query('SELECT * FROM paypal_orders WHERE id = $1', [orderID]);
+    const paypalOrderData = paypalOrderRows.length > 0 ? paypalOrderRows[0] : null;
 
     if (!paypalOrderData) {
       logger.error(`PayPal order data not found: ${orderID}`);
@@ -334,11 +328,10 @@ router.post('/capture', async (req, res) => {
     }
 
     // Update PayPal order status
-    await db.collection('paypalOrders').doc(orderID).update({
-      status: 'captured',
-      capturedAt: new Date().toISOString(),
-      paypalResponse: response.data
-    });
+    await pool.query(
+      'UPDATE paypal_orders SET status = $1, captured_at = NOW(), paypal_response = $2 WHERE id = $3',
+      ['captured', JSON.stringify(response.data), orderID]
+    );
 
     // Process the order (deliver templates + email)
     try {
@@ -368,10 +361,10 @@ router.post('/capture', async (req, res) => {
         ip: req.headers['x-forwarded-for'] || req.ip || null,
         userAgent: req.headers['user-agent'] || null
       };
-      await db.collection('paypalOrders').doc(orderID).update({
-        requestInfo,
-        deliveredAt: new Date().toISOString()
-      });
+      await pool.query(
+        'UPDATE paypal_orders SET request_info = $1, delivered_at = NOW() WHERE id = $2',
+        [JSON.stringify(requestInfo), orderID]
+      );
 
       // Create invoice
       const invoice = await invoiceService.createInvoice(
@@ -484,31 +477,29 @@ router.post('/subscriptions/confirm', validateFirebaseToken, async (req, res) =>
     const nextBillingTime = billingInfo.next_billing_time || null;
     const startTime = sub.start_time || new Date().toISOString();
 
-    // Persist subscription
-    await db.collection('subscriptions').doc(subscriptionID).set({
-      id: subscriptionID,
-      provider: 'paypal',
-      planId,
-      userId,
-      email,
-      status,
-      startTime,
-      nextBillingTime,
-      raw: sub,
-      updatedAt: new Date().toISOString()
-    }, { merge: true });
+    // Persist subscription (upsert)
+    await pool.query(
+      `INSERT INTO subscriptions (id, provider, plan_id, user_id, email, status, start_time, next_billing_time, raw, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         provider = EXCLUDED.provider, plan_id = EXCLUDED.plan_id, user_id = EXCLUDED.user_id,
+         email = EXCLUDED.email, status = EXCLUDED.status, start_time = EXCLUDED.start_time,
+         next_billing_time = EXCLUDED.next_billing_time, raw = EXCLUDED.raw, updated_at = NOW()`,
+      [subscriptionID, 'paypal', planId, userId, email, status, startTime, nextBillingTime, JSON.stringify(sub)]
+    );
 
     // Mirror summary on user
     if (userId) {
-      await db.collection('users').doc(userId).set({
-        subscription: {
+      await pool.query(
+        `UPDATE users SET subscription = $1, updated_at = NOW() WHERE id = $2`,
+        [JSON.stringify({
           provider: 'paypal',
           id: subscriptionID,
           planId,
           status,
           currentPeriodEnd: nextBillingTime || null
-        }
-      }, { merge: true });
+        }), userId]
+      );
     }
 
     // Invalidate entitlement cache
@@ -689,10 +680,10 @@ router.get('/subscriptions/:id', async (req, res) => {
     const id = req.params.id;
     if (!id) return res.status(400).json({ success: false, error: 'Subscription ID is required' });
 
-    const doc = await db.collection('subscriptions').doc(id).get();
-    if (!doc.exists) return res.status(404).json({ success: false, error: 'Subscription not found' });
+    const { rows } = await pool.query('SELECT * FROM subscriptions WHERE id = $1', [id]);
+    if (rows.length === 0) return res.status(404).json({ success: false, error: 'Subscription not found' });
 
-    return res.json({ success: true, subscription: doc.data() });
+    return res.json({ success: true, subscription: rows[0] });
   } catch (error) {
     logger.error('Error fetching subscription:', error.message);
     return res.status(500).json({ success: false, error: 'Failed to fetch subscription' });
@@ -775,15 +766,15 @@ router.post('/webhook', async (req, res) => {
 
         // Update subscription doc if present
         if (subscriptionId) {
-          await db.collection('subscriptions').doc(subscriptionId).set({
-            id: subscriptionId,
-            provider: 'paypal',
-            status,
-            nextBillingTime: nextBillingTime || null,
-            lastEvent: eventType,
-            rawLastEvent: body,
-            updatedAt: new Date().toISOString()
-          }, { merge: true });
+          await pool.query(
+            `INSERT INTO subscriptions (id, provider, status, next_billing_time, last_event, raw_last_event, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, NOW())
+             ON CONFLICT (id) DO UPDATE SET
+               provider = EXCLUDED.provider, status = EXCLUDED.status,
+               next_billing_time = EXCLUDED.next_billing_time, last_event = EXCLUDED.last_event,
+               raw_last_event = EXCLUDED.raw_last_event, updated_at = NOW()`,
+            [subscriptionId, 'paypal', status, nextBillingTime || null, eventType, JSON.stringify(body)]
+          );
         }
 
         // Try to mirror on user if we previously linked

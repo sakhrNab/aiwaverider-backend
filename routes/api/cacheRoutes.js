@@ -1,23 +1,41 @@
 const express = require('express');
 const router = express.Router();
-const admin = require('firebase-admin');
+const { pool } = require('../../config/database');
 const { auth } = require('../../middleware/authenticationMiddleware');
 const logger = require('../../utils/logger');
-const { 
+const {
   deleteCacheByPattern,
-  setCache 
+  setCache
 } = require('../../utils/cache');
 
-// Collection references
-const AI_TOOLS_COLLECTION = 'ai_tools';
-const PROMPTS_COLLECTION = 'prompts';
+/**
+ * Map a PostgreSQL row (snake_case) to a camelCase object
+ */
+function mapRowToItem(row) {
+  return {
+    title: row.title,
+    description: row.description,
+    link: row.link,
+    image: row.image,
+    keywords: row.keywords,
+    tags: row.tags,
+    category: row.category,
+    additionalHTML: row.additional_html,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    createdBy: row.created_by,
+    isFeatured: row.is_featured,
+    likeCount: row.like_count,
+    viewCount: row.view_count,
+  };
+}
 
 /**
  * @swagger
  * /api/cache/refresh:
  *   post:
  *     summary: Refresh all caches
- *     description: Refresh all caches from Firebase (Admin only)
+ *     description: Refresh all caches from PostgreSQL (Admin only)
  *     tags: [Cache Management]
  *     security:
  *       - FirebaseAuth: []
@@ -129,18 +147,14 @@ router.post('/refresh', auth, async (req, res) => {
     try {
       logger.info('🔄 Refreshing AI Tools cache...');
       
-      const aiToolsSnapshot = await admin.firestore()
-        .collection(AI_TOOLS_COLLECTION)
-        .orderBy('createdAt', 'desc')
-        .get();
+      const aiToolsResult = await pool.query(
+        "SELECT * FROM prompts WHERE type = 'tool' ORDER BY created_at DESC"
+      );
 
-      const aiTools = [];
-      aiToolsSnapshot.forEach(doc => {
-        aiTools.push({
-          id: doc.id,
-          ...doc.data()
-        });
-      });
+      const aiTools = aiToolsResult.rows.map(row => ({
+        id: row.id,
+        ...mapRowToItem(row)
+      }));
 
       // Cache the AI tools data
       await setCache('ai_tools:all', aiTools);
@@ -173,18 +187,14 @@ router.post('/refresh', auth, async (req, res) => {
     try {
       logger.info('🔄 Refreshing Prompts cache...');
       
-      const promptsSnapshot = await admin.firestore()
-        .collection(PROMPTS_COLLECTION)
-        .orderBy('createdAt', 'desc')
-        .get();
+      const promptsResult = await pool.query(
+        "SELECT * FROM prompts WHERE type = 'prompt' OR type IS NULL ORDER BY created_at DESC"
+      );
 
-      const prompts = [];
-      promptsSnapshot.forEach(doc => {
-        prompts.push({
-          id: doc.id,
-          ...doc.data()
-        });
-      });
+      const prompts = promptsResult.rows.map(row => ({
+        id: row.id,
+        ...mapRowToItem(row)
+      }));
 
       // Cache the prompts data
       await setCache('prompts:all', prompts);
@@ -257,7 +267,7 @@ router.post('/refresh', auth, async (req, res) => {
  * /api/cache/refresh/ai-tools:
  *   post:
  *     summary: Refresh AI Tools cache
- *     description: Refresh only AI Tools cache from Firebase
+ *     description: Refresh only AI Tools cache from PostgreSQL
  *     tags: [Cache Management]
  *     responses:
  *       200:
@@ -300,19 +310,15 @@ router.post('/refresh/ai-tools', async (req, res) => {
     // Clear AI tools caches
     await deleteCacheByPattern('ai_tools:*');
 
-    // Fetch from Firebase
-    const snapshot = await admin.firestore()
-      .collection(AI_TOOLS_COLLECTION)
-      .orderBy('createdAt', 'desc')
-      .get();
+    // Fetch from PostgreSQL
+    const { rows } = await pool.query(
+      "SELECT * FROM prompts WHERE type = 'tool' ORDER BY created_at DESC"
+    );
 
-    const aiTools = [];
-    snapshot.forEach(doc => {
-      aiTools.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
+    const aiTools = rows.map(row => ({
+      id: row.id,
+      ...mapRowToItem(row)
+    }));
 
     // Cache the data
     await setCache('ai_tools:all', aiTools);
@@ -344,7 +350,7 @@ router.post('/refresh/ai-tools', async (req, res) => {
  * /api/cache/refresh/prompts:
  *   post:
  *     summary: Refresh Prompts cache
- *     description: Refresh only Prompts cache from Firebase
+ *     description: Refresh only Prompts cache from PostgreSQL
  *     tags: [Cache Management]
  *     responses:
  *       200:
@@ -390,19 +396,15 @@ router.post('/refresh/prompts', async (req, res) => {
     // Clear prompts caches
     await deleteCacheByPattern('prompts:*');
 
-    // Fetch from Firebase
-    const snapshot = await admin.firestore()
-      .collection(PROMPTS_COLLECTION)
-      .orderBy('createdAt', 'desc')
-      .get();
+    // Fetch from PostgreSQL
+    const { rows } = await pool.query(
+      "SELECT * FROM prompts WHERE type = 'prompt' OR type IS NULL ORDER BY created_at DESC"
+    );
 
-    const prompts = [];
-    snapshot.forEach(doc => {
-      prompts.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
+    const prompts = rows.map(row => ({
+      id: row.id,
+      ...mapRowToItem(row)
+    }));
 
     // Cache the data
     await setCache('prompts:all', prompts);

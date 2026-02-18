@@ -1,13 +1,11 @@
 // backend/controllers/auth/authController.js
 
-const { admin, db } = require('../../config/firebase');
+const admin = require('firebase-admin');
+const { pool } = require('../../config/database');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const emailService = require('../../services/email/emailService');
 const logger = require('../../utils/logger');
-
-// Collection reference
-const usersCollection = db.collection('users');
 
 /**
  * Handle user sign up with Firebase
@@ -15,7 +13,7 @@ const usersCollection = db.collection('users');
 exports.signup = async (req, res) => {
   try {
     const { uid, email, username, firstName, lastName, phoneNumber, displayName, photoURL } = req.body;
-    
+
     console.log('Signup request received for user:', { uid, email, username });
 
     // Verify the user exists in Firebase
@@ -32,33 +30,50 @@ exports.signup = async (req, res) => {
       return res.status(404).json({ error: `Firebase user verification failed: ${authError.message}` });
     }
 
-    // Check if user already exists in Firestore
-    let userDoc;
+    // Check if user already exists in database
+    let existingUserResult;
     try {
-      userDoc = await usersCollection.doc(uid).get();
-      if (userDoc.exists) {
-        console.log('User already exists in Firestore:', uid);
-        const existingUser = userDoc.data();
+      existingUserResult = await pool.query('SELECT * FROM users WHERE id = $1', [uid]);
+      if (existingUserResult.rows.length > 0) {
+        console.log('User already exists in database:', uid);
+        const existingUser = existingUserResult.rows[0];
+        const existingUserData = {
+          username: existingUser.username,
+          firstName: existingUser.first_name,
+          lastName: existingUser.last_name,
+          email: existingUser.email,
+          phoneNumber: existingUser.phone_number,
+          role: existingUser.role,
+          displayName: existingUser.display_name,
+          photoURL: existingUser.photo_url,
+          searchField: existingUser.search_field,
+          status: existingUser.status,
+          emailPreferences: existingUser.email_preferences,
+          onboarding: existingUser.onboarding,
+          signupMethod: existingUser.signup_method,
+          createdAt: existingUser.created_at,
+          updatedAt: existingUser.updated_at
+        };
         return res.json({
           message: 'Welcome back! Your account already exists.',
           user: {
             uid,
-            ...existingUser
+            ...existingUserData
           },
-          profile: existingUser // Include profile data in response
+          profile: existingUserData // Include profile data in response
         });
       }
-      console.log('User does not exist in Firestore, creating new document');
-    } catch (firestoreError) {
-      console.error('Error checking user in Firestore:', firestoreError);
-      return res.status(500).json({ error: `Firestore error: ${firestoreError.message}` });
+      console.log('User does not exist in database, creating new record');
+    } catch (dbError) {
+      console.error('Error checking user in database:', dbError);
+      return res.status(500).json({ error: `Database error: ${dbError.message}` });
     }
 
     // Check if username already exists (only if username provided)
     if (username) {
       try {
-        const usernameQuery = await usersCollection.where('username', '==', username).get();
-        if (!usernameQuery.empty) {
+        const usernameResult = await pool.query('SELECT id FROM users WHERE username = $1', [username]);
+        if (usernameResult.rows.length > 0) {
           console.log('Username already taken:', username);
           return res.status(400).json({ error: 'Username is already taken.' });
         }
@@ -69,10 +84,10 @@ exports.signup = async (req, res) => {
       }
     }
 
-    // Check if email already exists in Firestore (separate from Firebase Auth)
+    // Check if email already exists in database (separate from Firebase Auth)
     try {
-      const emailQuery = await usersCollection.where('email', '==', email.toLowerCase()).get();
-      if (!emailQuery.empty) {
+      const emailResult = await pool.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
+      if (emailResult.rows.length > 0) {
         console.log('Email already exists in database:', email);
         return res.status(400).json({ error: 'An account with this email already exists in our database.' });
       }
@@ -100,54 +115,67 @@ exports.signup = async (req, res) => {
       marketingEmails: false // Default to false for better user experience
     };
 
-    // Create user document in Firestore
-    const userData = {
-      username: finalUsername,
-      firstName: finalFirstName,
-      lastName: finalLastName,
-      email: email.toLowerCase(),
-      phoneNumber: phoneNumber || '',
-      role: 'authenticated',
-      displayName: finalDisplayName,
-      photoURL: photoURL || firebaseUser.photoURL || '',
-      searchField,
-      status: 'active',
-      emailPreferences,
-      // Add onboarding status for progressive data collection
-      onboarding: {
-        completed: false,
-        currentStep: 'welcome',
-        profileComplete: false,
-        phoneNumberAdded: false,
-        profileImageAdded: !!photoURL
-      },
-      // Add signup method tracking for analytics
-      signupMethod: photoURL ? 'social' : 'email',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    // Onboarding status for progressive data collection
+    const onboarding = {
+      completed: false,
+      currentStep: 'welcome',
+      profileComplete: false,
+      phoneNumberAdded: false,
+      profileImageAdded: !!photoURL
     };
-    
-    console.log('Creating user document in Firestore:', uid);
-    
+
+    // Signup method tracking for analytics
+    const signupMethod = photoURL ? 'social' : 'email';
+
+    console.log('Creating user record in database:', uid);
+
     try {
       // Use a transaction to ensure data consistency
-      await db.runTransaction(async (transaction) => {
-        const userRef = usersCollection.doc(uid);
-        
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
         // Double-check user doesn't exist within transaction
-        const existingUser = await transaction.get(userRef);
-        if (existingUser.exists) {
+        const existingCheck = await client.query('SELECT id FROM users WHERE id = $1', [uid]);
+        if (existingCheck.rows.length > 0) {
+          await client.query('ROLLBACK');
           throw new Error('User already exists');
         }
-        
-        // Create the user document
-        transaction.set(userRef, userData);
-      });
-      
-      console.log('User document created successfully in Firestore:', uid);
+
+        // Create the user record
+        await client.query(
+          `INSERT INTO users (id, username, first_name, last_name, email, phone_number, role, display_name, photo_url, search_field, status, email_preferences, onboarding, signup_method, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())`,
+          [
+            uid,
+            finalUsername,
+            finalFirstName,
+            finalLastName,
+            email.toLowerCase(),
+            phoneNumber || '',
+            'authenticated',
+            finalDisplayName,
+            photoURL || firebaseUser.photoURL || '',
+            searchField,
+            'active',
+            JSON.stringify(emailPreferences),
+            JSON.stringify(onboarding),
+            signupMethod
+          ]
+        );
+
+        await client.query('COMMIT');
+      } catch (txError) {
+        await client.query('ROLLBACK');
+        throw txError;
+      } finally {
+        client.release();
+      }
+
+      console.log('User record created successfully in database:', uid);
     } catch (createError) {
-      console.error('Error creating user document in Firestore:', createError);
-      return res.status(500).json({ error: `Failed to create user document: ${createError.message}` });
+      console.error('Error creating user record in database:', createError);
+      return res.status(500).json({ error: `Failed to create user record: ${createError.message}` });
     }
 
     // Send welcome email (optimized for conversion)
@@ -158,12 +186,12 @@ exports.signup = async (req, res) => {
         firstName: finalFirstName,
         lastName: finalLastName,
         displayName: finalDisplayName,
-        signupMethod: userData.signupMethod
+        signupMethod
       };
-      
+
       // Use await to properly handle the promise
       const emailResult = await emailService.sendWelcomeEmail(emailData);
-      
+
       if (emailResult.success) {
         logger.info(`Welcome email sent to new user: ${email} (${emailResult.messageId})`);
       } else {
@@ -190,12 +218,12 @@ exports.signup = async (req, res) => {
     }
 
     console.log('Signup process completed successfully for:', uid);
-    
+
     // Return success message optimized for user experience
-    const successMessage = userData.signupMethod === 'social' 
+    const successMessage = signupMethod === 'social'
       ? 'Account created successfully with social login!'
       : 'Account created successfully! Welcome to our platform!';
-    
+
     // IMPORTANT: Include both user and profile data in response
     const responseData = {
       uid,
@@ -206,13 +234,13 @@ exports.signup = async (req, res) => {
       displayName: finalDisplayName,
       role: 'authenticated',
       photoURL: photoURL || firebaseUser.photoURL || '',
-      onboarding: userData.onboarding,
+      onboarding,
       phoneNumber: phoneNumber || '',
-      emailPreferences: userData.emailPreferences,
-      status: userData.status,
+      emailPreferences,
+      status: 'active',
       createdAt: new Date().toISOString() // Convert timestamp for JSON response
     };
-    
+
     return res.json({
       message: successMessage,
       user: responseData,
@@ -220,7 +248,7 @@ exports.signup = async (req, res) => {
     });
   } catch (err) {
     console.error('Error in /api/auth/signup:', err);
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Internal server error',
       details: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
@@ -246,17 +274,17 @@ exports.createSession = async (req, res) => {
     const decodedToken = await admin.auth().verifyIdToken(idToken);
     const uid = decodedToken.uid;
 
-    // Get user data from Firestore
-    const userDoc = await usersCollection.doc(uid).get();
-    if (!userDoc.exists) {
+    // Get user data from database
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [uid]);
+    if (userResult.rows.length === 0) {
       return res.status(404).json({ error: 'User not found in database' });
     }
 
-    const userData = userDoc.data();
+    const userData = userResult.rows[0];
 
     // Create a session token
     const sessionToken = jwt.sign(
-      { 
+      {
         uid,
         role: userData.role || 'authenticated',
         email: userData.email
@@ -281,17 +309,17 @@ exports.createSession = async (req, res) => {
         username: userData.username,
         email: userData.email,
         role: userData.role || 'authenticated',
-        photoURL: userData.photoURL || null,
-        displayName: userData.displayName || null,
-        firstName: userData.firstName || '',
-        lastName: userData.lastName || '',
-        phoneNumber: userData.phoneNumber || '',
+        photoURL: userData.photo_url || null,
+        displayName: userData.display_name || null,
+        firstName: userData.first_name || '',
+        lastName: userData.last_name || '',
+        phoneNumber: userData.phone_number || '',
         onboarding: userData.onboarding || { completed: false }
       }
     });
   } catch (err) {
     console.error('Error creating session:', err);
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Failed to create session',
       details: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
@@ -307,14 +335,14 @@ exports.signout = (req, res) => {
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict'
   });
-  
+
   res.clearCookie('session', {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict',
     path: '/'
   });
-  
+
   return res.json({ message: 'Signed out successfully' });
 };
 
@@ -323,40 +351,56 @@ exports.signout = (req, res) => {
  */
 exports.verifyUser = async (req, res) => {
   const authHeader = req.headers.authorization;
-  
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ 
+    return res.status(401).json({
       errorType: 'UNAUTHORIZED',
-      error: 'No token provided' 
+      error: 'No token provided'
     });
   }
 
   try {
     const token = authHeader.split(' ')[1];
     const decodedToken = await admin.auth().verifyIdToken(token);
-    
-    // Check if user exists in Firestore
-    const userDoc = await usersCollection.doc(decodedToken.uid).get();
-    
-    if (!userDoc.exists) {
-      return res.status(404).json({ 
+
+    // Check if user exists in database
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [decodedToken.uid]);
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
         errorType: 'NO_ACCOUNT',
-        error: 'No account found. Please sign up first.' 
+        error: 'No account found. Please sign up first.'
       });
     }
 
-    return res.json({ 
-      success: true, 
+    const row = userResult.rows[0];
+
+    return res.json({
+      success: true,
       user: {
-        uid: userDoc.id,
-        ...userDoc.data()
+        uid: row.id,
+        username: row.username,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        email: row.email,
+        phoneNumber: row.phone_number,
+        role: row.role,
+        displayName: row.display_name,
+        photoURL: row.photo_url,
+        searchField: row.search_field,
+        status: row.status,
+        emailPreferences: row.email_preferences,
+        onboarding: row.onboarding,
+        signupMethod: row.signup_method,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
       }
     });
   } catch (error) {
     console.error('Error verifying user:', error);
-    return res.status(500).json({ 
+    return res.status(500).json({
       errorType: 'SYSTEM_ERROR',
-      error: 'Failed to verify user' 
+      error: 'Failed to verify user'
     });
   }
 };
@@ -368,12 +412,12 @@ exports.refreshToken = async (req, res) => {
   try {
     // Get refresh token from cookies, headers, or request body
     let refreshToken = null;
-    
+
     // Try to get from cookies
     if (req.cookies && req.cookies.refreshToken) {
       refreshToken = req.cookies.refreshToken;
     }
-    
+
     // If not in cookies, try Authorization header
     if (!refreshToken && req.headers.authorization) {
       const authHeader = req.headers.authorization;
@@ -381,34 +425,34 @@ exports.refreshToken = async (req, res) => {
         refreshToken = authHeader.substring(7);
       }
     }
-    
+
     // If still not found, try request body
     if (!refreshToken && req.body && req.body.refreshToken) {
       refreshToken = req.body.refreshToken;
     }
-    
+
     if (!refreshToken) {
-      return res.status(401).json({ 
+      return res.status(401).json({
         error: 'No refresh token found',
-        user: null 
+        user: null
       });
     }
 
     try {
       const payload = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
-      const userDoc = await usersCollection.doc(payload.id).get();
-      
-      if (!userDoc.exists) {
-        return res.status(401).json({ 
+      const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [payload.id]);
+
+      if (userResult.rows.length === 0) {
+        return res.status(401).json({
           error: 'User not found',
-          user: null 
+          user: null
         });
       }
 
-      const userData = userDoc.data();
+      const userData = userResult.rows[0];
       const token = jwt.sign(
         {
-          id: userDoc.id,
+          id: userData.id,
           username: userData.username,
           email: userData.email,
           role: userData.role,
@@ -429,7 +473,7 @@ exports.refreshToken = async (req, res) => {
       return res.json({
         message: 'Token refreshed successfully',
         user: {
-          id: userDoc.id,
+          id: userData.id,
           username: userData.username,
           email: userData.email,
           role: userData.role,

@@ -99,24 +99,8 @@ const initializeFirebase = () => {
 console.log('Starting Firebase initialization process...');
 const firebaseAdmin = initializeFirebase();
 
-// Initialize Firestore with error handling
-let db = null;
-if (firebaseAdmin) {
-  try {
-    console.log('Initializing Firestore...');
-    db = firebaseAdmin.firestore();
-    db.settings({ 
-      ignoreUndefinedProperties: true,
-      // Force IPv4 connections to avoid IPv6 timeout issues
-      preferRest: true
-    });
-    console.log('Firestore initialized successfully');
-  } catch (error) {
-    console.error('Failed to initialize Firestore:', error);
-  }
-} else {
-  console.warn('Skipping Firestore initialization as Firebase Admin is not available');
-}
+// NOTE: Firestore has been replaced by PostgreSQL (see config/database.js)
+// Firebase Admin is kept for Auth and Storage only
 
 // Initialize Storage with error handling
 let storage = null;
@@ -135,6 +119,5 @@ if (firebaseAdmin) {
 module.exports = {
   admin: firebaseAdmin,
   initializeFirebase,
-  db,
   storage
 };

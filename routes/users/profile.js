@@ -1,48 +1,61 @@
 const express = require('express');
 const router = express.Router();
-const admin = require('firebase-admin');
+const admin = require('firebase-admin'); // KEPT for admin.auth() and admin.storage()
 const validateFirebaseToken = require('../../middleware/authenticationMiddleware').validateFirebaseToken;
-const crypto = require('crypto'); // NEW: require crypto
+const crypto = require('crypto');
 const upload = require('../../middleware/upload');
+const { pool } = require('../../config/database');
 
-// Initialize Firestore
-const db = admin.firestore();
+// TODO: Ensure these JSONB columns exist in the users table (run migration):
+//   ALTER TABLE users ADD COLUMN IF NOT EXISTS interests JSONB DEFAULT '[]'::jsonb;
+//   ALTER TABLE users ADD COLUMN IF NOT EXISTS favorites JSONB DEFAULT '[]'::jsonb;
+//   ALTER TABLE users ADD COLUMN IF NOT EXISTS notifications JSONB DEFAULT '{}'::jsonb;
+//   ALTER TABLE users ADD COLUMN IF NOT EXISTS settings JSONB DEFAULT '{"language":"en","theme":"light"}'::jsonb;
+//   ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT DEFAULT '';
 
 /**
-
- * Helper function to safely convert Firestore Timestamp to ISO string
- * Handles Timestamp objects, strings, numbers, and Date objects
+ * Helper function to safely convert a value to ISO string.
+ * PostgreSQL returns proper Date objects, so this is simplified from the Firestore version.
  */
-const toISOString = (timestamp) => {
-  if (!timestamp) return null;
-  
-  // If it's a Firestore Timestamp object, use toDate()
-  if (timestamp.toDate && typeof timestamp.toDate === 'function') {
-    return timestamp.toDate().toISOString();
-  }
-  
-  // If it's already a string (ISO format), return as-is
-  if (typeof timestamp === 'string') {
-    return timestamp;
-  }
-  
-  // If it's a number (milliseconds), convert to Date
-  if (typeof timestamp === 'number') {
-    return new Date(timestamp).toISOString();
-  }
-  
-  // If it's a Date object, convert to ISO string
-  if (timestamp instanceof Date) {
-    return timestamp.toISOString();
-  }
-  
-  // Fallback: try to create a Date from the value
+const toISOString = (value) => {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'number') return new Date(value).toISOString();
   try {
-    return new Date(timestamp).toISOString();
+    return new Date(value).toISOString();
   } catch (e) {
-    console.warn('[Profile API] Failed to convert timestamp to ISO string:', timestamp);
+    console.warn('[Profile API] Failed to convert value to ISO string:', value);
     return null;
   }
+};
+
+/**
+ * Helper: convert a PostgreSQL users row (snake_case) to camelCase API response.
+ */
+const formatUserRow = (row) => {
+  return {
+    uid: row.id,
+    email: row.email || '',
+    username: row.username || '',
+    displayName: row.display_name || '',
+    photoURL: row.photo_url || '',
+    firstName: row.first_name || '',
+    lastName: row.last_name || '',
+    role: row.role || 'authenticated',
+    phoneNumber: row.phone_number || '',
+    interests: row.interests || [],
+    notifications: row.notifications || {},
+    emailPreferences: row.email_preferences || {},
+    onboarding: row.onboarding || { completed: false },
+    status: row.status || 'active',
+    bio: row.bio || '',
+    language: (row.settings && row.settings.language) || 'en',
+    theme: (row.settings && row.settings.theme) || 'light',
+    subscription: row.subscription || {},
+    createdAt: toISOString(row.created_at),
+    updatedAt: toISOString(row.updated_at)
+  };
 };
 
 // GET /api/profile - Get user profile with improved error handling
@@ -149,121 +162,121 @@ const toISOString = (timestamp) => {
 router.get('/', validateFirebaseToken, async (req, res) => {
   try {
     console.log('[Profile API] Fetching profile for user:', req.user.uid);
-    
-    const userDoc = await db.collection('users').doc(req.user.uid).get();
-    
-    if (!userDoc.exists) {
+
+    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.uid]);
+
+    if (rows.length === 0) {
       console.warn('[Profile API] User profile not found in database:', req.user.uid);
-      
+
       // Try to get Firebase user info as fallback
       try {
         const firebaseUser = await admin.auth().getUser(req.user.uid);
         console.log('[Profile API] Found Firebase user, creating minimal profile response');
-        
-        // Return a minimal profile based on Firebase user data
-        const minimalProfile = {
-          uid: req.user.uid,
-          email: firebaseUser.email || req.user.email,
-          displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-          photoURL: firebaseUser.photoURL || '',
-          firstName: firebaseUser.displayName?.split(' ')[0] || firebaseUser.email?.split('@')[0] || '',
-          lastName: firebaseUser.displayName?.split(' ').slice(1).join(' ') || '',
-          role: 'authenticated',
-          phoneNumber: firebaseUser.phoneNumber || '',
-          username: `user_${firebaseUser.email?.split('@')[0]}_${Date.now().toString().slice(-4)}`,
-          status: 'active',
-          createdAt: firebaseUser.metadata.creationTime || null,
-          isMinimalProfile: true // Flag to indicate this is a fallback profile
+
+        const firstName = firebaseUser.displayName?.split(' ')[0] || firebaseUser.email?.split('@')[0] || '';
+        const lastName = firebaseUser.displayName?.split(' ').slice(1).join(' ') || '';
+        const username = `user_${firebaseUser.email?.split('@')[0]}_${Date.now().toString().slice(-4)}`;
+        const email = firebaseUser.email || req.user.email;
+        const photoURL = firebaseUser.photoURL || '';
+        const searchField = `${username.toLowerCase()} ${email.toLowerCase()} ${firstName.toLowerCase()} ${lastName.toLowerCase()}`.trim();
+        const displayName = firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User';
+
+        const emailPreferences = {
+          weeklyUpdates: false,
+          announcements: true,
+          newAgents: false,
+          newTools: false,
+          marketingEmails: false
         };
-        
-        // Optionally create the user document in Firestore for future requests
+        const onboarding = {
+          completed: false,
+          currentStep: 'welcome',
+          profileComplete: false,
+          phoneNumberAdded: false,
+          profileImageAdded: !!photoURL
+        };
+        const signupMethod = photoURL ? 'social' : 'email';
+
+        // Create the user row in PostgreSQL
         try {
-          const userData = {
-            ...minimalProfile,
-            searchField: `${minimalProfile.username.toLowerCase()} ${minimalProfile.email.toLowerCase()} ${minimalProfile.firstName.toLowerCase()} ${minimalProfile.lastName.toLowerCase()}`.trim(),
-            emailPreferences: {
-              weeklyUpdates: false,
-              announcements: true,
-              newAgents: false,
-              newTools: false,
-              marketingEmails: false
-            },
-            onboarding: {
-              completed: false,
-              currentStep: 'welcome',
-              profileComplete: false,
-              phoneNumberAdded: false,
-              profileImageAdded: !!minimalProfile.photoURL
-            },
-            signupMethod: minimalProfile.photoURL ? 'social' : 'email',
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp()
-          };
-          
-          await db.collection('users').doc(req.user.uid).set(userData);
-          console.log('[Profile API] Created missing user document in Firestore');
-          
-          // Retrieve the created document to get proper Timestamp objects
-          const createdDoc = await db.collection('users').doc(req.user.uid).get();
-          const createdData = createdDoc.data();
-          
-          // Return the created profile data with converted timestamps
+          const insertResult = await pool.query(
+            `INSERT INTO users (
+              id, email, username, first_name, last_name, display_name,
+              phone_number, photo_url, role, status, search_field,
+              email_preferences, onboarding, signup_method, created_at, updated_at
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6,
+              $7, $8, $9, $10, $11,
+              $12, $13, $14, NOW(), NOW()
+            )
+            ON CONFLICT (id) DO NOTHING
+            RETURNING *`,
+            [
+              req.user.uid, email, username, firstName, lastName, displayName,
+              firebaseUser.phoneNumber || '', photoURL, 'authenticated', 'active', searchField,
+              JSON.stringify(emailPreferences), JSON.stringify(onboarding), signupMethod
+            ]
+          );
+
+          console.log('[Profile API] Created missing user row in PostgreSQL');
+
+          if (insertResult.rows.length > 0) {
+            return res.json(formatUserRow(insertResult.rows[0]));
+          }
+
+          // If ON CONFLICT fired (row existed after all), fetch it
+          const { rows: refetchRows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.uid]);
+          if (refetchRows.length > 0) {
+            return res.json(formatUserRow(refetchRows[0]));
+          }
+
+          // Fallback minimal profile
           return res.json({
             uid: req.user.uid,
-            email: createdData.email || userData.email,
-            username: createdData.username || userData.username,
-            displayName: createdData.displayName || userData.displayName || '',
-            photoURL: createdData.photoURL || userData.photoURL || '',
-            firstName: createdData.firstName || userData.firstName || '',
-            lastName: createdData.lastName || userData.lastName || '',
-            role: createdData.role || userData.role || 'authenticated',
-            phoneNumber: createdData.phoneNumber || userData.phoneNumber || '',
-            interests: createdData.interests || userData.interests || [],
-            notifications: createdData.notifications || userData.notifications || {},
-            emailPreferences: createdData.emailPreferences || userData.emailPreferences || {},
-            onboarding: createdData.onboarding || userData.onboarding || { completed: false },
-            status: createdData.status || userData.status || 'active',
-            createdAt: toISOString(createdData.createdAt) || new Date().toISOString(),
-            updatedAt: toISOString(createdData.updatedAt) || new Date().toISOString()
+            email,
+            displayName,
+            photoURL,
+            firstName,
+            lastName,
+            role: 'authenticated',
+            phoneNumber: firebaseUser.phoneNumber || '',
+            username,
+            status: 'active',
+            createdAt: firebaseUser.metadata.creationTime || null,
+            isMinimalProfile: true
           });
         } catch (createError) {
-          console.error('[Profile API] Error creating user document:', createError);
-          // Still return the minimal profile even if creation fails
-          return res.json(minimalProfile);
+          console.error('[Profile API] Error creating user row:', createError);
+          // Still return a minimal profile even if creation fails
+          return res.json({
+            uid: req.user.uid,
+            email,
+            displayName,
+            photoURL,
+            firstName,
+            lastName,
+            role: 'authenticated',
+            phoneNumber: firebaseUser.phoneNumber || '',
+            username,
+            status: 'active',
+            createdAt: firebaseUser.metadata.creationTime || null,
+            isMinimalProfile: true
+          });
         }
       } catch (firebaseError) {
         console.error('[Profile API] Error fetching Firebase user:', firebaseError);
-        return res.status(404).json({ 
+        return res.status(404).json({
           error: 'User profile not found and could not retrieve Firebase user data',
           uid: req.user.uid
         });
       }
     }
 
-    const userData = userDoc.data();
     console.log('[Profile API] Successfully retrieved user profile');
-    
-    return res.json({
-      uid: req.user.uid,
-      email: userData.email,
-      username: userData.username,
-      displayName: userData.displayName || '',
-      photoURL: userData.photoURL || '',
-      firstName: userData.firstName || '',
-      lastName: userData.lastName || '',
-      role: userData.role || 'authenticated',
-      phoneNumber: userData.phoneNumber || '',
-      interests: userData.interests || [],
-      notifications: userData.notifications || {},
-      emailPreferences: userData.emailPreferences || {},
-      onboarding: userData.onboarding || { completed: false },
-      status: userData.status || 'active',
-      createdAt: toISOString(userData.createdAt),
-      updatedAt: toISOString(userData.updatedAt)
-    });
+    return res.json(formatUserRow(rows[0]));
   } catch (err) {
     console.error('[Profile API] Error fetching profile:', err);
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Failed to fetch profile',
       details: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
@@ -395,101 +408,141 @@ router.get('/', validateFirebaseToken, async (req, res) => {
  */
 router.put('/', validateFirebaseToken, async (req, res) => {
   try {
-    const userRef = db.collection('users').doc(req.user.uid);
-    const userDoc = await userRef.get();
+    const uid = req.user.uid;
 
-    if (!userDoc.exists) {
+    // Check if user exists
+    const { rows: existingRows } = await pool.query('SELECT * FROM users WHERE id = $1', [uid]);
+
+    if (existingRows.length === 0) {
       console.warn('[Profile API] User profile not found for update, creating new one');
-      
-      // Create a new user document with the provided data
+
+      // Create a new user row with provided data
       try {
-        const firebaseUser = await admin.auth().getUser(req.user.uid);
-        const newUserData = {
-          uid: req.user.uid,
-          email: firebaseUser.email || req.user.email,
-          username: req.body.username || `user_${firebaseUser.email?.split('@')[0]}_${Date.now().toString().slice(-4)}`,
-          firstName: req.body.firstName || firebaseUser.displayName?.split(' ')[0] || '',
-          lastName: req.body.lastName || firebaseUser.displayName?.split(' ').slice(1).join(' ') || '',
-          displayName: req.body.displayName || firebaseUser.displayName || `${req.body.firstName || ''} ${req.body.lastName || ''}`.trim(),
-          photoURL: req.body.photoURL || firebaseUser.photoURL || '',
-          phoneNumber: req.body.phoneNumber || firebaseUser.phoneNumber || '',
-          role: 'authenticated',
-          status: 'active',
-          searchField: `${(req.body.username || firebaseUser.email?.split('@')[0] || '').toLowerCase()} ${firebaseUser.email?.toLowerCase() || ''} ${(req.body.firstName || '').toLowerCase()} ${(req.body.lastName || '').toLowerCase()}`.trim(),
-          emailPreferences: req.body.emailPreferences || {
-            weeklyUpdates: false,
-            announcements: true,
-            newAgents: false,
-            newTools: false,
-            marketingEmails: false
-          },
-          onboarding: req.body.onboarding || {
-            completed: false,
-            currentStep: 'welcome',
-            profileComplete: false,
-            phoneNumberAdded: false,
-            profileImageAdded: !!(req.body.photoURL || firebaseUser.photoURL)
-          },
-          signupMethod: (req.body.photoURL || firebaseUser.photoURL) ? 'social' : 'email',
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          ...req.body // Include any additional fields from the request
+        const firebaseUser = await admin.auth().getUser(uid);
+
+        const username = req.body.username || `user_${firebaseUser.email?.split('@')[0]}_${Date.now().toString().slice(-4)}`;
+        const firstName = req.body.firstName || firebaseUser.displayName?.split(' ')[0] || '';
+        const lastName = req.body.lastName || firebaseUser.displayName?.split(' ').slice(1).join(' ') || '';
+        const displayName = req.body.displayName || firebaseUser.displayName || `${firstName} ${lastName}`.trim();
+        const email = firebaseUser.email || req.user.email;
+        const photoURL = req.body.photoURL || firebaseUser.photoURL || '';
+        const phoneNumber = req.body.phoneNumber || firebaseUser.phoneNumber || '';
+        const searchField = `${username.toLowerCase()} ${email.toLowerCase()} ${firstName.toLowerCase()} ${lastName.toLowerCase()}`.trim();
+        const emailPreferences = req.body.emailPreferences || {
+          weeklyUpdates: false,
+          announcements: true,
+          newAgents: false,
+          newTools: false,
+          marketingEmails: false
         };
-        
-        await userRef.set(newUserData);
-        const createdDoc = await userRef.get();
-        const createdData = createdDoc.data();
-        
-        return res.json({
-          uid: req.user.uid,
-          ...createdData,
-          createdAt: toISOString(createdData.createdAt) || new Date().toISOString(),
-          updatedAt: toISOString(createdData.updatedAt) || new Date().toISOString()
-        });
+        const onboarding = req.body.onboarding || {
+          completed: false,
+          currentStep: 'welcome',
+          profileComplete: false,
+          phoneNumberAdded: false,
+          profileImageAdded: !!photoURL
+        };
+        const signupMethod = photoURL ? 'social' : 'email';
+
+        const insertResult = await pool.query(
+          `INSERT INTO users (
+            id, email, username, first_name, last_name, display_name,
+            phone_number, photo_url, role, status, search_field,
+            email_preferences, onboarding, signup_method, created_at, updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6,
+            $7, $8, $9, $10, $11,
+            $12, $13, $14, NOW(), NOW()
+          )
+          ON CONFLICT (id) DO UPDATE SET
+            username = EXCLUDED.username,
+            first_name = EXCLUDED.first_name,
+            last_name = EXCLUDED.last_name,
+            display_name = EXCLUDED.display_name,
+            phone_number = EXCLUDED.phone_number,
+            photo_url = EXCLUDED.photo_url,
+            search_field = EXCLUDED.search_field,
+            email_preferences = EXCLUDED.email_preferences,
+            onboarding = EXCLUDED.onboarding,
+            signup_method = EXCLUDED.signup_method,
+            updated_at = NOW()
+          RETURNING *`,
+          [
+            uid, email, username, firstName, lastName, displayName,
+            phoneNumber, photoURL, 'authenticated', 'active', searchField,
+            JSON.stringify(emailPreferences), JSON.stringify(onboarding), signupMethod
+          ]
+        );
+
+        return res.json(formatUserRow(insertResult.rows[0]));
       } catch (createError) {
         console.error('[Profile API] Error creating user profile:', createError);
-        return res.status(500).json({ 
+        return res.status(500).json({
           error: 'Failed to create user profile',
           details: process.env.NODE_ENV === 'development' ? createError.message : undefined
         });
       }
     }
 
-    const updateData = {
-      ...req.body,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    // Build dynamic UPDATE for existing user - only update columns that map to known schema columns
+    const fieldMap = {
+      username: 'username',
+      firstName: 'first_name',
+      lastName: 'last_name',
+      displayName: 'display_name',
+      photoURL: 'photo_url',
+      phoneNumber: 'phone_number',
+      email: 'email',
+      role: 'role',
+      status: 'status',
+      emailPreferences: 'email_preferences',
+      onboarding: 'onboarding',
+      searchField: 'search_field',
+      signupMethod: 'signup_method',
+      subscription: 'subscription'
     };
 
-    await userRef.update(updateData);
-    
-    const updatedDoc = await userRef.get();
-    const userData = updatedDoc.data();
+    const setClauses = [];
+    const values = [];
+    let paramIndex = 1;
 
-    // Safely convert and return profile data
-    return res.json({
-      uid: req.user.uid,
-      email: userData.email || '',
-      username: userData.username || '',
-      displayName: userData.displayName || '',
-      photoURL: userData.photoURL || '',
-      firstName: userData.firstName || '',
-      lastName: userData.lastName || '',
-      role: userData.role || 'authenticated',
-      phoneNumber: userData.phoneNumber || '',
-      interests: userData.interests || [],
-      notifications: userData.notifications || {},
-      emailPreferences: userData.emailPreferences || {},
-      onboarding: userData.onboarding || { completed: false },
-      status: userData.status || 'active',
-      bio: userData.bio || '',
-      language: userData.language || 'en',
-      theme: userData.theme || 'light',
-      createdAt: toISOString(userData.createdAt) || new Date().toISOString(),
-      updatedAt: toISOString(userData.updatedAt) || new Date().toISOString()
-    });
+    for (const [apiField, dbColumn] of Object.entries(fieldMap)) {
+      if (req.body[apiField] !== undefined) {
+        const value = (typeof req.body[apiField] === 'object' && req.body[apiField] !== null)
+          ? JSON.stringify(req.body[apiField])
+          : req.body[apiField];
+        setClauses.push(`${dbColumn} = $${paramIndex}`);
+        values.push(value);
+        paramIndex++;
+      }
+    }
+
+    // Always set updated_at
+    setClauses.push(`updated_at = NOW()`);
+
+    // Regenerate search_field if name/username/email changed
+    if (req.body.username || req.body.firstName || req.body.lastName || req.body.email) {
+      const current = existingRows[0];
+      const username = req.body.username || current.username || '';
+      const email = req.body.email || current.email || '';
+      const firstName = req.body.firstName || current.first_name || '';
+      const lastName = req.body.lastName || current.last_name || '';
+      const searchField = `${username.toLowerCase()} ${email.toLowerCase()} ${firstName.toLowerCase()} ${lastName.toLowerCase()}`.trim();
+      setClauses.push(`search_field = $${paramIndex}`);
+      values.push(searchField);
+      paramIndex++;
+    }
+
+    // Add uid as the final parameter for the WHERE clause
+    values.push(uid);
+
+    const updateQuery = `UPDATE users SET ${setClauses.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    const { rows: updatedRows } = await pool.query(updateQuery, values);
+
+    return res.json(formatUserRow(updatedRows[0]));
   } catch (err) {
     console.error('[Profile API] Error updating profile:', err);
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Failed to update profile',
       details: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
@@ -560,36 +613,36 @@ router.put('/', validateFirebaseToken, async (req, res) => {
 router.put('/upload-avatar', validateFirebaseToken, upload.single('avatar'), async (req, res) => {
   try {
     console.log('Upload avatar request received');
-    
+
     if (!req.file) {
       console.log('No file uploaded');
       return res.status(400).json({ error: 'No file uploaded.' });
     }
-    
+
     console.log('File received:', req.file.originalname, req.file.mimetype, req.file.size);
-    
+
     // Compute md5 hash of file buffer
     const fileHash = crypto.createHash('md5').update(req.file.buffer).digest('hex');
-    
-    // Get Storage bucket
+
+    // Get Storage bucket (Firebase Storage is KEPT)
     const storage = admin.storage();
     const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
-    
+
     console.log('Using bucket:', bucketName);
-    
+
     try {
       const bucket = storage.bucket(bucketName);
-      
+
       // Create a file reference using the hash as filename
       const fileName = `avatars/${fileHash}-${req.file.originalname}`;
       const fileRef = bucket.file(fileName);
-      
+
       console.log('File reference created:', fileName);
-      
+
       // Check if file exists already
       const [exists] = await fileRef.exists();
       console.log('File exists?', exists);
-      
+
       if (!exists) {
         // Upload file if not exists
         console.log('Uploading file...');
@@ -598,31 +651,34 @@ router.put('/upload-avatar', validateFirebaseToken, upload.single('avatar'), asy
             contentType: req.file.mimetype,
           },
         });
-        
+
         // Make file public so it can be retrieved via public URL
         console.log('Making file public...');
         await fileRef.makePublic();
       }
-      
+
       // Get public URL (assumes file is public or token is added)
       const publicUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media`;
       console.log('Public URL:', publicUrl);
-      
-      // Update profile, etc...
-      await db.collection('users').doc(req.user.uid).update({ photoURL: publicUrl });
-      
+
+      // Update photo_url in PostgreSQL
+      await pool.query(
+        'UPDATE users SET photo_url = $1, updated_at = NOW() WHERE id = $2',
+        [publicUrl, req.user.uid]
+      );
+
       console.log('Profile updated successfully with new photoURL');
       return res.json({ photoURL: publicUrl });
     } catch (storageError) {
       console.error('Firebase Storage error:', storageError);
-      return res.status(500).json({ 
-        error: 'Failed to upload avatar to storage.', 
-        details: storageError.message 
+      return res.status(500).json({
+        error: 'Failed to upload avatar to storage.',
+        details: storageError.message
       });
     }
   } catch (err) {
     console.error('Error in upload-avatar endpoint:', err);
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Failed to upload avatar.',
       details: err.message
     });
@@ -711,7 +767,7 @@ router.put('/interests', validateFirebaseToken, async (req, res) => {
       'AI Tools',
       'Tutorials',
       'News',
-      
+
       // Specific technology categories
       'Quantum Computing',
       'AI',
@@ -732,20 +788,22 @@ router.put('/interests', validateFirebaseToken, async (req, res) => {
     // Validate that all interests are from valid categories
     const invalidInterests = interests.filter(interest => !validCategories.includes(interest));
     if (invalidInterests.length > 0) {
-      return res.status(400).json({ 
-        error: 'Invalid interests detected', 
-        invalidInterests 
+      return res.status(400).json({
+        error: 'Invalid interests detected',
+        invalidInterests
       });
     }
 
-    await db.collection('users').doc(req.user.uid).update({ 
-      interests,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
+    // Store interests as JSONB
+    // TODO: Ensure 'interests' JSONB column exists in users table
+    await pool.query(
+      'UPDATE users SET interests = $1, updated_at = NOW() WHERE id = $2',
+      [JSON.stringify(interests), req.user.uid]
+    );
 
-    return res.json({ 
+    return res.json({
       success: true,
-      interests 
+      interests
     });
   } catch (err) {
     console.error('Error updating interests:', err);
@@ -791,11 +849,12 @@ router.put('/interests', validateFirebaseToken, async (req, res) => {
  */
 router.get('/notifications', validateFirebaseToken, async (req, res) => {
   try {
-    const userDoc = await db.collection('users').doc(req.user.uid).get();
-    if (!userDoc.exists) {
+    // TODO: Ensure 'notifications' JSONB column exists in users table
+    const { rows } = await pool.query('SELECT notifications FROM users WHERE id = $1', [req.user.uid]);
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
-    res.json(userDoc.data().notifications || {});
+    res.json(rows[0].notifications || {});
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -851,8 +910,12 @@ router.get('/notifications', validateFirebaseToken, async (req, res) => {
  */
 router.put('/notifications', validateFirebaseToken, async (req, res) => {
   try {
-    const { notifications } = req.body; // notifications should be an object, e.g., { email: true, inApp: false }
-    await db.collection('users').doc(req.user.uid).update({ notifications });
+    const { notifications } = req.body;
+    // TODO: Ensure 'notifications' JSONB column exists in users table
+    await pool.query(
+      'UPDATE users SET notifications = $1, updated_at = NOW() WHERE id = $2',
+      [JSON.stringify(notifications), req.user.uid]
+    );
     res.json(notifications);
   } catch (err) {
     console.error(err);
@@ -910,11 +973,14 @@ router.put('/notifications', validateFirebaseToken, async (req, res) => {
  */
 router.get('/subscriptions', validateFirebaseToken, async (req, res) => {
   try {
-    const userDoc = await db.collection('users').doc(req.user.uid).get();
-    if (!userDoc.exists) {
+    const { rows } = await pool.query('SELECT subscription FROM users WHERE id = $1', [req.user.uid]);
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
-    res.json(userDoc.data().subscriptions || []);
+    // The subscription column is JSONB; the old Firestore field was 'subscriptions' (array)
+    // Return the subscription data or an empty array for backward compatibility
+    const subscription = rows[0].subscription;
+    res.json(Array.isArray(subscription) ? subscription : subscription ? [subscription] : []);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -950,11 +1016,12 @@ router.get('/subscriptions', validateFirebaseToken, async (req, res) => {
  */
 router.get('/favorites', validateFirebaseToken, async (req, res) => {
   try {
-    const userDoc = await db.collection('users').doc(req.user.uid).get();
-    if (!userDoc.exists) {
+    // TODO: Ensure 'favorites' JSONB column exists in users table
+    const { rows } = await pool.query('SELECT favorites FROM users WHERE id = $1', [req.user.uid]);
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
-    res.json(userDoc.data().favorites || []);
+    res.json(rows[0].favorites || []);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -1004,15 +1071,18 @@ router.get('/favorites', validateFirebaseToken, async (req, res) => {
 router.post('/favorites', validateFirebaseToken, async (req, res) => {
   try {
     const { favoriteId } = req.body;
-    const userRef = db.collection('users').doc(req.user.uid);
-    const userDoc = await userRef.get();
-    if (!userDoc.exists) {
+    // TODO: Ensure 'favorites' JSONB column exists in users table
+    const { rows } = await pool.query('SELECT favorites FROM users WHERE id = $1', [req.user.uid]);
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
-    const favorites = userDoc.data().favorites || [];
+    const favorites = rows[0].favorites || [];
     if (!favorites.includes(favoriteId)) {
       favorites.push(favoriteId);
-      await userRef.update({ favorites });
+      await pool.query(
+        'UPDATE users SET favorites = $1, updated_at = NOW() WHERE id = $2',
+        [JSON.stringify(favorites), req.user.uid]
+      );
     }
     res.json(favorites);
   } catch (err) {
@@ -1059,14 +1129,17 @@ router.post('/favorites', validateFirebaseToken, async (req, res) => {
 router.delete('/favorites/:id', validateFirebaseToken, async (req, res) => {
   try {
     const favoriteId = req.params.id;
-    const userRef = db.collection('users').doc(req.user.uid);
-    const userDoc = await userRef.get();
-    if (!userDoc.exists) {
+    // TODO: Ensure 'favorites' JSONB column exists in users table
+    const { rows } = await pool.query('SELECT favorites FROM users WHERE id = $1', [req.user.uid]);
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
-    let favorites = userDoc.data().favorites || [];
+    let favorites = rows[0].favorites || [];
     favorites = favorites.filter(id => id !== favoriteId);
-    await userRef.update({ favorites });
+    await pool.query(
+      'UPDATE users SET favorites = $1, updated_at = NOW() WHERE id = $2',
+      [JSON.stringify(favorites), req.user.uid]
+    );
     res.json(favorites);
   } catch (err) {
     console.error(err);
@@ -1117,16 +1190,20 @@ router.delete('/favorites/:id', validateFirebaseToken, async (req, res) => {
  */
 router.get('/settings', validateFirebaseToken, async (req, res) => {
   try {
-    const userDoc = await db.collection('users').doc(req.user.uid).get();
-    if (!userDoc.exists) {
+    // TODO: Ensure 'settings' JSONB and 'notifications' JSONB columns exist in users table
+    const { rows } = await pool.query(
+      'SELECT settings, notifications FROM users WHERE id = $1',
+      [req.user.uid]
+    );
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const userData = userDoc.data();
+    const settings = rows[0].settings || {};
     return res.json({
-      language: userData.language || 'en',
-      theme: userData.theme || 'light',
-      notifications: userData.notifications || { email: true, inApp: true }
+      language: settings.language || 'en',
+      theme: settings.theme || 'light',
+      notifications: rows[0].notifications || { email: true, inApp: true }
     });
   } catch (err) {
     console.error('Error fetching settings:', err);
@@ -1209,24 +1286,58 @@ router.get('/settings', validateFirebaseToken, async (req, res) => {
 router.put('/settings', validateFirebaseToken, async (req, res) => {
   try {
     const { language, theme, notifications } = req.body;
-    
+
     // Validate language
     const validLanguages = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'zh', 'ja', 'ko'];
     if (language && !validLanguages.includes(language)) {
       return res.status(400).json({ error: 'Invalid language selection' });
     }
 
-    const updates = {
+    const setClauses = [];
+    const values = [];
+    let paramIndex = 1;
+
+    // Build a settings JSONB object from language and theme
+    // TODO: Ensure 'settings' JSONB column exists in users table
+    if (language || theme) {
+      // Merge with existing settings
+      const { rows: currentRows } = await pool.query('SELECT settings FROM users WHERE id = $1', [req.user.uid]);
+      const currentSettings = (currentRows.length > 0 && currentRows[0].settings) || {};
+      const newSettings = {
+        ...currentSettings,
+        ...(language && { language }),
+        ...(theme && { theme })
+      };
+      setClauses.push(`settings = $${paramIndex}`);
+      values.push(JSON.stringify(newSettings));
+      paramIndex++;
+    }
+
+    // TODO: Ensure 'notifications' JSONB column exists in users table
+    if (notifications) {
+      setClauses.push(`notifications = $${paramIndex}`);
+      values.push(JSON.stringify(notifications));
+      paramIndex++;
+    }
+
+    // Always update updated_at
+    setClauses.push('updated_at = NOW()');
+
+    if (setClauses.length > 1) { // more than just updated_at
+      values.push(req.user.uid);
+      const updateQuery = `UPDATE users SET ${setClauses.join(', ')} WHERE id = $${paramIndex}`;
+      await pool.query(updateQuery, values);
+    }
+
+    const responseSettings = {
       ...(language && { language }),
       ...(theme && { theme }),
-      ...(notifications && { notifications }),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      ...(notifications && { notifications })
     };
 
-    await db.collection('users').doc(req.user.uid).update(updates);
-    return res.json({ 
+    return res.json({
       success: true,
-      settings: updates
+      settings: responseSettings
     });
   } catch (err) {
     console.error('Error updating settings:', err);
@@ -1281,8 +1392,8 @@ router.put('/settings', validateFirebaseToken, async (req, res) => {
  */
 router.get('/community', validateFirebaseToken, async (req, res) => {
   try {
-    const userDoc = await db.collection('users').doc(req.user.uid).get();
-    if (!userDoc.exists) {
+    const { rows } = await pool.query('SELECT id FROM users WHERE id = $1', [req.user.uid]);
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 

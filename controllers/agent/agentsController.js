@@ -1,11 +1,120 @@
 console.log('Loading agentsController.js');
 
 // Import necessary modules
-const { db } = require('../../config/firebase');
-const admin = require('firebase-admin');
+const { pool } = require('../../config/database');
+const admin = require('firebase-admin'); // Kept for Firebase Auth & Storage only
 const logger = require('../../utils/logger');
 const { getCache, setCache, deleteCache, deleteCacheByPattern, generateAgentCategoryCacheKey, generateAgentSearchCacheKey, generateAgentCacheKey, generateAgentCountCacheKey } = require('../../utils/cache');
 const { incrementCounter } = require('../../utils/cache');
+const { v4: uuidv4 } = require('uuid');
+
+// ==========================================
+// COLUMN MAPPING HELPERS
+// ==========================================
+
+/**
+ * Maps a PostgreSQL row (snake_case) to the camelCase format the rest of the code/API expects.
+ */
+const mapRowToAgent = (row) => {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    title: row.title,
+    description: row.description,
+    category: row.category,
+    categories: row.categories || [],
+    status: row.status,
+    businessValue: row.business_value,
+    paddleCompliant: row.paddle_compliant,
+    version: row.version,
+    price: row.price != null ? parseFloat(row.price) : 0,
+    isFree: row.is_free,
+    priceDetails: row.price_details || {},
+    creator: row.creator || {},
+    image: row.image,
+    imageUrl: row.image_url,
+    icon: row.icon,
+    iconUrl: row.icon_url,
+    jsonFile: row.json_file,
+    downloadUrl: row.download_url,
+    fileUrl: row.file_url,
+    isFeatured: row.is_featured,
+    isVerified: row.is_verified,
+    isPopular: row.is_popular,
+    isTrending: row.is_trending,
+    isSubscription: row.is_subscription,
+    features: row.features || [],
+    tags: row.tags || [],
+    deliverables: row.deliverables || [],
+    likes: row.likes || [],
+    likeCount: row.like_count,
+    downloadCount: row.download_count,
+    viewCount: row.view_count,
+    popularity: row.popularity,
+    wishlistCount: row.wishlist_count,
+    averageRating: row.average_rating != null ? parseFloat(row.average_rating) : 0,
+    reviewCount: row.review_count,
+    workflowMetadata: row.workflow_metadata,
+    lastTransformed: row.last_transformed ? new Date(row.last_transformed) : null,
+    analyzedAt: row.analyzed_at ? new Date(row.analyzed_at) : null,
+    createdAt: row.created_at ? new Date(row.created_at) : null,
+    updatedAt: row.updated_at ? new Date(row.updated_at) : null,
+  };
+};
+
+/**
+ * Maps a camelCase agent object to PostgreSQL snake_case columns for INSERT/UPDATE.
+ * Returns { columns: [...], values: [...], placeholders: [...] } for INSERT
+ * or { setClauses: [...], values: [...] } for UPDATE.
+ */
+const mapAgentToRow = (agent) => {
+  const mapping = {
+    id: agent.id,
+    name: agent.name,
+    title: agent.title,
+    description: agent.description,
+    category: agent.category,
+    categories: agent.categories || [],
+    status: agent.status,
+    business_value: agent.businessValue,
+    paddle_compliant: agent.paddleCompliant,
+    version: agent.version,
+    price: agent.price != null ? parseFloat(agent.price) : 0,
+    is_free: agent.isFree,
+    price_details: agent.priceDetails ? JSON.stringify(agent.priceDetails) : '{}',
+    creator: agent.creator ? JSON.stringify(agent.creator) : '{}',
+    image: agent.image ? JSON.stringify(agent.image) : null,
+    image_url: agent.imageUrl,
+    icon: agent.icon ? JSON.stringify(agent.icon) : null,
+    icon_url: agent.iconUrl,
+    json_file: agent.jsonFile ? JSON.stringify(agent.jsonFile) : null,
+    download_url: agent.downloadUrl,
+    file_url: agent.fileUrl,
+    is_featured: agent.isFeatured,
+    is_verified: agent.isVerified,
+    is_popular: agent.isPopular,
+    is_trending: agent.isTrending,
+    is_subscription: agent.isSubscription,
+    features: agent.features || [],
+    tags: agent.tags || [],
+    deliverables: agent.deliverables ? JSON.stringify(agent.deliverables) : '[]',
+    likes: agent.likes || [],
+    like_count: agent.likeCount || (Array.isArray(agent.likes) ? agent.likes.length : 0),
+    download_count: agent.downloadCount || 0,
+    view_count: agent.viewCount || 0,
+    popularity: agent.popularity || 0,
+    wishlist_count: agent.wishlistCount || 0,
+    average_rating: agent.averageRating || 0,
+    review_count: agent.reviewCount || 0,
+    workflow_metadata: agent.workflowMetadata ? JSON.stringify(agent.workflowMetadata) : null,
+    last_transformed: agent.lastTransformed || null,
+    analyzed_at: agent.analyzedAt || null,
+    created_at: agent.createdAt || new Date().toISOString(),
+    updated_at: agent.updatedAt || new Date().toISOString(),
+  };
+  return mapping;
+};
 
 // ==========================================
 // IN-MEMORY CACHE FOR ALL AGENTS
@@ -15,75 +124,26 @@ let cacheLastUpdated = null;
 const CACHE_REFRESH_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
 /**
- * Load all agents from Firebase into memory cache
+ * Load all agents from PostgreSQL into memory cache
  */
 const refreshAgentsCache = async () => {
   try {
-    logger.info('🔄 Refreshing agents cache from Firebase...');
+    logger.info('Refreshing agents cache from PostgreSQL...');
     const startTime = Date.now();
-    
-    const snapshot = await db.collection('agents')
-      .orderBy('createdAt', 'desc')
-      .get();
-    
-    allAgentsCache = [];
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      
-      // Convert Firestore timestamps to JavaScript Date objects
-      if (data.createdAt) {
-        if (data.createdAt.toDate && typeof data.createdAt.toDate === 'function') {
-          data.createdAt = data.createdAt.toDate();
-        } else if (data.createdAt._seconds) {
-          data.createdAt = new Date(data.createdAt._seconds * 1000);
-        } else if (typeof data.createdAt === 'string') {
-          // Handle ISO string format like "2025-06-23T20:20:55.452Z"
-          data.createdAt = new Date(data.createdAt);
-        }
-      }
-      if (data.updatedAt) {
-        if (data.updatedAt.toDate && typeof data.updatedAt.toDate === 'function') {
-          data.updatedAt = data.updatedAt.toDate();
-        } else if (data.updatedAt._seconds) {
-          data.updatedAt = new Date(data.updatedAt._seconds * 1000);
-        } else if (typeof data.updatedAt === 'string') {
-          data.updatedAt = new Date(data.updatedAt);
-        }
-      }
-      if (data.analyzedAt) {
-        if (data.analyzedAt.toDate && typeof data.analyzedAt.toDate === 'function') {
-          data.analyzedAt = data.analyzedAt.toDate();
-        } else if (data.analyzedAt._seconds) {
-          data.analyzedAt = new Date(data.analyzedAt._seconds * 1000);
-        } else if (typeof data.analyzedAt === 'string') {
-          data.analyzedAt = new Date(data.analyzedAt);
-        }
-      }
-      if (data.lastTransformed) {
-        if (data.lastTransformed.toDate && typeof data.lastTransformed.toDate === 'function') {
-          data.lastTransformed = data.lastTransformed.toDate();
-        } else if (data.lastTransformed._seconds) {
-          data.lastTransformed = new Date(data.lastTransformed._seconds * 1000);
-        } else if (typeof data.lastTransformed === 'string') {
-          data.lastTransformed = new Date(data.lastTransformed);
-        }
-      }
-      
-      allAgentsCache.push({
-        id: doc.id,
-        ...data
-      });
-    });
-    
+
+    const result = await pool.query('SELECT * FROM agents ORDER BY created_at DESC');
+
+    allAgentsCache = result.rows.map(row => mapRowToAgent(row));
+
     cacheLastUpdated = new Date();
     const loadTime = Date.now() - startTime;
-    
-    logger.info(`✅ Loaded ${allAgentsCache.length} agents into memory cache in ${loadTime}ms`);
-    
+
+    logger.info(`Loaded ${allAgentsCache.length} agents into memory cache in ${loadTime}ms`);
+
     await setCache('agents:count:total', allAgentsCache.length);
     return true;
   } catch (error) {
-    logger.error('❌ Error refreshing agents cache:', error);
+    logger.error('Error refreshing agents cache:', error);
     return false;
   }
 };
@@ -92,15 +152,15 @@ const refreshAgentsCache = async () => {
  * Ensure cache is loaded and fresh
  */
 const ensureCacheLoaded = async () => {
-  const needsRefresh = !allAgentsCache || 
-                      !cacheLastUpdated || 
+  const needsRefresh = !allAgentsCache ||
+                      !cacheLastUpdated ||
                       (new Date() - cacheLastUpdated) > CACHE_REFRESH_INTERVAL;
-  
+
   if (needsRefresh) {
-    logger.info('Cache needs refresh, loading from Firebase...');
+    logger.info('Cache needs refresh, loading from PostgreSQL...');
     await refreshAgentsCache();
   }
-  
+
   return allAgentsCache !== null;
 };
 
@@ -113,74 +173,74 @@ const searchAgents = (agents, searchQuery) => {
     logger.info('No search query, returning all agents');
     return agents;
   }
-  
+
   const searchTerms = searchQuery.toLowerCase().trim().split(/\s+/);
-  logger.info(`🔍 Searching ${agents.length} agents for terms: [${searchTerms.join(', ')}]`);
-  
+  logger.info(`Searching ${agents.length} agents for terms: [${searchTerms.join(', ')}]`);
+
   const results = agents.filter(agent => {
     return searchTerms.every(term => {
       const matches = [];
-      
+
       // Search in title
       if (agent.title && agent.title.toLowerCase().includes(term)) {
         matches.push('title');
       }
-      
-      // Search in description  
+
+      // Search in description
       if (agent.description && agent.description.toLowerCase().includes(term)) {
         matches.push('description');
       }
-      
+
       // Search in old category field (for backward compatibility)
       if (agent.category && agent.category.toLowerCase().includes(term)) {
         matches.push('category');
       }
-      
-      // 🆕 Search in new categories array
+
+      // Search in new categories array
       if (agent.categories && Array.isArray(agent.categories)) {
-        const hasCategoryMatch = agent.categories.some(category => 
+        const hasCategoryMatch = agent.categories.some(category =>
           category.toLowerCase().includes(term)
         );
         if (hasCategoryMatch) {
           matches.push('categories');
         }
       }
-      
-      // 🆕 Search in businessValue field
+
+      // Search in businessValue field
       if (agent.businessValue && agent.businessValue.toLowerCase().includes(term)) {
         matches.push('businessValue');
       }
-      
+
       // Search in integrations array
       if (agent.workflowMetadata && agent.workflowMetadata.integrations) {
-        const hasIntegrationMatch = agent.workflowMetadata.integrations.some(integration => 
+        const hasIntegrationMatch = agent.workflowMetadata.integrations.some(integration =>
           integration.toLowerCase().includes(term)
         );
         if (hasIntegrationMatch) {
           matches.push('integrations');
         }
       }
-      
+
       // Search in features
-      if (agent.features && agent.features.some(feature => 
+      if (agent.features && agent.features.some(feature =>
         feature.toLowerCase().includes(term))) {
         matches.push('features');
       }
-      
+
       // Search in tags
-      if (agent.tags && agent.tags.some(tag => 
+      if (agent.tags && agent.tags.some(tag =>
         tag.toLowerCase().includes(term))) {
         matches.push('tags');
       }
-      
+
       // Search in name field
       if (agent.name && agent.name.toLowerCase().includes(term)) {
         matches.push('name');
       }
 
-      // 🆕 Search in deliverables descriptions
+      // Search in deliverables descriptions
       if (agent.deliverables && Array.isArray(agent.deliverables)) {
-        const hasDeliverableMatch = agent.deliverables.some(deliverable => 
+        const hasDeliverableMatch = agent.deliverables.some(deliverable =>
           (deliverable.description && deliverable.description.toLowerCase().includes(term)) ||
           (deliverable.fileName && deliverable.fileName.toLowerCase().includes(term))
         );
@@ -188,17 +248,17 @@ const searchAgents = (agents, searchQuery) => {
           matches.push('deliverables');
         }
       }
-      
+
       const hasMatch = matches.length > 0;
       if (hasMatch) {
-        logger.info(`✅ Match found for "${term}" in agent ${agent.id} (${matches.join(', ')})`);
+        logger.info(`Match found for "${term}" in agent ${agent.id} (${matches.join(', ')})`);
       }
-      
+
       return hasMatch;
     });
   });
-  
-  logger.info(`🎯 Search "${searchQuery}" found ${results.length} matches`);
+
+  logger.info(`Search "${searchQuery}" found ${results.length} matches`);
   return results;
 };
 
@@ -208,7 +268,7 @@ const searchAgents = (agents, searchQuery) => {
 const filterAgents = (agents, filters) => {
   let filtered = [...agents];
   const appliedFilters = [];
-  
+
   // UPDATED: Filter by category - support both old category field and new categories array
   if (filters.category && filters.category !== 'All') {
     filtered = filtered.filter(agent => {
@@ -224,50 +284,43 @@ const filterAgents = (agents, filters) => {
     });
     appliedFilters.push(`category:${filters.category}`);
   }
-  
+
   // Filter by price range
   if (filters.priceMin !== undefined && filters.priceMin !== null && filters.priceMin !== '') {
     const minPrice = parseFloat(filters.priceMin);
     filtered = filtered.filter(agent => (agent.price || 0) >= minPrice);
     appliedFilters.push(`priceMin:${minPrice}`);
   }
-  
+
   if (filters.priceMax !== undefined && filters.priceMax !== null && filters.priceMax !== '') {
     const maxPrice = parseFloat(filters.priceMax);
     filtered = filtered.filter(agent => (agent.price || 0) <= maxPrice);
     appliedFilters.push(`priceMax:${maxPrice}`);
   }
-  
+
   // Filter by verification status
   if (filters.verified !== undefined) {
     const isVerified = filters.verified === 'true';
     filtered = filtered.filter(agent => agent.isVerified === isVerified);
     appliedFilters.push(`verified:${isVerified}`);
   }
-  
+
   // Filter by featured status
   if (filters.featured !== undefined) {
     const isFeatured = filters.featured === 'true';
     filtered = filtered.filter(agent => agent.isFeatured === isFeatured);
     appliedFilters.push(`featured:${isFeatured}`);
   }
-  
+
   // Filter by complexity
   if (filters.complexity) {
-    filtered = filtered.filter(agent => 
-      agent.workflowMetadata && 
+    filtered = filtered.filter(agent =>
+      agent.workflowMetadata &&
       agent.workflowMetadata.complexity === filters.complexity
     );
     appliedFilters.push(`complexity:${filters.complexity}`);
   }
 
-  // 🆕 Filter by paddleCompliant
-  // if (filters.paddleCompliant !== undefined) {
-  //   const isPaddleCompliant = filters.paddleCompliant === 'true';
-  //   filtered = filtered.filter(agent => agent.paddleCompliant === isPaddleCompliant);
-  //   appliedFilters.push(`paddleCompliant:${isPaddleCompliant}`);
-  // }
-  
   // Filter by minimum rating
   if (filters.rating !== undefined && filters.rating !== null && filters.rating > 0) {
     const minRating = parseFloat(filters.rating);
@@ -277,37 +330,37 @@ const filterAgents = (agents, filters) => {
     });
     appliedFilters.push(`rating:${minRating}+`);
   }
-  
+
   // Filter by tags (agents must have at least one of the specified tags)
   if (filters.tags && Array.isArray(filters.tags) && filters.tags.length > 0) {
     filtered = filtered.filter(agent => {
       const agentTags = agent.tags || [];
-      return filters.tags.some(tag => 
-        agentTags.some(agentTag => 
+      return filters.tags.some(tag =>
+        agentTags.some(agentTag =>
           agentTag && typeof agentTag === 'string' && agentTag.toLowerCase() === tag.toLowerCase()
         )
       );
     });
     appliedFilters.push(`tags:${filters.tags.join(',')}`);
   }
-  
+
   // Filter by features (agents must have at least one of the specified features)
   if (filters.features && Array.isArray(filters.features) && filters.features.length > 0) {
     filtered = filtered.filter(agent => {
       const agentFeatures = agent.features || [];
-      return filters.features.some(feature => 
-        agentFeatures.some(agentFeature => 
+      return filters.features.some(feature =>
+        agentFeatures.some(agentFeature =>
           agentFeature && typeof agentFeature === 'string' && agentFeature.toLowerCase() === feature.toLowerCase()
         )
       );
     });
     appliedFilters.push(`features:${filters.features.join(',')}`);
   }
-  
+
   if (appliedFilters.length > 0) {
-    logger.info(`🔧 Applied filters: ${appliedFilters.join(', ')} | ${filtered.length} results`);
+    logger.info(`Applied filters: ${appliedFilters.join(', ')} | ${filtered.length} results`);
   }
-  
+
   return filtered;
 };
 
@@ -316,7 +369,7 @@ const filterAgents = (agents, filters) => {
  */
 const generateResultsCacheKey = (searchQuery, filters, limit, offset, sortFilter = null) => {
   const parts = ['agents:results'];
-  
+
   if (searchQuery) parts.push(`search:${searchQuery}`);
   if (filters.category && filters.category !== 'All') parts.push(`cat:${filters.category}`);
   if (filters.priceMin) parts.push(`pmin:${filters.priceMin}`);
@@ -327,13 +380,13 @@ const generateResultsCacheKey = (searchQuery, filters, limit, offset, sortFilter
   if (filters.rating) parts.push(`rating:${filters.rating}`);
   if (filters.tags && Array.isArray(filters.tags)) parts.push(`tags:${filters.tags.sort().join(',')}`);
   if (filters.features && Array.isArray(filters.features)) parts.push(`features:${filters.features.sort().join(',')}`);
-  
+
   // Include sort filter in cache key (critical for correct sorting)
   if (sortFilter) parts.push(`sort:${sortFilter.replace(/\s+/g, '_')}`);
-  
+
   parts.push(`limit:${limit}`);
   parts.push(`offset:${offset}`);
-  
+
   return parts.join(':');
 };
 
@@ -375,10 +428,10 @@ const _parseIncomingData = (reqBody) => {
 
   // UPDATED: Include new fields in parsing
   const fieldsToParse = [
-    'priceDetails', 'creator', 'features', 'tags', 'image', 'icon', 'jsonFile', 
+    'priceDetails', 'creator', 'features', 'tags', 'image', 'icon', 'jsonFile',
     'imageData', 'iconData', 'jsonFileData', 'categories', 'deliverables'
   ];
-  
+
   for (const field of fieldsToParse) {
     if (data[field] && typeof data[field] === 'string') {
       try {
@@ -388,7 +441,7 @@ const _parseIncomingData = (reqBody) => {
       }
     }
   }
-  
+
   // Clean up temp frontend fields
   delete data._imageFile;
   delete data._iconFile;
@@ -445,7 +498,7 @@ const _getFileMetadataFromRequest = (fieldValue, fieldName) => {
 const getAgents = async (req, res) => {
   try {
     const startTime = Date.now();
-    
+
     const {
       searchQuery,
       search,
@@ -460,20 +513,20 @@ const getAgents = async (req, res) => {
       features, // Add features filter (comma-separated)
       lastVisibleId, // Keep for backward compatibility
       filter, // Keep for backward compatibility - used for sorting
-      // paddleCompliant, // 🆕 New filter
+      // paddleCompliant, // New filter
       limit = 20,
       offset = 0,
       refresh = false
     } = req.query;
-    
+
     const finalSearchQuery = searchQuery || search;
     const parsedLimit = parseInt(limit) || 20;
     const parsedOffset = parseInt(offset) || 0;
-    
+
     // Parse tags and features from comma-separated strings
     const tagsArray = tags ? (typeof tags === 'string' ? tags.split(',').map(t => t.trim()) : tags) : undefined;
     const featuresArray = features ? (typeof features === 'string' ? features.split(',').map(f => f.trim()) : features) : undefined;
-    
+
     const filters = {
       category,
       priceMin,
@@ -485,68 +538,67 @@ const getAgents = async (req, res) => {
       tags: tagsArray,
       features: featuresArray
     };
-    
-    logger.info(`📊 getAgents called:`, {
+
+    logger.info(`getAgents called:`, {
       searchQuery: finalSearchQuery,
       filters,
       sortFilter: filter || 'Hot & New',
       limit: parsedLimit,
       offset: parsedOffset
     });
-    
+
     // 1. Force refresh cache if requested
     if (refresh === 'true' || refresh === true) {
-      logger.info('🔄 Force refreshing agents cache due to refresh parameter');
+      logger.info('Force refreshing agents cache due to refresh parameter');
       await refreshAgentsCache();
     }
-    
+
     // 2. Ensure in-memory cache is loaded
     const cacheLoaded = await ensureCacheLoaded();
     if (!cacheLoaded || !allAgentsCache) {
       throw new Error('Failed to load agents cache');
     }
-    
+
     // 2. Check Redis cache for this specific query (include sort filter in cache key)
     const sortFilter = filter || 'Hot & New';
     const cacheKey = generateResultsCacheKey(finalSearchQuery, filters, parsedLimit, parsedOffset, sortFilter);
     const cachedResult = await getCache(cacheKey);
-    
+
     if (cachedResult) {
       const responseTime = Date.now() - startTime;
-      logger.info(`⚡ Cache HIT for ${cacheKey} | Response time: ${responseTime}ms`);
-      
+      logger.info(`Cache HIT for ${cacheKey} | Response time: ${responseTime}ms`);
+
       return res.status(200).json({
         ...cachedResult,
         responseTime,
         fromCache: true
       });
     }
-    
-    logger.info(`💾 Cache MISS for ${cacheKey}, processing from memory...`);
-    
+
+    logger.info(`Cache MISS for ${cacheKey}, processing from memory...`);
+
     // 3. Process data from in-memory cache
     let results = [...allAgentsCache];
-    
+
     // 4. Apply search if provided
     if (finalSearchQuery) {
       results = searchAgents(results, finalSearchQuery);
     }
-    
+
     // 5. Apply filters
     results = filterAgents(results, filters);
-    
+
     // 6. Sort results based on filter parameter (sortFilter already extracted above for cache key)
-    logger.info(`🔄 Sorting ${results.length} results by: ${sortFilter}`);
+    logger.info(`Sorting ${results.length} results by: ${sortFilter}`);
     results.sort((a, b) => {
       switch (sortFilter) {
         case 'Hot & New':
         case 'newest':
-          // Sort by newest first (default)
-          if (a.createdAt && b.createdAt) {
-            return new Date(b.createdAt) - new Date(a.createdAt);
-          }
-          return 0;
-          
+          // Sort by newest first (default); push nulls to end
+          const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return bTime - aTime;
+
         case 'Top Rated':
         case 'top-rated':
           // Sort by rating average (descending), then by rating count
@@ -558,7 +610,7 @@ const getAgents = async (req, res) => {
             return bRating - aRating;
           }
           return bCount - aCount;
-          
+
         case 'Most Popular':
         case 'popular':
           // Sort by popularity metrics (views, usersCount, rating count)
@@ -571,21 +623,21 @@ const getAgents = async (req, res) => {
           const aRatingPop = a.rating?.average || a.rating || 0;
           const bRatingPop = b.rating?.average || b.rating || 0;
           return bRatingPop - aRatingPop;
-          
+
         case 'Price: Low to High':
         case 'price-low':
           // Sort by price ascending
           const aPrice = a.price || a.priceDetails?.discountedPrice || a.priceDetails?.basePrice || 0;
           const bPrice = b.price || b.priceDetails?.discountedPrice || b.priceDetails?.basePrice || 0;
           return aPrice - bPrice;
-          
+
         case 'Price: High to Low':
         case 'price-high':
           // Sort by price descending
           const aPriceHigh = a.price || a.priceDetails?.discountedPrice || a.priceDetails?.basePrice || 0;
           const bPriceHigh = b.price || b.priceDetails?.discountedPrice || b.priceDetails?.basePrice || 0;
           return bPriceHigh - aPriceHigh;
-          
+
         default:
           // Default to newest first
           if (a.createdAt && b.createdAt) {
@@ -594,12 +646,12 @@ const getAgents = async (req, res) => {
           return 0;
       }
     });
-    
+
     // 7. Calculate pagination
     const totalCount = results.length;
     const hasMore = parsedOffset + parsedLimit < totalCount;
     const paginatedResults = results.slice(parsedOffset, parsedOffset + parsedLimit);
-    
+
     // 8. Prepare response
     const response = {
       agents: paginatedResults,
@@ -615,24 +667,24 @@ const getAgents = async (req, res) => {
       responseTime: Date.now() - startTime,
       lastVisibleId: paginatedResults.length > 0 ? paginatedResults[paginatedResults.length - 1].id : null,
     };
-    
+
     // 9. Cache the result
     await setCache(cacheKey, response);
-    
-    logger.info(`✅ Query processed successfully:`, {
+
+    logger.info(`Query processed successfully:`, {
       totalFound: totalCount,
       returned: paginatedResults.length,
       sortedBy: sortFilter,
       responseTime: response.responseTime,
       cached: true
     });
-    
+
     return res.status(200).json(response);
-    
+
   } catch (error) {
-    logger.error('❌ Error in getAgents:', error);
-    return res.status(500).json({ 
-      error: 'Failed to fetch agents', 
+    logger.error('Error in getAgents:', error);
+    return res.status(500).json({
+      error: 'Failed to fetch agents',
       details: error.message,
       timestamp: new Date().toISOString()
     });
@@ -641,13 +693,13 @@ const getAgents = async (req, res) => {
 
 // --- OTHER EXISTING FUNCTIONS (unchanged) ---
 
-const getFeaturedAgents = async (req, res) => { 
+const getFeaturedAgents = async (req, res) => {
   try {
     const { limit = 10 } = req.query;
-    
+
     const cacheKey = `${CACHE_KEYS.FEATURED}:${limit}`;
     const cachedData = await getCache(cacheKey);
-    
+
     if (cachedData) {
       logger.info(`Cache hit for featured agents: ${limit}`);
       return res.status(200).json({
@@ -655,23 +707,16 @@ const getFeaturedAgents = async (req, res) => {
         fromCache: true
       });
     }
-    
-    const agentsSnapshot = await db.collection('agents')
-      .where('isFeatured', '==', true)
-      .orderBy('createdAt', 'desc')
-      .limit(parseInt(limit))
-      .get();
-    
-    const agents = [];
-    agentsSnapshot.forEach(doc => {
-      agents.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
-    
+
+    const result = await pool.query(
+      'SELECT * FROM agents WHERE is_featured = true ORDER BY created_at DESC LIMIT $1',
+      [parseInt(limit)]
+    );
+
+    const agents = result.rows.map(row => mapRowToAgent(row));
+
     await setCache(cacheKey, agents);
-    
+
     return res.status(200).json({
       agents: agents,
       fromCache: false
@@ -687,18 +732,18 @@ const getAgentById = async (req, res) => {
     const agentIdFromParams = req.params.id || req.params.agentId;
     const skipCache = req.query.skipCache === 'true' || req.query.refresh === 'true';
     const includeUser = req.query.includeUser === 'true';
-    
+
     logger.info(`Attempting to get agent with ID: "${agentIdFromParams}"`, { skipCache });
-    
+
     if (!agentIdFromParams || typeof agentIdFromParams !== 'string') {
       logger.error('Invalid agent ID format:', agentIdFromParams);
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
         message: 'Invalid agent ID format',
-        error: 'Agent ID must be a valid string' 
+        error: 'Agent ID must be a valid string'
       });
     }
-    
+
     let cleanAgentId = agentIdFromParams.trim();
     if (cleanAgentId.includes('/') || cleanAgentId.includes('\\')) {
       logger.info(`Agent ID contains path separators, extracting ID portion`);
@@ -706,7 +751,7 @@ const getAgentById = async (req, res) => {
       cleanAgentId = parts[parts.length - 1];
       logger.info(`Extracted ID from path: ${cleanAgentId}`);
     }
-    
+
     let originalIdForLookup = cleanAgentId;
     let idToUseForDb = cleanAgentId;
 
@@ -717,10 +762,10 @@ const getAgentById = async (req, res) => {
         logger.info(`Stripped 'agent-' prefix, using numeric ID for DB: ${idToUseForDb}`);
       }
     }
-    
+
     const primaryCacheKeyId = idToUseForDb;
     const cacheKey = generateAgentCacheKey(primaryCacheKeyId);
-    
+
     if (!skipCache) {
       try {
         const cachedData = await getCache(cacheKey);
@@ -738,42 +783,55 @@ const getAgentById = async (req, res) => {
         logger.error(`Redis cache GET error for ${primaryCacheKeyId}:`, cacheError);
       }
     }
-    
-    let agentDoc = await db.collection('agents').doc(idToUseForDb).get();
+
+    // Query PostgreSQL for the agent
+    let agentResult = await pool.query('SELECT * FROM agents WHERE id = $1', [idToUseForDb]);
     let finalIdUsedForAgent = idToUseForDb;
-    
-    if (!agentDoc.exists && idToUseForDb !== originalIdForLookup) {
+
+    if (agentResult.rows.length === 0 && idToUseForDb !== originalIdForLookup) {
       logger.info(`Agent not found with ID: ${idToUseForDb}, trying original ID: ${originalIdForLookup}`);
-      agentDoc = await db.collection('agents').doc(originalIdForLookup).get();
-      if (agentDoc.exists) {
+      agentResult = await pool.query('SELECT * FROM agents WHERE id = $1', [originalIdForLookup]);
+      if (agentResult.rows.length > 0) {
         finalIdUsedForAgent = originalIdForLookup;
       }
     }
-    
-    if (!agentDoc.exists) {
+
+    if (agentResult.rows.length === 0) {
       logger.error(`Agent not found with any potential ID: ${idToUseForDb} or ${originalIdForLookup}`);
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
         message: 'Agent not found',
-        error: `No agent exists with ID: ${agentIdFromParams}` 
+        error: `No agent exists with ID: ${agentIdFromParams}`
       });
     }
-    
-    const agentData = {
-      id: agentDoc.id,
-      ...agentDoc.data()
-    };
+
+    const agentData = mapRowToAgent(agentResult.rows[0]);
+
+    // Fetch reviews from agent_reviews table
+    const reviewsResult = await pool.query(
+      'SELECT * FROM agent_reviews WHERE agent_id = $1 ORDER BY created_at DESC',
+      [finalIdUsedForAgent]
+    );
+    const reviews = reviewsResult.rows.map(r => ({
+      id: r.id,
+      userId: r.user_id,
+      userName: r.user_name,
+      rating: r.rating,
+      content: r.content,
+      verificationStatus: r.verification_status,
+      createdAt: r.created_at ? new Date(r.created_at).toISOString() : null
+    }));
 
     // Determine entitlement (do not block response if this fails)
     let entitled = false;
     try {
       if (req.user && req.user.uid) {
         const ent = await getUserEntitlements(req.user.uid);
-        const agentKey = agentDoc.id;
+        const agentKey = finalIdUsedForAgent;
         entitled = ent.isAdmin || ent.isSubscriber || ent.purchases.includes(agentKey) || ent.downloads.includes(agentKey);
       }
     } catch (entErr) {
-      logger.warn(`Failed to compute entitlements for user on agent ${agentDoc.id}: ${entErr.message}`);
+      logger.warn(`Failed to compute entitlements for user on agent ${finalIdUsedForAgent}: ${entErr.message}`);
     }
 
     // Sanitize deliverables and template URLs for paid products before caching/returning
@@ -813,19 +871,13 @@ const getAgentById = async (req, res) => {
       }
     }
 
-    // Handle reviews
-    if (sanitizedAgentData.reviews && Array.isArray(sanitizedAgentData.reviews)) {
-      sanitizedAgentData.reviews.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-      if (sanitizedAgentData.reviews.length > 0) {
-        const totalRating = sanitizedAgentData.reviews.reduce((sum, review) => sum + (review.rating || 0), 0);
-        sanitizedAgentData.averageRating = totalRating / sanitizedAgentData.reviews.length;
-        sanitizedAgentData.reviewCount = sanitizedAgentData.reviews.length;
-      } else {
-        sanitizedAgentData.averageRating = 0;
-        sanitizedAgentData.reviewCount = 0;
-      }
+    // Handle reviews from agent_reviews table
+    sanitizedAgentData.reviews = reviews;
+    if (reviews.length > 0) {
+      const totalRating = reviews.reduce((sum, review) => sum + (review.rating || 0), 0);
+      sanitizedAgentData.averageRating = totalRating / reviews.length;
+      sanitizedAgentData.reviewCount = reviews.length;
     } else {
-      sanitizedAgentData.reviews = [];
       sanitizedAgentData.averageRating = 0;
       sanitizedAgentData.reviewCount = 0;
     }
@@ -853,7 +905,7 @@ const getAgentById = async (req, res) => {
       entitled,
       fromCache: false
     });
-    
+
   } catch (error) {
     logger.error('Error getting agent by ID:', error);
     return res.status(500).json({
@@ -879,8 +931,8 @@ const _shapeAgentDataForSave = (agentInput, existingAgentData = {}, reqUser = nu
     output.name = agentInput.name || existingAgentData.name || '';
     output.title = agentInput.title || existingAgentData.title || output.name;
     output.description = agentInput.description || existingAgentData.description || '';
-    
-    // 🆕 UPDATED: Category/Categories Handling
+
+    // UPDATED: Category/Categories Handling
     if (agentInput.categories && Array.isArray(agentInput.categories)) {
         output.categories = agentInput.categories;
         // Use the first category as the legacy category field for backward compatibility
@@ -893,31 +945,31 @@ const _shapeAgentDataForSave = (agentInput, existingAgentData = {}, reqUser = nu
         output.category = existingAgentData.category || '';
         output.categories = existingAgentData.categories || (existingAgentData.category ? [existingAgentData.category] : []);
     }
-    
+
     output.status = agentInput.status || existingAgentData.status || 'active';
 
-    // 🆕 NEW FIELDS
-    
+    // NEW FIELDS
+
     // Business Value
     output.businessValue = agentInput.businessValue || existingAgentData.businessValue || '';
-    
+
     // Deliverables array
     if (agentInput.deliverables && Array.isArray(agentInput.deliverables)) {
         output.deliverables = agentInput.deliverables;
     } else {
         output.deliverables = existingAgentData.deliverables || [];
     }
-    
+
     // Paddle Compliance
-    output.paddleCompliant = typeof agentInput.paddleCompliant === 'boolean' 
-        ? agentInput.paddleCompliant 
+    output.paddleCompliant = typeof agentInput.paddleCompliant === 'boolean'
+        ? agentInput.paddleCompliant
         : (existingAgentData.paddleCompliant || false);
-    
+
     // Last Transformed timestamp
     if (agentInput.lastTransformed) {
         output.lastTransformed = agentInput.lastTransformed;
     } else if (!existingAgentData.lastTransformed && reqUser?.role === 'admin') {
-        output.lastTransformed = admin.firestore.FieldValue.serverTimestamp();
+        output.lastTransformed = new Date().toISOString();
     } else {
         output.lastTransformed = existingAgentData.lastTransformed || null;
     }
@@ -1134,14 +1186,14 @@ const createAgent = async (req, res) => {
     const finalAgentData = _shapeAgentDataForSave(dataToShape, {}, req.user);
 
     if (!finalAgentData.name || (!finalAgentData.category && !finalAgentData.categories?.length)) {
-      logger.warn('Create Agent: Missing name or category after shaping.', { 
-        name: finalAgentData.name, 
+      logger.warn('Create Agent: Missing name or category after shaping.', {
+        name: finalAgentData.name,
         category: finalAgentData.category,
         categories: finalAgentData.categories
       });
       return res.status(400).json({ error: 'Name and category are required' });
     }
-    
+
     logger.info('Creating agent with final shaped data:', {
       name: finalAgentData.name,
       category: finalAgentData.category,
@@ -1154,17 +1206,30 @@ const createAgent = async (req, res) => {
         jsonFileProvided: !!finalAgentData.downloadUrl,
     });
 
-    const agentRef = await db.collection('agents').add(finalAgentData);
-    const newAgent = { id: agentRef.id, ...finalAgentData };
-    
-    // 🆕 UPDATED: Cache invalidation for both old and new category formats
+    // Generate a UUID for the new agent
+    const newAgentId = uuidv4();
+    finalAgentData.id = newAgentId;
+    const row = mapAgentToRow(finalAgentData);
+
+    const columns = Object.keys(row);
+    const values = Object.values(row);
+    const placeholders = columns.map((_, i) => `$${i + 1}`);
+
+    await pool.query(
+      `INSERT INTO agents (${columns.join(', ')}) VALUES (${placeholders.join(', ')})`,
+      values
+    );
+
+    const newAgent = { id: newAgentId, ...finalAgentData };
+
+    // UPDATED: Cache invalidation for both old and new category formats
     try {
-      logger.info('🔄 Refreshing in-memory cache due to new agent creation...');
+      logger.info('Refreshing in-memory cache due to new agent creation...');
       await refreshAgentsCache();
-      
+
       await deleteCacheByPattern('agents:results:*');
       logger.info('Invalidated all Redis result caches');
-      
+
       // Clear category caches for both old and new formats
       if (finalAgentData.category) {
       await deleteCache(generateAgentCategoryCacheKey(finalAgentData.category));
@@ -1175,12 +1240,12 @@ const createAgent = async (req, res) => {
         }
       }
       await deleteCache(generateAgentCountCacheKey());
-      
-      logger.info(`✅ Cache invalidation completed for new agent: ${agentRef.id}`);
+
+      logger.info(`Cache invalidation completed for new agent: ${newAgentId}`);
     } catch (cacheError) {
-      logger.error('❌ Error during cache invalidation in createAgent:', cacheError);
+      logger.error('Error during cache invalidation in createAgent:', cacheError);
     }
-    
+
     return res.status(201).json(newAgent);
   } catch (error) {
     logger.error('Error creating agent:', error);
@@ -1201,16 +1266,18 @@ const updateAgent = async (req, res) => {
     if (!agentId) { return res.status(400).json({ error: 'Agent ID is required' }); }
     logger.info(`Attempting to update agent with ID: ${agentId}`);
 
-    const agentRef = db.collection('agents').doc(agentId);
-    const agentDoc = await agentRef.get();
-    if (!agentDoc.exists) { return res.status(404).json({ error: `Agent with ID ${agentId} not found` }); }
-    
-    const currentAgentData = agentDoc.data();
+    // Fetch current agent from PostgreSQL
+    const currentResult = await pool.query('SELECT * FROM agents WHERE id = $1', [agentId]);
+    if (currentResult.rows.length === 0) {
+      return res.status(404).json({ error: `Agent with ID ${agentId} not found` });
+    }
+
+    const currentAgentData = mapRowToAgent(currentResult.rows[0]);
     logger.info('Current agent data retrieved for ID:', agentId);
 
     logger.info('Update Agent: Raw request body:', req.body);
     logger.info('Update Agent: Files received:', req.files || req.file || 'No files');
-    
+
     let incomingParsedData = _parseIncomingData(req.body);
 
     const files = req.files || {};
@@ -1285,19 +1352,19 @@ const updateAgent = async (req, res) => {
             if (!incomingParsedData.hasOwnProperty('fileUrl')) dataToShape.fileUrl = null;
         }
     }
-    
+
     const finalAgentData = _shapeAgentDataForSave(dataToShape, currentAgentData, req.user);
 
     if (!finalAgentData.name || (!finalAgentData.category && !finalAgentData.categories?.length)) {
-      logger.warn('Update Agent: Missing name or category after shaping.', { 
-        name: finalAgentData.name, 
+      logger.warn('Update Agent: Missing name or category after shaping.', {
+        name: finalAgentData.name,
         category: finalAgentData.category,
         categories: finalAgentData.categories
       });
       return res.status(400).json({ error: 'Name and category are required for update.' });
     }
 
-    logger.info('Final shaped agent data for Firestore update:', {
+    logger.info('Final shaped agent data for PostgreSQL update:', {
       id: agentId,
       name: finalAgentData.name,
       category: finalAgentData.category,
@@ -1310,20 +1377,33 @@ const updateAgent = async (req, res) => {
       jsonFileUpdated: finalAgentData.downloadUrl !== currentAgentData.downloadUrl,
     });
 
-    await agentRef.update(finalAgentData);
-    const updatedAgentDoc = await agentRef.get();
-    const updatedAgent = { id: agentId, ...updatedAgentDoc.data() };
-    
-    // 🆕 UPDATED: Cache invalidation for both old and new category formats
+    // Build UPDATE query from mapped row data (exclude 'id' from SET)
+    finalAgentData.id = agentId;
+    const row = mapAgentToRow(finalAgentData);
+    const updateColumns = Object.keys(row).filter(col => col !== 'id');
+    const setClauses = updateColumns.map((col, i) => `${col} = $${i + 1}`);
+    const updateValues = updateColumns.map(col => row[col]);
+    updateValues.push(agentId); // for the WHERE clause
+
+    await pool.query(
+      `UPDATE agents SET ${setClauses.join(', ')} WHERE id = $${updateValues.length}`,
+      updateValues
+    );
+
+    // Fetch the updated agent
+    const updatedResult = await pool.query('SELECT * FROM agents WHERE id = $1', [agentId]);
+    const updatedAgent = updatedResult.rows.length > 0 ? { id: agentId, ...mapRowToAgent(updatedResult.rows[0]) } : { id: agentId, ...finalAgentData };
+
+    // UPDATED: Cache invalidation for both old and new category formats
     try {
-      logger.info('🔄 Refreshing in-memory cache due to agent update...');
+      logger.info('Refreshing in-memory cache due to agent update...');
       await refreshAgentsCache();
-      
+
       await deleteCacheByPattern('agents:results:*');
       logger.info('Invalidated all Redis result caches');
-      
+
       await deleteCache(generateAgentCacheKey(agentId));
-      
+
       // Clear old categories
       if (currentAgentData.category) {
       await deleteCache(generateAgentCategoryCacheKey(currentAgentData.category));
@@ -1333,7 +1413,7 @@ const updateAgent = async (req, res) => {
           await deleteCache(generateAgentCategoryCacheKey(category));
         }
       }
-      
+
       // Clear new categories
       if (finalAgentData.category && finalAgentData.category !== currentAgentData.category) {
         await deleteCache(generateAgentCategoryCacheKey(finalAgentData.category));
@@ -1343,17 +1423,17 @@ const updateAgent = async (req, res) => {
           await deleteCache(generateAgentCategoryCacheKey(category));
         }
       }
-      
-      logger.info(`✅ Cache invalidation completed for agent update: ${agentId}`);
+
+      logger.info(`Cache invalidation completed for agent update: ${agentId}`);
     } catch (cacheError) {
-      logger.error('❌ Error during cache invalidation in updateAgent:', cacheError);
+      logger.error('Error during cache invalidation in updateAgent:', cacheError);
     }
-    
+
     return res.status(200).json(updatedAgent);
 
   } catch (error) {
     logger.error('Error updating agent:', error);
-    if (error.code) logger.error('Firebase Error Code:', error.code);
+    if (error.code) logger.error('PostgreSQL Error Code:', error.code);
     return res.status(500).json({ error: 'Failed to update agent', details: error.message });
   }
 };
@@ -1364,15 +1444,15 @@ const updateAgent = async (req, res) => {
 const toggleWishlist = async (req, res) => {
   try {
     let agentId = req.params.agentId;
-    
+
     if (agentId && agentId.includes('/')) {
       agentId = agentId.split('/')[0];
     }
-    
+
     if (agentId && agentId.includes('?')) {
       agentId = agentId.split('?')[0];
     }
-    
+
     if (!agentId || typeof agentId !== 'string' || agentId.trim() === '') {
       console.error('Invalid agent ID for wishlist toggle:', agentId);
       return res.status(400).json({ error: 'Invalid agent ID provided' });
@@ -1380,54 +1460,62 @@ const toggleWishlist = async (req, res) => {
 
     const sanitizedAgentId = agentId.trim();
     const { uid } = req.user;
-    
-    const agentDoc = await db.collection('agents').doc(sanitizedAgentId).get();
-    if (!agentDoc.exists) {
+
+    // Check agent exists
+    const agentResult = await pool.query('SELECT id FROM agents WHERE id = $1', [sanitizedAgentId]);
+    if (agentResult.rows.length === 0) {
       return res.status(404).json({ error: 'Agent not found' });
     }
-    
+
     const wishlistId = `${uid}_${sanitizedAgentId}`;
-    const wishlistRef = db.collection('wishlists').doc(wishlistId);
-    
-    const wishlistDoc = await wishlistRef.get();
-    
-    if (wishlistDoc.exists) {
-      await wishlistRef.delete();
-      
-      const agentRef = db.collection('agents').doc(sanitizedAgentId);
-      await db.runTransaction(async (transaction) => {
-        const agentDoc = await transaction.get(agentRef);
-        if (agentDoc.exists) {
-          const currentCount = agentDoc.data().wishlistCount || 0;
-          transaction.update(agentRef, { 
-            wishlistCount: Math.max(0, currentCount - 1) 
-          });
-        }
-      });
-      
-      return res.status(200).json({ 
+
+    // Check if wishlist entry exists
+    const wishlistResult = await pool.query('SELECT id FROM wishlists WHERE id = $1', [wishlistId]);
+
+    if (wishlistResult.rows.length > 0) {
+      // Remove from wishlist using a transaction
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM wishlists WHERE id = $1', [wishlistId]);
+        await client.query(
+          'UPDATE agents SET wishlist_count = GREATEST(0, wishlist_count - 1) WHERE id = $1',
+          [sanitizedAgentId]
+        );
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+
+      return res.status(200).json({
         message: 'Agent removed from wishlist',
         inWishlist: false
       });
     } else {
-      await wishlistRef.set({
-        userId: uid,
-        agentId: sanitizedAgentId,
-        createdAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      
-      const agentRef = db.collection('agents').doc(sanitizedAgentId);
-      await db.runTransaction(async (transaction) => {
-        const agentDoc = await transaction.get(agentRef);
-        if (agentDoc.exists) {
-          const currentCount = agentDoc.data().wishlistCount || 0;
-          transaction.update(agentRef, { 
-            wishlistCount: currentCount + 1 
-          });
-        }
-      });
-      
-      return res.status(201).json({ 
+      // Add to wishlist using a transaction
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          'INSERT INTO wishlists (id, user_id, agent_id) VALUES ($1, $2, $3)',
+          [wishlistId, uid, sanitizedAgentId]
+        );
+        await client.query(
+          'UPDATE agents SET wishlist_count = wishlist_count + 1 WHERE id = $1',
+          [sanitizedAgentId]
+        );
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+
+      return res.status(201).json({
         message: 'Agent added to wishlist',
         inWishlist: true
       });
@@ -1441,36 +1529,14 @@ const toggleWishlist = async (req, res) => {
 const getWishlists = async (req, res) => {
   try {
     const { uid } = req.user;
-    
-    const wishlistsSnapshot = await db.collection('wishlists')
-      .where('userId', '==', uid)
-      .get();
-    
-    const agentIds = [];
-    wishlistsSnapshot.forEach(doc => {
-      agentIds.push(doc.data().agentId);
-    });
-    
-    if (agentIds.length === 0) {
-      return res.status(200).json({ agents: [] });
-    }
-    
-    const agents = [];
-    
-    for (let i = 0; i < agentIds.length; i += 10) {
-      const batchIds = agentIds.slice(i, i + 10);
-      const batchSnapshot = await db.collection('agents')
-        .where(admin.firestore.FieldPath.documentId(), 'in', batchIds)
-        .get();
-      
-      batchSnapshot.forEach(doc => {
-        agents.push({
-          id: doc.id,
-          ...doc.data()
-        });
-      });
-    }
-    
+
+    const result = await pool.query(
+      `SELECT a.* FROM wishlists w JOIN agents a ON w.agent_id = a.id WHERE w.user_id = $1`,
+      [uid]
+    );
+
+    const agents = result.rows.map(row => mapRowToAgent(row));
+
     return res.status(200).json({ agents });
   } catch (error) {
     console.error('Error fetching wishlists:', error);
@@ -1481,33 +1547,36 @@ const getWishlists = async (req, res) => {
 const getWishlistById = async (req, res) => {
   try {
     let wishlistId = req.params.wishlistId;
-    
+
     if (wishlistId && wishlistId.includes('/')) {
       wishlistId = wishlistId.split('/')[0];
     }
-    
+
     if (wishlistId && wishlistId.includes('?')) {
       wishlistId = wishlistId.split('?')[0];
     }
-    
+
     if (!wishlistId || typeof wishlistId !== 'string' || wishlistId.trim() === '') {
       console.error('Invalid wishlist ID:', wishlistId);
       return res.status(400).json({ error: 'Invalid wishlist ID provided' });
     }
 
     const sanitizedWishlistId = wishlistId.trim();
-    
-    const wishlistDoc = await db.collection('wishlists').doc(sanitizedWishlistId).get();
-    
-    if (!wishlistDoc.exists) {
+
+    const result = await pool.query('SELECT * FROM wishlists WHERE id = $1', [sanitizedWishlistId]);
+
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Wishlist not found' });
     }
-    
+
+    const row = result.rows[0];
     const wishlistData = {
-      id: wishlistDoc.id,
-      ...wishlistDoc.data()
+      id: row.id,
+      userId: row.user_id,
+      agentId: row.agent_id,
+      createdAt: row.created_at
     };
-    
+
     return res.status(200).json(wishlistData);
   } catch (error) {
     console.error('Error fetching wishlist:', error);
@@ -1515,20 +1584,20 @@ const getWishlistById = async (req, res) => {
   }
 };
 
-const generateMockAgents = (count) => { 
+const generateMockAgents = (count) => {
   const categories = ['Technology', 'Business', 'Productivity', 'Creative', 'Education'];
   const agents = [];
-  
+
   for (let i = 0; i < count; i++) {
     agents.push({
       name: `Mock Agent ${i + 1}`,
       title: `AI Assistant ${i + 1}`,
       description: `This is a mock agent for testing purposes - Agent ${i + 1}`,
       category: categories[i % categories.length],
-      categories: [categories[i % categories.length], 'AI'], // 🆕 NEW
+      categories: [categories[i % categories.length], 'AI'],
       price: Math.floor(Math.random() * 100),
-      businessValue: `Increases productivity by ${20 + Math.floor(Math.random() * 60)}% through automated workflows.`, // 🆕 NEW
-      deliverables: [ // 🆕 NEW
+      businessValue: `Increases productivity by ${20 + Math.floor(Math.random() * 60)}% through automated workflows.`,
+      deliverables: [
         {
           fileName: `mock-agent-${i + 1}.json`,
           description: `Complete automation workflow for Mock Agent ${i + 1}`,
@@ -1537,7 +1606,7 @@ const generateMockAgents = (count) => {
           contentType: 'application/json'
         }
       ],
-      paddleCompliant: true, // 🆕 NEW
+      paddleCompliant: true,
       creator: {
         name: 'Mock Creator',
         id: 'mock-creator-id'
@@ -1546,7 +1615,7 @@ const generateMockAgents = (count) => {
       updatedAt: new Date().toISOString()
     });
   }
-  
+
   return agents;
 };
 
@@ -1554,20 +1623,38 @@ const seedAgents = async (req, res) => {
   try {
     const { count = 10 } = req.query;
     const mockAgents = generateMockAgents(parseInt(count));
-    
-    const batch = db.batch();
-    
-    mockAgents.forEach(agent => {
-      const agentRef = db.collection('agents').doc();
-      batch.set(agentRef, agent);
-    });
-    
-    await batch.commit();
-    
+
+    // Use a single transaction with multiple INSERTs
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      for (const agent of mockAgents) {
+        const agentId = uuidv4();
+        agent.id = agentId;
+        const row = mapAgentToRow(agent);
+        const columns = Object.keys(row);
+        const values = Object.values(row);
+        const placeholders = columns.map((_, i) => `$${i + 1}`);
+
+        await client.query(
+          `INSERT INTO agents (${columns.join(', ')}) VALUES (${placeholders.join(', ')})`,
+          values
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+
     await refreshAgentsCache();
 
-    return res.status(200).json({ 
-        success: true, 
+    return res.status(200).json({
+        success: true,
       message: `Successfully seeded ${count} mock agents`,
       count: parseInt(count)
     });
@@ -1586,11 +1673,11 @@ const deleteAgent = async (req, res) => {
     }
 
     let agentId = req.params.agentId || req.params.id;
-    
+
     if (agentId && agentId.includes('/')) {
       agentId = agentId.split('/')[0];
     }
-    
+
     if (!agentId || typeof agentId !== 'string' || agentId.trim() === '') {
       console.error('Invalid agent ID for deletion:', agentId);
       return res.status(400).json({ error: 'Invalid agent ID provided' });
@@ -1598,31 +1685,26 @@ const deleteAgent = async (req, res) => {
 
     const sanitizedAgentId = agentId.trim();
     console.log('Processing agent deletion for ID:', sanitizedAgentId);
-    
-    const agentDoc = await db.collection('agents').doc(sanitizedAgentId).get();
-    if (!agentDoc.exists) {
+
+    // Fetch agent data before deletion (for cache invalidation)
+    const agentResult = await pool.query('SELECT * FROM agents WHERE id = $1', [sanitizedAgentId]);
+    if (agentResult.rows.length === 0) {
       return res.status(404).json({ error: 'Agent not found' });
     }
-    
-    const agentData = agentDoc.data();
-    
-    await db.collection('agents').doc(sanitizedAgentId).delete();
-    
-    const priceQuery = await db.collection('prices').where('agentId', '==', sanitizedAgentId).get();
-    const batch = db.batch();
-    priceQuery.forEach(doc => {
-      batch.delete(doc.ref);
-    });
-    await batch.commit();
-    
-    // 🆕 UPDATED: Cache invalidation for both old and new category formats
+
+    const agentData = mapRowToAgent(agentResult.rows[0]);
+
+    // Delete agent (prices will cascade due to ON DELETE CASCADE)
+    await pool.query('DELETE FROM agents WHERE id = $1', [sanitizedAgentId]);
+
+    // UPDATED: Cache invalidation for both old and new category formats
     try {
-      logger.info('🔄 Refreshing in-memory cache due to agent deletion...');
+      logger.info('Refreshing in-memory cache due to agent deletion...');
       await refreshAgentsCache();
-      
+
       await deleteCacheByPattern('agents:results:*');
       logger.info('Invalidated all Redis result caches');
-      
+
       await deleteCache(generateAgentCacheKey(sanitizedAgentId));
       if (agentData.category) {
         await deleteCache(generateAgentCategoryCacheKey(agentData.category));
@@ -1633,14 +1715,14 @@ const deleteAgent = async (req, res) => {
         }
       }
       await deleteCache(generateAgentCountCacheKey());
-      
-      logger.info(`✅ Cache invalidation completed for agent deletion: ${sanitizedAgentId}`);
+
+      logger.info(`Cache invalidation completed for agent deletion: ${sanitizedAgentId}`);
     } catch (cacheError) {
-      logger.error('❌ Error during cache invalidation in deleteAgent:', cacheError);
+      logger.error('Error during cache invalidation in deleteAgent:', cacheError);
     }
-    
-    return res.status(200).json({ 
-      success: true, 
+
+    return res.status(200).json({
+      success: true,
       message: 'Agent deleted successfully',
       id: sanitizedAgentId
     });
@@ -1656,10 +1738,10 @@ const deleteAgent = async (req, res) => {
 const getAgentCount = async (req, res) => {
   try {
     logger.info('getAgentCount called - checking cache first');
-    
+
     const cacheKey = generateAgentCountCacheKey();
     logger.info(`Agent count cache key: ${cacheKey}`);
-    
+
     try {
       const cachedCount = await getCache(cacheKey);
       if (cachedCount !== null) {
@@ -1670,29 +1752,29 @@ const getAgentCount = async (req, res) => {
           fromCache: true
         });
       }
-      logger.info('Cache MISS for agent count, fetching from Firebase');
+      logger.info('Cache MISS for agent count, fetching from PostgreSQL');
     } catch (cacheError) {
       logger.error('Cache error for agent count:', cacheError);
     }
-    
-    const agentsSnapshot = await db.collection('agents').get();
-    const totalCount = agentsSnapshot.size;
-    
-    logger.info(`Fetched agent count from Firebase: ${totalCount}`);
-    
+
+    const result = await pool.query('SELECT COUNT(*) FROM agents');
+    const totalCount = parseInt(result.rows[0].count, 10);
+
+    logger.info(`Fetched agent count from PostgreSQL: ${totalCount}`);
+
     try {
       await setCache(cacheKey, totalCount);
       logger.info(`Cached agent count: ${totalCount} for 24 hours`);
     } catch (cacheError) {
       logger.error('Error caching agent count:', cacheError);
     }
-    
+
     return res.status(200).json({
       success: true,
       totalCount: totalCount,
       fromCache: false
     });
-    
+
   } catch (error) {
     logger.error('Error in getAgentCount:', error);
     return res.status(500).json({
@@ -1713,7 +1795,7 @@ const getSearchResultsCount = async (req, res) => {
       verified,
       featured,
       complexity,
-      paddleCompliant // 🆕 NEW
+      paddleCompliant
     } = req.query;
 
     logger.info(`getSearchResultsCount called with: searchQuery=${searchQuery}, category=${category}`);
@@ -1728,10 +1810,10 @@ const getSearchResultsCount = async (req, res) => {
 
     const finalSearchQuery = searchQuery.trim();
     const filters = { category, priceMin, priceMax, verified, featured, complexity, paddleCompliant };
-    
+
     const countCacheKey = `agents:search:count:${finalSearchQuery}:${JSON.stringify(filters)}`;
     logger.info(`Search count cache key: ${countCacheKey}`);
-    
+
     try {
       const cachedCount = await getCache(countCacheKey);
       if (cachedCount !== null) {
@@ -1755,12 +1837,12 @@ const getSearchResultsCount = async (req, res) => {
     }
 
     let results = [...allAgentsCache];
-    
+
     results = searchAgents(results, finalSearchQuery);
     results = filterAgents(results, filters);
 
     const searchResultsCount = results.length;
-    logger.info(`Search count result: ${allAgentsCache.length} → ${searchResultsCount} agents for "${finalSearchQuery}"`);
+    logger.info(`Search count result: ${allAgentsCache.length} -> ${searchResultsCount} agents for "${finalSearchQuery}"`);
 
     try {
       await setCache(countCacheKey, searchResultsCount);
@@ -1791,17 +1873,17 @@ const getSearchResultsCount = async (req, res) => {
 
 const refreshCache = async (req, res) => {
   try {
-    logger.info('🔄 Manual cache refresh requested');
+    logger.info('Manual cache refresh requested');
     const success = await refreshAgentsCache();
-    
+
     if (success) {
       // Clear all agent-related cache patterns
       await deleteCacheByPattern('agents:results:*');
       await deleteCacheByPattern('agents:search:*');
       await deleteCacheByPattern('agents:count:*');
       await deleteCacheByPattern('agent:*');
-      logger.info('🧹 Cleared all agent-related cache patterns');
-      
+      logger.info('Cleared all agent-related cache patterns');
+
       return res.status(200).json({
         success: true,
         message: `Cache refreshed successfully. Loaded ${allAgentsCache?.length || 0} agents`,
@@ -1816,7 +1898,7 @@ const refreshCache = async (req, res) => {
       });
     }
   } catch (error) {
-    logger.error('❌ Error in refreshCache:', error);
+    logger.error('Error in refreshCache:', error);
     return res.status(500).json({
       success: false,
       error: error.message,
@@ -1845,39 +1927,39 @@ const getCacheStats = async (req, res) => {
         sampleResultKey: generateResultsCacheKey('gmail', { category: 'All' }, 20, 0)
       }
     };
-    
+
     return res.status(200).json(stats);
   } catch (error) {
-    logger.error('❌ Error in getCacheStats:', error);
+    logger.error('Error in getCacheStats:', error);
     return res.status(500).json({ error: error.message });
   }
 };
 
 const initializeCache = async () => {
-  logger.info('🚀 Initializing agents cache on startup...');
+  logger.info('Initializing agents cache on startup...');
   const success = await refreshAgentsCache();
   if (success) {
-    logger.info('✅ Cache initialization completed successfully');
+    logger.info('Cache initialization completed successfully');
   } else {
-    logger.error('❌ Cache initialization failed');
+    logger.error('Cache initialization failed');
   }
   return success;
 };
 
 // Add placeholder functions for compatibility
-const combinedUpdate = async (req, res) => { 
+const combinedUpdate = async (req, res) => {
   return res.status(501).json({ error: 'Not implemented yet' });
 };
 
-const createAgentWithPrice = (req, res) => { 
+const createAgentWithPrice = (req, res) => {
   return res.status(501).json({ error: 'Not implemented yet' });
 };
 
-const getDownloadCount = async (req, res) => { 
+const getDownloadCount = async (req, res) => {
   return res.status(501).json({ error: 'Not implemented yet' });
 };
 
-const incrementDownloadCount = async (req, res) => { 
+const incrementDownloadCount = async (req, res) => {
   return res.status(501).json({ error: 'Not implemented yet' });
 };
 
@@ -1885,11 +1967,11 @@ const getLatestAgents = async (limit = 5) => {
   return [];
 };
 
-const getLatestAgentsRoute = async (req, res) => { 
+const getLatestAgentsRoute = async (req, res) => {
   try {
     const { limit = 5 } = req.query;
     const agents = await getLatestAgents(parseInt(limit));
-    
+
     return res.status(200).json({
       success: true,
       agents: agents,
@@ -1912,8 +1994,9 @@ const getUserEntitlements = async (userId) => {
   const cacheKey = `user:${userId}:entitlements`;
   const cached = await getCache(cacheKey);
   if (cached) return cached;
-  const userDoc = await db.collection('users').doc(userId).get();
-  const data = userDoc.exists ? userDoc.data() : {};
+
+  const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+  const data = userResult.rows.length > 0 ? userResult.rows[0] : {};
   const nowTs = Date.now();
   const subscription = data.subscription || {};
   const currentPeriodEnd = subscription.currentPeriodEnd
@@ -1939,13 +2022,7 @@ const canUserReviewAgent = async (userId, agentId) => {
   if (ent.isAdmin) return { canReview: true, reason: 'Admin user' };
   if (ent.purchases.includes(agentId)) return { canReview: true, reason: 'Verified purchase' };
   if (ent.downloads.includes(agentId)) return { canReview: true, reason: 'Downloaded agent' };
-  // Fallback: check downloads collection
-  const dlSnap = await db.collection('agent_downloads')
-    .where('agentId', '==', agentId)
-    .where('userId', '==', userId)
-    .limit(1)
-    .get();
-  if (!dlSnap.empty) return { canReview: true, reason: 'Downloaded agent' };
+  // Since we don't have agent_downloads table, rely on entitlements only
   return { canReview: false, reason: 'You must purchase or download this agent before reviewing' };
 };
 
@@ -1978,56 +2055,73 @@ const addAgentReview_controller = async (req, res) => {
       return res.status(403).json({ success: false, error: eligibility.reason });
     }
 
-    // Fetch agent doc
-    let agentRef = db.collection('agents').doc(agentId);
-    let agentSnap = await agentRef.get();
-    if (!agentSnap.exists) {
-      // Fallback: lookup by 'id' field
-      const byId = await db.collection('agents').where('id', '==', agentId).limit(1).get();
-      if (!byId.empty) {
-        agentRef = byId.docs[0].ref;
-        agentSnap = byId.docs[0];
-      } else {
-        // Fallback: lookup by 'slug'
-        const bySlug = await db.collection('agents').where('slug', '==', agentId).limit(1).get();
-        if (!bySlug.empty) {
-          agentRef = bySlug.docs[0].ref;
-          agentSnap = bySlug.docs[0];
-        }
-      }
+    // Check agent exists
+    const agentResult = await pool.query('SELECT id FROM agents WHERE id = $1', [agentId]);
+    if (agentResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Agent not found' });
     }
-    if (!agentSnap.exists) return res.status(404).json({ success: false, error: 'Agent not found' });
-    const agentData = agentSnap.data();
-    const canonicalAgentId = agentData.id || agentSnap.id;
+    const canonicalAgentId = agentId;
 
-    // Prevent duplicate per user
-    const existing = Array.isArray(agentData.reviews) ? agentData.reviews.find(r => r.userId === userId) : null;
-    if (existing) return res.status(409).json({ success: false, error: 'You have already reviewed this agent' });
+    // Check for duplicate review by this user
+    const existingReview = await pool.query(
+      'SELECT id FROM agent_reviews WHERE agent_id = $1 AND user_id = $2',
+      [agentId, userId]
+    );
+    if (existingReview.rows.length > 0) {
+      return res.status(409).json({ success: false, error: 'You have already reviewed this agent' });
+    }
 
     const reviewId = `${userId}_${Date.now()}`;
+    const userName = req.user?.name || req.user?.email?.split('@')[0] || 'User';
+    const verificationStatus = eligibility.reason === 'Verified purchase' ? 'verified_purchase'
+      : eligibility.reason === 'Downloaded agent' ? 'verified_download'
+      : eligibility.reason === 'Admin user' ? 'admin' : 'unverified';
+
+    // Insert review and update agent aggregates in a transaction
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      await client.query(
+        `INSERT INTO agent_reviews (id, agent_id, user_id, user_name, rating, content, verification_status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [reviewId, agentId, userId, userName, numericRating, content.trim(), verificationStatus]
+      );
+
+      // Update agent aggregates
+      await client.query(
+        `UPDATE agents SET
+           review_count = (SELECT COUNT(*) FROM agent_reviews WHERE agent_id = $1),
+           average_rating = (SELECT COALESCE(AVG(rating), 0) FROM agent_reviews WHERE agent_id = $1)
+         WHERE id = $1`,
+        [agentId]
+      );
+
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    // Fetch updated aggregates
+    const updatedAgent = await pool.query(
+      'SELECT average_rating, review_count FROM agents WHERE id = $1',
+      [agentId]
+    );
+    const averageRating = updatedAgent.rows.length > 0 ? parseFloat(updatedAgent.rows[0].average_rating) : 0;
+    const newCount = updatedAgent.rows.length > 0 ? updatedAgent.rows[0].review_count : 1;
+
     const review = {
       id: reviewId,
       userId,
-      userName: req.user?.name || req.user?.email?.split('@')[0] || 'User',
+      userName,
       rating: numericRating,
       content: content.trim(),
       createdAt: new Date().toISOString(),
-      verificationStatus: eligibility.reason === 'Verified purchase' ? 'verified_purchase'
-        : eligibility.reason === 'Downloaded agent' ? 'verified_download'
-        : eligibility.reason === 'Admin user' ? 'admin' : 'unverified'
+      verificationStatus
     };
-
-    // Update Firestore: append review, update aggregates
-    const reviews = Array.isArray(agentData.reviews) ? [...agentData.reviews, review] : [review];
-    const newCount = reviews.length;
-    const sumRatings = reviews.reduce((acc, r) => acc + (Number(r.rating) || 0), 0);
-    const averageRating = Number((sumRatings / newCount).toFixed(2));
-
-    await agentRef.update({
-      reviews,
-      reviewCount: newCount,
-      averageRating
-    });
 
     // Invalidate cache for this agent
     try {
@@ -2059,48 +2153,61 @@ const deleteAgentReview_controller = async (req, res) => {
     if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
     if (!agentId || !reviewId) return res.status(400).json({ success: false, error: 'Missing agentId or reviewId' });
 
-    // Resolve agent document by docId/id/slug
-    let agentRef = db.collection('agents').doc(agentId);
-    let agentSnap = await agentRef.get();
-    if (!agentSnap.exists) {
-      const byId = await db.collection('agents').where('id', '==', agentId).limit(1).get();
-      if (!byId.empty) {
-        agentRef = byId.docs[0].ref;
-        agentSnap = byId.docs[0];
-      } else {
-        const bySlug = await db.collection('agents').where('slug', '==', agentId).limit(1).get();
-        if (!bySlug.empty) {
-          agentRef = bySlug.docs[0].ref;
-          agentSnap = bySlug.docs[0];
-        }
-      }
+    // Check agent exists
+    const agentResult = await pool.query('SELECT id FROM agents WHERE id = $1', [agentId]);
+    if (agentResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Agent not found' });
     }
-    if (!agentSnap.exists) return res.status(404).json({ success: false, error: 'Agent not found' });
+    const canonicalAgentId = agentId;
 
-    const agentData = agentSnap.data();
-    const canonicalAgentId = agentData.id || agentSnap.id;
-    const reviews = Array.isArray(agentData.reviews) ? agentData.reviews : [];
-
-    const target = reviews.find(r => (r.id === reviewId) || (r._id === reviewId));
-    if (!target) return res.status(404).json({ success: false, error: 'Review not found' });
+    // Find the review
+    const reviewResult = await pool.query(
+      'SELECT * FROM agent_reviews WHERE id = $1 AND agent_id = $2',
+      [reviewId, agentId]
+    );
+    if (reviewResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Review not found' });
+    }
+    const target = reviewResult.rows[0];
 
     const ent = await getUserEntitlements(userId);
     const isAdminUser = ent.isAdmin;
-    const isOwner = target.userId === userId;
+    const isOwner = target.user_id === userId;
     if (!isAdminUser && !isOwner) {
       return res.status(403).json({ success: false, error: 'Not allowed to delete this review' });
     }
 
-    const remaining = reviews.filter(r => (r.id !== reviewId) && (r._id !== reviewId));
-    const newCount = remaining.length;
-    const sumRatings = remaining.reduce((acc, r) => acc + (Number(r.rating) || 0), 0);
-    const averageRating = newCount > 0 ? Number((sumRatings / newCount).toFixed(2)) : 0;
+    // Delete review and update agent aggregates in a transaction
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
-    await agentRef.update({
-      reviews: remaining,
-      reviewCount: newCount,
-      averageRating
-    });
+      await client.query('DELETE FROM agent_reviews WHERE id = $1', [reviewId]);
+
+      // Update agent aggregates
+      await client.query(
+        `UPDATE agents SET
+           review_count = (SELECT COUNT(*) FROM agent_reviews WHERE agent_id = $1),
+           average_rating = (SELECT COALESCE(AVG(rating), 0) FROM agent_reviews WHERE agent_id = $1)
+         WHERE id = $1`,
+        [agentId]
+      );
+
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    // Fetch updated aggregates
+    const updatedAgent = await pool.query(
+      'SELECT average_rating, review_count FROM agents WHERE id = $1',
+      [agentId]
+    );
+    const averageRating = updatedAgent.rows.length > 0 ? parseFloat(updatedAgent.rows[0].average_rating) : 0;
+    const newCount = updatedAgent.rows.length > 0 ? updatedAgent.rows[0].review_count : 0;
 
     try {
       const cacheKey = generateAgentCacheKey(canonicalAgentId);
@@ -2123,36 +2230,36 @@ logger.info("Before export - function status check:");
 const functionsToExport = {
   // Main API functions
   getAgents,
-  getFeaturedAgents, 
-  getAgentById, 
-  
+  getFeaturedAgents,
+  getAgentById,
+
   // Wishlist functions
-  toggleWishlist, 
-  getWishlists, 
+  toggleWishlist,
+  getWishlists,
   getWishlistById,
-  
+
   // CRUD operations
-  createAgent, 
-  updateAgent, 
+  createAgent,
+  updateAgent,
   deleteAgent,
-  
+
   // Utility functions
-  seedAgents, 
+  seedAgents,
   generateMockAgents,
-  combinedUpdate, 
-  createAgentWithPrice, 
-  getDownloadCount, 
+  combinedUpdate,
+  createAgentWithPrice,
+  getDownloadCount,
   incrementDownloadCount,
-  
+
   // Latest agents
-  getLatestAgents, 
+  getLatestAgents,
   getLatestAgentsRoute,
-  
+
   // Count and search endpoints
   getAgentCount,
   getSearchResultsCount,
   searchAgents,
-  
+
   // Cache management
   refreshCache,
   getCacheStats,

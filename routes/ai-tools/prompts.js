@@ -1,25 +1,56 @@
 ﻿const express = require('express');
 const router = express.Router();
 const admin = require('firebase-admin');
+const { pool } = require('../../config/database');
+const { v4: uuidv4 } = require('uuid');
 const { auth } = require('../../middleware/authenticationMiddleware');
 const upload = require('../../middleware/upload');
 const path = require('path');
 const fs = require('fs');
 const logger = require('../../utils/logger');
 const OpenAI = require('openai');
-const { 
-  getCache, 
-  setCache, 
-  deleteCache, 
+const {
+  getCache,
+  setCache,
+  deleteCache,
   deleteCacheByPattern,
   generatePromptCacheKey,
   generatePromptCategoryCacheKey,
   generatePromptCountCacheKey,
-  generatePromptSearchCacheKey 
+  generatePromptSearchCacheKey
 } = require('../../utils/cache');
 
-// Collection reference - Prompts only
-const COLLECTION_NAME = 'prompts';
+/**
+ * Helper: Convert a PostgreSQL row (snake_case) to camelCase object
+ */
+const mapRowToCamelCase = (row) => {
+  if (!row) return null;
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    link: row.link,
+    image: row.image,
+    videoUrl: row.video_url,
+    inputImage: row.input_image,
+    keywords: row.keywords || [],
+    tags: row.tags || [],
+    category: row.category,
+    additionalHTML: row.additional_html,
+    jsonPrompt: row.json_prompt,
+    createdBy: row.created_by,
+    updatedBy: row.updated_by,
+    likes: row.likes || [],
+    likeCount: row.like_count || 0,
+    viewCount: row.view_count || 0,
+    downloadCount: row.download_count || 0,
+    isFeatured: row.is_featured || false,
+    isPublic: row.is_public !== false,
+    type: row.type || 'prompt',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+};
 
 // ==========================================
 // IN-MEMORY CACHE FOR ALL PROMPTS
@@ -45,37 +76,31 @@ const PROMPT_CATEGORIES = [
 ];
 
 /**
- * Load all prompts from Firebase into memory cache
+ * Load all prompts from PostgreSQL into memory cache
  */
 const refreshPromptsCache = async () => {
   try {
-    logger.info('🔄 Refreshing prompts cache from Firebase...');
+    logger.info('Refreshing prompts cache from PostgreSQL...');
     const startTime = Date.now();
-    
-    // Fetch ALL prompts from Firebase
-    const snapshot = await admin.firestore().collection(COLLECTION_NAME)
-      .orderBy('createdAt', 'desc')
-      .get();
-    
-    allPromptsCache = [];
-    snapshot.forEach(doc => {
-      allPromptsCache.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
-    
+
+    // Fetch ALL prompts from PostgreSQL
+    const { rows } = await pool.query(
+      "SELECT * FROM prompts WHERE (type = 'prompt' OR type IS NULL) ORDER BY created_at DESC"
+    );
+
+    allPromptsCache = rows.map(mapRowToCamelCase);
+
     cacheLastUpdated = new Date();
     const loadTime = Date.now() - startTime;
-    
-    logger.info(`✅ Loaded ${allPromptsCache.length} prompts into memory cache in ${loadTime}ms`);
-    
+
+    logger.info(`Loaded ${allPromptsCache.length} prompts into memory cache in ${loadTime}ms`);
+
     // Also cache total count in Redis
     await setCache('prompts:total:count', allPromptsCache.length);
-    
+
     return true;
   } catch (error) {
-    logger.error('❌ Error refreshing prompts cache:', error);
+    logger.error('Error refreshing prompts cache:', error);
     return false;
   }
 };
@@ -89,7 +114,7 @@ const ensureCacheLoaded = async () => {
                       (new Date() - cacheLastUpdated) > CACHE_REFRESH_INTERVAL;
   
   if (needsRefresh) {
-    logger.info('Prompts cache needs refresh, loading from Firebase...');
+    logger.info('Prompts cache needs refresh, loading from PostgreSQL...');
     await refreshPromptsCache();
   }
   
@@ -386,8 +411,7 @@ router.get('/', async (req, res) => {
     // 6. Sort results (newest first)
     results.sort((a, b) => {
       if (a.createdAt && b.createdAt) {
-        return new Date(b.createdAt.toDate ? b.createdAt.toDate() : b.createdAt) - 
-               new Date(a.createdAt.toDate ? a.createdAt.toDate() : a.createdAt);
+        return new Date(b.createdAt) - new Date(a.createdAt);
       }
       return 0;
     });
@@ -489,19 +513,19 @@ router.get('/count', async (req, res) => {
       });
     }
     
-    // Get count from Firebase
-    const snapshot = await admin.firestore().collection(COLLECTION_NAME).get();
-    const totalCount = snapshot.size;
-    
+    // Get count from PostgreSQL
+    const { rows } = await pool.query("SELECT COUNT(*) AS count FROM prompts WHERE (type = 'prompt' OR type IS NULL)");
+    const totalCount = parseInt(rows[0].count, 10);
+
     // Cache the result
     await setCache(cacheKey, totalCount);
-    
+
     return res.status(200).json({
       success: true,
       totalCount: totalCount,
       fromCache: false
     });
-    
+
   } catch (error) {
     logger.error('Error getting prompt count:', error);
     return res.status(500).json({
@@ -676,8 +700,7 @@ router.get('/featured', async (req, res) => {
       .filter(prompt => prompt.isFeatured === true)
       .sort((a, b) => {
         if (a.createdAt && b.createdAt) {
-          return new Date(b.createdAt.toDate ? b.createdAt.toDate() : b.createdAt) - 
-                 new Date(a.createdAt.toDate ? a.createdAt.toDate() : a.createdAt);
+          return new Date(b.createdAt) - new Date(a.createdAt);
         }
         return 0;
       })
@@ -983,21 +1006,20 @@ router.get('/:id', async (req, res) => {
       }
     }
     
-    // Fetch from Firebase
-    const promptDoc = await admin.firestore().collection(COLLECTION_NAME).doc(cleanPromptId).get();
-    
-    if (!promptDoc.exists) {
+    // Fetch from PostgreSQL
+    const { rows } = await pool.query('SELECT * FROM prompts WHERE id = $1', [cleanPromptId]);
+
+    if (rows.length === 0) {
       logger.error(`Prompt not found with ID: ${cleanPromptId}`);
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
         message: 'Prompt not found',
-        error: `No prompt exists with ID: ${promptId}` 
+        error: `No prompt exists with ID: ${promptId}`
       });
     }
-    
+
     const promptData = {
-      id: promptDoc.id,
-      ...promptDoc.data(),
+      ...mapRowToCamelCase(rows[0]),
       _fetchTime: Date.now()
     };
     
@@ -1521,57 +1543,65 @@ router.post('/', auth, upload.fields([
     console.log('req.body.image type:', typeof req.body.image);
     console.log('req.body.inputImage type:', typeof req.body.inputImage);
     
-    // Prepare the document
-    const newPrompt = {
+    // Generate a new UUID for the prompt
+    const newId = uuidv4();
+
+    // Insert into PostgreSQL
+    const insertQuery = `
+      INSERT INTO prompts (
+        id, title, description, link, image, video_url, input_image,
+        keywords, tags, category, additional_html, json_prompt,
+        created_by, likes, like_count, view_count, download_count,
+        is_featured, is_public, type, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7,
+        $8, $9, $10, $11, $12,
+        $13, $14, $15, $16, $17,
+        $18, $19, $20, NOW(), NOW()
+      ) RETURNING *
+    `;
+
+    const insertValues = [
+      newId,
       title,
       description,
-      link: safeLink,
-      image: imageUrl || '',
-      videoUrl: extractedVideoUrl || '', // YouTube or Instagram video URL (extracted from iframe if needed)
-      inputImage: inputImageUrl || '', // Input image for comparison
-      keywords: keywords || [],
-      tags: tags || [],
-      category: category || '',
-      additionalHTML: additionalHTML || '',
-      jsonPrompt: '', // JSON prompt field (empty by default, generated on demand)
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      createdBy: req.user.uid,
-      
-      // Prompt-specific fields
-      likes: [], // Array of user IDs who liked this prompt
-      likeCount: 0,
-      viewCount: 0,
-      downloadCount: 0,
-      isFeatured: false,
-      isPublic: true,
-      type: 'prompt' // Explicitly mark as prompt
-    };
-    
-    // Add the document to prompts collection
-    const docRef = await admin.firestore().collection(COLLECTION_NAME).add(newPrompt);
-    
-    // Get the created document
-    const createdDoc = await docRef.get();
-    
+      safeLink,
+      imageUrl || '',
+      extractedVideoUrl || '',
+      inputImageUrl || '',
+      keywords || [],
+      tags || [],
+      category || '',
+      additionalHTML || '',
+      '', // jsonPrompt empty by default
+      req.user.uid,
+      [], // likes
+      0,  // likeCount
+      0,  // viewCount
+      0,  // downloadCount
+      false, // isFeatured
+      true,  // isPublic
+      'prompt'
+    ];
+
+    const { rows: insertedRows } = await pool.query(insertQuery, insertValues);
+    const createdPrompt = mapRowToCamelCase(insertedRows[0]);
+
     // Cache invalidation
     try {
-      logger.info('🔄 Refreshing prompts cache due to new prompt creation...');
+      logger.info('Refreshing prompts cache due to new prompt creation...');
       await refreshPromptsCache();
       await deleteCacheByPattern('prompts:results:*');
       await deleteCache(generatePromptCategoryCacheKey(category));
       await deleteCache(generatePromptCountCacheKey());
-      logger.info(`✅ Cache invalidation completed for new prompt: ${docRef.id}`);
+      logger.info(`Cache invalidation completed for new prompt: ${newId}`);
     } catch (cacheError) {
-      logger.error('❌ Error during cache invalidation in createPrompt:', cacheError);
+      logger.error('Error during cache invalidation in createPrompt:', cacheError);
     }
-    
+
     return res.status(201).json({
       success: true,
-      data: {
-        id: docRef.id,
-        ...createdDoc.data()
-      }
+      data: createdPrompt
     });
   } catch (error) {
     console.error('Error creating prompt:', error);
@@ -1698,17 +1728,16 @@ router.put('/:id', auth, upload.fields([
     const { title, description, link, keyword, category, additionalHTML, isFeatured, videoUrl } = req.body;
     
     // Check if the prompt exists
-    const promptRef = admin.firestore().collection(COLLECTION_NAME).doc(id);
-    const doc = await promptRef.get();
-    
-    if (!doc.exists) {
+    const { rows: existingRows } = await pool.query('SELECT * FROM prompts WHERE id = $1', [id]);
+
+    if (existingRows.length === 0) {
       return res.status(404).json({
         success: false,
         error: 'Prompt not found'
       });
     }
-    
-    const currentPromptData = doc.data();
+
+    const currentPromptData = mapRowToCamelCase(existingRows[0]);
     
     // Handle tags and keywords
     let tags = undefined;
@@ -1986,33 +2015,38 @@ router.put('/:id', auth, upload.fields([
     console.log('req.body.image type:', typeof req.body.image);
     console.log('req.body.inputImage type:', typeof req.body.inputImage);
     
-    // Prepare the update data
-    const updateData = {
-      ...(title && { title }),
-      ...(description && { description }),
-      ...(link !== undefined && { link }),
-      ...(imageUrl && { image: imageUrl }),
-      ...(videoUrl !== undefined && { videoUrl }),
-      ...(inputImageUrl !== undefined && { inputImage: inputImageUrl }),
-      ...(keywords && { keywords }),
-      ...(tags && { tags }),
-      ...(category && { category }),
-      ...(additionalHTML !== undefined && { additionalHTML }),
-      ...(req.body.jsonPrompt !== undefined && { jsonPrompt: req.body.jsonPrompt }),
-      ...(isFeatured !== undefined && { isFeatured: isFeatured === 'true' || isFeatured === true }),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedBy: req.user.uid
-    };
-    
-    // Update the document
-    await promptRef.update(updateData);
-    
-    // Get the updated document
-    const updatedDoc = await promptRef.get();
-    
+    // Build dynamic UPDATE query
+    const setClauses = [];
+    const values = [];
+    let paramIndex = 1;
+
+    if (title) { setClauses.push(`title = $${paramIndex++}`); values.push(title); }
+    if (description) { setClauses.push(`description = $${paramIndex++}`); values.push(description); }
+    if (link !== undefined) { setClauses.push(`link = $${paramIndex++}`); values.push(link); }
+    if (imageUrl) { setClauses.push(`image = $${paramIndex++}`); values.push(imageUrl); }
+    if (videoUrl !== undefined) { setClauses.push(`video_url = $${paramIndex++}`); values.push(videoUrl); }
+    if (inputImageUrl !== undefined) { setClauses.push(`input_image = $${paramIndex++}`); values.push(inputImageUrl); }
+    if (keywords) { setClauses.push(`keywords = $${paramIndex++}`); values.push(keywords); }
+    if (tags) { setClauses.push(`tags = $${paramIndex++}`); values.push(tags); }
+    if (category) { setClauses.push(`category = $${paramIndex++}`); values.push(category); }
+    if (additionalHTML !== undefined) { setClauses.push(`additional_html = $${paramIndex++}`); values.push(additionalHTML); }
+    if (req.body.jsonPrompt !== undefined) { setClauses.push(`json_prompt = $${paramIndex++}`); values.push(req.body.jsonPrompt); }
+    if (isFeatured !== undefined) { setClauses.push(`is_featured = $${paramIndex++}`); values.push(isFeatured === 'true' || isFeatured === true); }
+
+    setClauses.push(`updated_at = NOW()`);
+    setClauses.push(`updated_by = $${paramIndex++}`);
+    values.push(req.user.uid);
+
+    // Add the id as the last parameter
+    values.push(id);
+    const updateQuery = `UPDATE prompts SET ${setClauses.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+
+    const { rows: updatedRows } = await pool.query(updateQuery, values);
+    const updatedPrompt = mapRowToCamelCase(updatedRows[0]);
+
     // Cache invalidation
     try {
-      logger.info('🔄 Refreshing prompts cache due to prompt update...');
+      logger.info('Refreshing prompts cache due to prompt update...');
       await refreshPromptsCache();
       await deleteCacheByPattern('prompts:results:*');
       await deleteCache(generatePromptCacheKey(id));
@@ -2020,17 +2054,14 @@ router.put('/:id', auth, upload.fields([
       if (currentPromptData.category !== category) {
         await deleteCache(generatePromptCategoryCacheKey(category));
       }
-      logger.info(`✅ Cache invalidation completed for prompt update: ${id}`);
+      logger.info(`Cache invalidation completed for prompt update: ${id}`);
     } catch (cacheError) {
-      logger.error('❌ Error during cache invalidation in updatePrompt:', cacheError);
+      logger.error('Error during cache invalidation in updatePrompt:', cacheError);
     }
-    
+
     return res.json({
       success: true,
-      data: {
-        id: updatedDoc.id,
-        ...updatedDoc.data()
-      }
+      data: updatedPrompt
     });
   } catch (error) {
     console.error(`Error updating prompt ${req.params.id}:`, error);
@@ -2109,34 +2140,33 @@ router.delete('/:id', auth, async (req, res) => {
     const id = req.params.id;
     
     // Check if the prompt exists
-    const promptRef = admin.firestore().collection(COLLECTION_NAME).doc(id);
-    const doc = await promptRef.get();
-    
-    if (!doc.exists) {
+    const { rows: existingRows } = await pool.query('SELECT * FROM prompts WHERE id = $1', [id]);
+
+    if (existingRows.length === 0) {
       return res.status(404).json({
         success: false,
         error: 'Prompt not found'
       });
     }
-    
+
     // Get prompt data before deletion (for cache invalidation)
-    const promptData = doc.data();
+    const promptData = mapRowToCamelCase(existingRows[0]);
     const deletedPromptCategory = promptData.category;
-    
-    // Delete the document
-    await promptRef.delete();
-    
+
+    // Delete the row
+    await pool.query('DELETE FROM prompts WHERE id = $1', [id]);
+
     // Cache invalidation
     try {
-      logger.info('🔄 Refreshing prompts cache due to prompt deletion...');
+      logger.info('Refreshing prompts cache due to prompt deletion...');
       await refreshPromptsCache();
       await deleteCacheByPattern('prompts:results:*');
       await deleteCache(generatePromptCacheKey(id));
       await deleteCache(generatePromptCategoryCacheKey(deletedPromptCategory));
       await deleteCache(generatePromptCountCacheKey());
-      logger.info(`✅ Cache invalidation completed for prompt deletion: ${id}`);
+      logger.info(`Cache invalidation completed for prompt deletion: ${id}`);
     } catch (cacheError) {
-      logger.error('❌ Error during cache invalidation in deletePrompt:', cacheError);
+      logger.error('Error during cache invalidation in deletePrompt:', cacheError);
     }
     
     return res.json({
@@ -2235,53 +2265,61 @@ router.post('/:id/like', auth, async (req, res) => {
       });
     }
     
-    const promptRef = admin.firestore().collection(COLLECTION_NAME).doc(promptId);
-    
-    // Use transaction to ensure data consistency
-    const result = await admin.firestore().runTransaction(async (transaction) => {
-      const promptDoc = await transaction.get(promptRef);
-      
-      if (!promptDoc.exists) {
+    // Use PostgreSQL transaction to ensure data consistency
+    const client = await pool.connect();
+    let result;
+    try {
+      await client.query('BEGIN');
+
+      // Check if prompt exists and get current likes
+      const { rows } = await client.query('SELECT likes, like_count FROM prompts WHERE id = $1 FOR UPDATE', [promptId]);
+
+      if (rows.length === 0) {
+        await client.query('ROLLBACK');
         throw new Error('Prompt not found');
       }
-      
-      const promptData = promptDoc.data();
-      const currentLikes = promptData.likes || [];
-      const currentLikeCount = promptData.likeCount || 0;
-      
-      let newLikes;
-      let newLikeCount;
+
+      const currentLikes = rows[0].likes || [];
+      const currentLikeCount = rows[0].like_count || 0;
+
       let action;
-      
+      let newLikeCount;
+
       if (currentLikes.includes(userId)) {
         // User already liked, remove like
-        newLikes = currentLikes.filter(id => id !== userId);
+        await client.query(
+          "UPDATE prompts SET likes = array_remove(likes, $1), like_count = GREATEST(like_count - 1, 0), updated_at = NOW() WHERE id = $2",
+          [userId, promptId]
+        );
         newLikeCount = Math.max(0, currentLikeCount - 1);
         action = 'unliked';
       } else {
         // User hasn't liked, add like
-        newLikes = [...currentLikes, userId];
+        await client.query(
+          "UPDATE prompts SET likes = array_append(likes, $1), like_count = like_count + 1, updated_at = NOW() WHERE id = $2 AND NOT ($1 = ANY(likes))",
+          [userId, promptId]
+        );
         newLikeCount = currentLikeCount + 1;
         action = 'liked';
       }
-      
-      transaction.update(promptRef, {
-        likes: newLikes,
-        likeCount: newLikeCount,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      
-      return { action, newLikeCount, isLiked: action === 'liked' };
-    });
-    
+
+      await client.query('COMMIT');
+      result = { action, newLikeCount, isLiked: action === 'liked' };
+    } catch (txError) {
+      await client.query('ROLLBACK');
+      throw txError;
+    } finally {
+      client.release();
+    }
+
     // Cache invalidation
     try {
       await refreshPromptsCache();
       await deleteCache(generatePromptCacheKey(promptId));
       await deleteCacheByPattern('prompts:results:*');
-      logger.info(`✅ Cache invalidated for prompt like: ${promptId}`);
+      logger.info(`Cache invalidated for prompt like: ${promptId}`);
     } catch (cacheError) {
-      logger.error('❌ Error during cache invalidation in likePrompt:', cacheError);
+      logger.error('Error during cache invalidation in likePrompt:', cacheError);
     }
     
     return res.status(200).json({
@@ -2327,20 +2365,19 @@ router.post('/:id/generate-json', async (req, res) => {
     logger.info(`[JSON Generation] 📥 Request received for prompt ID: ${promptId}`);
     
     // Check if prompt exists
-    const promptRef = admin.firestore().collection(COLLECTION_NAME).doc(promptId);
-    logger.info(`[JSON Generation] 🔍 Checking if prompt exists: ${promptId}`);
-    const promptDoc = await promptRef.get();
-    
-    if (!promptDoc.exists) {
-      logger.warn(`[JSON Generation] ❌ Prompt not found: ${promptId}`);
+    logger.info(`[JSON Generation] Checking if prompt exists: ${promptId}`);
+    const { rows: promptRows } = await pool.query('SELECT * FROM prompts WHERE id = $1', [promptId]);
+
+    if (promptRows.length === 0) {
+      logger.warn(`[JSON Generation] Prompt not found: ${promptId}`);
       return res.status(404).json({
         success: false,
         error: 'Prompt not found'
       });
     }
-    
-    logger.info(`[JSON Generation] ✅ Prompt found: ${promptId}`);
-    const promptData = promptDoc.data();
+
+    logger.info(`[JSON Generation] Prompt found: ${promptId}`);
+    const promptData = mapRowToCamelCase(promptRows[0]);
     logger.info(`[JSON Generation] 📋 Prompt title: "${promptData.title || 'N/A'}"`);
     
     // Check Redis cache first for JSON prompt
@@ -2637,16 +2674,16 @@ EXAMPLE OUTPUT:
       jsonPrompt = sanitizedJson;
       
       // Save to database
-      logger.info(`[JSON Generation] 💾 Saving JSON prompt to Firestore for ${promptId}`);
+      logger.info(`[JSON Generation] Saving JSON prompt to PostgreSQL for ${promptId}`);
       const dbStartTime = Date.now();
-      
-      await promptRef.update({
-        jsonPrompt: jsonPromptString,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      
+
+      await pool.query(
+        'UPDATE prompts SET json_prompt = $1, updated_at = NOW() WHERE id = $2',
+        [jsonPromptString, promptId]
+      );
+
       const dbDuration = Date.now() - dbStartTime;
-      logger.info(`[JSON Generation] ✅ JSON prompt saved to Firestore in ${dbDuration}ms`);
+      logger.info(`[JSON Generation] JSON prompt saved to PostgreSQL in ${dbDuration}ms`);
       
       // Cache the generated JSON prompt in Redis (72 hours TTL)
       const jsonCacheKey = `json-prompt:${promptId}`;
@@ -2716,12 +2753,12 @@ EXAMPLE OUTPUT:
       logger.info(`[JSON Generation] 📋 Fallback JSON created: ${fallbackJsonString.length} characters`);
       
       // Save fallback to database
-      logger.info(`[JSON Generation] 💾 Saving fallback JSON to Firestore`);
-      await promptRef.update({
-        jsonPrompt: fallbackJsonString,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      logger.info(`[JSON Generation] ✅ Fallback JSON saved to Firestore`);
+      logger.info(`[JSON Generation] Saving fallback JSON to PostgreSQL`);
+      await pool.query(
+        'UPDATE prompts SET json_prompt = $1, updated_at = NOW() WHERE id = $2',
+        [fallbackJsonString, promptId]
+      );
+      logger.info(`[JSON Generation] Fallback JSON saved to PostgreSQL`);
       
       const totalDuration = Date.now() - startTime;
       logger.warn(`[JSON Generation] ⚠️ JSON generation completed with fallback for ${promptId} (total time: ${totalDuration}ms)`);
@@ -2886,19 +2923,19 @@ router.get('/count', async (req, res) => {
       });
     }
     
-    // Get count from Firebase
-    const snapshot = await admin.firestore().collection(COLLECTION_NAME).get();
-    const totalCount = snapshot.size;
-    
+    // Get count from PostgreSQL
+    const { rows: countRows } = await pool.query("SELECT COUNT(*) AS count FROM prompts WHERE (type = 'prompt' OR type IS NULL)");
+    const totalCount = parseInt(countRows[0].count, 10);
+
     // Cache the result
     await setCache(cacheKey, totalCount);
-    
+
     return res.status(200).json({
       success: true,
       totalCount: totalCount,
       fromCache: false
     });
-    
+
   } catch (error) {
     logger.error('Error getting prompt count:', error);
     return res.status(500).json({
@@ -2922,14 +2959,14 @@ router.post('/cache/refresh', auth, async (req, res) => {
         error: 'Access denied. Admin privileges required.'
       });
     }
-    
-    logger.info('🔄 Manual prompts cache refresh requested');
+
+    logger.info('Manual prompts cache refresh requested');
     const success = await refreshPromptsCache();
-    
+
     if (success) {
       await deleteCacheByPattern('prompts:results:*');
-      logger.info('🧹 Cleared cached prompt search results');
-      
+      logger.info('Cleared cached prompt search results');
+
       return res.status(200).json({
         success: true,
         message: `Prompts cache refreshed successfully. Loaded ${allPromptsCache?.length || 0} prompts`,
@@ -2944,7 +2981,7 @@ router.post('/cache/refresh', auth, async (req, res) => {
       });
     }
   } catch (error) {
-    logger.error('❌ Error in refresh prompts cache:', error);
+    logger.error('Error in refresh prompts cache:', error);
     return res.status(500).json({
       success: false,
       error: error.message,
@@ -2957,12 +2994,12 @@ router.post('/cache/refresh', auth, async (req, res) => {
  * Initialize prompts cache on server startup
  */
 const initializePromptsCache = async () => {
-  logger.info('🚀 Initializing prompts cache on startup...');
+  logger.info('Initializing prompts cache on startup...');
   const success = await refreshPromptsCache();
   if (success) {
-    logger.info('✅ Prompts cache initialization completed successfully');
+    logger.info('Prompts cache initialization completed successfully');
   } else {
-    logger.error('❌ Prompts cache initialization failed');
+    logger.error('Prompts cache initialization failed');
   }
   return success;
 };
@@ -2986,24 +3023,16 @@ router.post('/:id/view', async (req, res) => {
     }
     
     const cleanPromptId = promptId.trim();
-    const promptRef = admin.firestore().collection(COLLECTION_NAME).doc(cleanPromptId);
-    
-    // Use Firestore transaction to safely increment view count
-    await admin.firestore().runTransaction(async (transaction) => {
-      const promptDoc = await transaction.get(promptRef);
-      
-      if (!promptDoc.exists) {
-        throw new Error('Prompt not found');
-      }
-      
-      const currentData = promptDoc.data();
-      const newViewCount = (currentData.viewCount || 0) + 1;
-      
-      transaction.update(promptRef, {
-        viewCount: newViewCount,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-    });
+
+    // Increment view count atomically in PostgreSQL
+    const { rowCount } = await pool.query(
+      'UPDATE prompts SET view_count = view_count + 1, updated_at = NOW() WHERE id = $1',
+      [cleanPromptId]
+    );
+
+    if (rowCount === 0) {
+      throw new Error('Prompt not found');
+    }
     
     // Invalidate cache for this prompt
     try {

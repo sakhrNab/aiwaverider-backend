@@ -37,6 +37,12 @@ CREATE TABLE IF NOT EXISTS users (
   signup_method   TEXT,
   password_hash   TEXT,                                    -- only for email signups
   subscription    JSONB DEFAULT '{}',
+  interests       JSONB DEFAULT '[]',
+  favorites       JSONB DEFAULT '[]',
+  notifications   JSONB DEFAULT '{}',
+  settings        JSONB DEFAULT '{"language":"en","theme":"light"}',
+  bio             TEXT DEFAULT '',
+  downloads       JSONB DEFAULT '[]',
   created_at      TIMESTAMPTZ DEFAULT NOW(),
   updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
@@ -355,4 +361,35 @@ CREATE TABLE IF NOT EXISTS site_config (
 
 CREATE OR REPLACE TRIGGER trg_site_config_updated_at
   BEFORE UPDATE ON site_config
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================
+-- ai_tools
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ai_tools (
+  id              TEXT PRIMARY KEY,
+  title           TEXT NOT NULL,
+  description     TEXT,
+  link            TEXT,
+  image           TEXT,
+  keywords        TEXT[] DEFAULT '{}',
+  tags            TEXT[] DEFAULT '{}',
+  category        TEXT,
+  additional_html TEXT,
+  created_by      TEXT,
+  updated_by      TEXT,
+  like_count      INTEGER DEFAULT 0,
+  view_count      INTEGER DEFAULT 0,
+  is_featured     BOOLEAN DEFAULT FALSE,
+  is_public       BOOLEAN DEFAULT TRUE,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_tools_category ON ai_tools(category);
+CREATE INDEX IF NOT EXISTS idx_ai_tools_created ON ai_tools(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_tools_tags ON ai_tools USING GIN(tags);
+
+CREATE OR REPLACE TRIGGER trg_ai_tools_updated_at
+  BEFORE UPDATE ON ai_tools
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();

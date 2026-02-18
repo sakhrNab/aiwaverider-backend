@@ -1,20 +1,18 @@
 /**
  * Updated Order Controller - Enhanced for UniPay v3 Integration
- * 
+ *
  * Handles order processing, template delivery, and invoice creation
  * for the corrected UniPay payment system and other providers
  */
 
 const admin = require('firebase-admin');
+const { pool } = require('../../config/database');
 const { v4: uuidv4 } = require('uuid');
 const emailService = require('../../services/email/emailService');
 const configEmail = require('../../config/email');
 const invoiceService = require('../../services/invoice/invoiceService');
 const logger = require('../../utils/logger');
 const { deleteCache } = require('../../utils/cache');
-
-// Initialize Firestore
-const db = admin.firestore();
 
 class OrderController {
   constructor() {
@@ -29,14 +27,14 @@ class OrderController {
   async getAgentTemplate(agentId) {
     try {
       // Get agent from database
-      const agentDoc = await db.collection('agents').doc(agentId).get();
-      
-      if (!agentDoc.exists) {
+      const agentResult = await pool.query('SELECT * FROM agents WHERE id = $1', [agentId]);
+
+      if (agentResult.rows.length === 0) {
         throw new Error(`Agent not found: ${agentId}`);
       }
-      
-      const agent = agentDoc.data();
-      
+
+      const agent = agentResult.rows[0];
+
       // Prepare a full agent template object
       const templateObject = {
         id: agentId,
@@ -47,12 +45,12 @@ class OrderController {
         type: "agent_template",
         category: agent.category || "AI Agent",
         tags: agent.tags || [],
-        // Include all agent properties, removing any that are undefined
+        // Include all agent properties, removing any that are undefined/null
         ...Object.fromEntries(
-          Object.entries(agent).filter(([_, value]) => value !== undefined)
+          Object.entries(agent).filter(([_, value]) => value !== undefined && value !== null)
         ),
       };
-      
+
       // If agent has a template field, use that as the template content
       if (agent.template) {
         // If template is already JSON, parse it and include it
@@ -68,15 +66,15 @@ class OrderController {
           // Use the template string directly
           templateObject.templateContent = agent.template;
         }
-      } else if (agent.templateUrl) {
+      } else if (agent.template_url) {
         // Include the template URL if available
-        templateObject.templateUrl = agent.templateUrl;
+        templateObject.templateUrl = agent.template_url;
       } else {
         // Generate a basic template only as last resort
         templateObject.templateContent = this.generateBasicTemplate(agent);
         templateObject.isGenerated = true;
       }
-      
+
       return JSON.stringify(templateObject, null, 2);
     } catch (error) {
       logger.error(`Error getting agent template: ${error.message}`);
@@ -91,7 +89,7 @@ class OrderController {
    */
   generateBasicTemplate(agent) {
     return `
-# ${agent.title} - AI Agent Template
+# ${agent.title || agent.name} - AI Agent Template
 
 ## Description
 ${agent.description || 'An AI agent to assist with your tasks.'}
@@ -103,11 +101,11 @@ ${agent.description || 'An AI agent to assist with your tasks.'}
 
 ---
 
-You are ${agent.title}, an AI agent designed to ${agent.description || 'assist users with various tasks'}.
+You are ${agent.title || agent.name}, an AI agent designed to ${agent.description || 'assist users with various tasks'}.
 
 ${agent.features ? 'Your key features include:\n' + agent.features.map(f => `- ${f}`).join('\n') : ''}
 
-When a user interacts with you, provide helpful, accurate, and concise responses. 
+When a user interacts with you, provide helpful, accurate, and concise responses.
 Be friendly and professional in your tone.
 
 You can help users with:
@@ -128,7 +126,7 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
     try {
       // Generate order ID if not provided
       const orderId = orderData.orderId || uuidv4();
-      
+
       // Create order object
       const order = {
         id: orderId,
@@ -149,16 +147,43 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
         vatInfo: orderData.vatInfo || null,
         invoiceId: null, // Will be set when invoice is created
         templateAccessTokens: [],
-        
+
         // UniPay specific fields (NEW)
         uniPayOrderHashId: orderData.uniPayOrderHashId || null,
         merchantOrderId: orderData.merchantOrderId || null,
         conversionInfo: orderData.conversionInfo || null
       };
-      
+
       // Save order to database
-      await db.collection('orders').doc(orderId).set(order);
-      
+      await pool.query(
+        `INSERT INTO orders (id, user_id, user_email, items, total, currency, status,
+         payment_id, payment_method, payment_processor, delivery_status, metadata,
+         vat_info, invoice_id, template_access_tokens,
+         unipay_order_hash_id, merchant_order_id, conversion_info,
+         created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW(), NOW())`,
+        [
+          orderId,
+          order.userId,
+          order.userEmail,
+          JSON.stringify(order.items),
+          order.total,
+          order.currency,
+          order.status,
+          order.paymentId,
+          order.paymentMethod,
+          order.paymentProcessor,
+          order.deliveryStatus,
+          JSON.stringify(order.metadata),
+          order.vatInfo ? JSON.stringify(order.vatInfo) : null,
+          order.invoiceId,
+          order.templateAccessTokens,
+          order.uniPayOrderHashId,
+          order.merchantOrderId,
+          order.conversionInfo ? JSON.stringify(order.conversionInfo) : null
+        ]
+      );
+
       logger.info(`Created order: ${orderId}`, {
         processor: order.paymentProcessor,
         amount: order.total,
@@ -166,7 +191,7 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
         itemCount: order.items.length,
         uniPayOrderHashId: order.uniPayOrderHashId
       });
-      
+
       return { ...order };
     } catch (error) {
       logger.error(`Error creating order: ${error.message}`);
@@ -185,10 +210,10 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
       const metadata = paymentData.metadata || {};
       const items = Array.isArray(paymentData.items) ? paymentData.items : [];
       const processor = paymentData.processor || 'unipay';
-      
+
       // Get customer info - prioritize customer email, then metadata email
       const email = paymentData.customer?.email || metadata.email || null;
-      
+
       // Enhanced email validation and logging
       if (email && this.isValidEmail(email)) {
         logger.info(`Processing order with email: ${email} (processor: ${processor})`);
@@ -197,12 +222,12 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
       } else {
         logger.warn(`No email address available for order confirmation (processor: ${processor})`);
       }
-      
+
       const userId = paymentData.customer?.id || metadata.userId || null;
-      
+
       // Determine payment characteristics
       const paymentInfo = this.analyzePaymentMethod(paymentData, processor);
-      
+
       // Extract order details with UniPay specific handling
       const orderData = {
         orderId: metadata.order_id || uuidv4(),
@@ -226,24 +251,26 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
           }
         },
         vatInfo: paymentData.vatInfo || null,
-        
+
         // UniPay specific fields (NEW)
         uniPayOrderHashId: metadata.order_hash_id || paymentData.orderHashId || null,
         merchantOrderId: metadata.merchant_order_id || paymentData.merchantOrderId || null,
         conversionInfo: paymentData.conversionInfo || null
       };
-      
+
       // Create order record
       const order = await this.createOrder(orderData);
 
       // Persist purchases on user profile (entitlement) if we have a userId
       if (userId && items.length > 0) {
         try {
-          const userRef = db.collection('users').doc(userId);
-          await db.runTransaction(async (tx) => {
-            const snap = await tx.get(userRef);
-            const data = snap.exists ? snap.data() : {};
-            const purchases = Array.isArray(data.purchases) ? [...data.purchases] : [];
+          const client = await pool.connect();
+          try {
+            await client.query('BEGIN');
+            const userResult = await client.query('SELECT * FROM users WHERE id = $1', [userId]);
+            const userData = userResult.rows.length > 0 ? userResult.rows[0] : {};
+            const subscription = userData.subscription || {};
+            const purchases = Array.isArray(subscription.purchases) ? [...subscription.purchases] : [];
             const existingAgentIds = new Set(
               purchases.map((p) => (p.agentId || p.productId)).filter(Boolean)
             );
@@ -264,8 +291,18 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
               });
               existingAgentIds.add(agentId);
             }
-            tx.set(userRef, { purchases }, { merge: true });
-          });
+            // Store purchases in the subscription JSONB column
+            await client.query(
+              `UPDATE users SET subscription = jsonb_set(COALESCE(subscription, '{}'), '{purchases}', $1::jsonb), updated_at = NOW() WHERE id = $2`,
+              [JSON.stringify(purchases), userId]
+            );
+            await client.query('COMMIT');
+          } catch (txErr) {
+            await client.query('ROLLBACK');
+            throw txErr;
+          } finally {
+            client.release();
+          }
           // Invalidate entitlement cache so UI reflects purchase immediately
           try { await deleteCache(`user:${userId}:entitlements`); } catch (e) { logger.warn('Failed to invalidate entitlement cache after purchase:', e.message); }
           logger.info(`Recorded purchases for user ${userId} on order ${order.id}`);
@@ -286,14 +323,13 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
           orderData,
           this.extractCustomerInfo(paymentData, metadata)
         );
-        
+
         // Update order with invoice ID
-        await db.collection('orders').doc(order.id).update({
-          invoiceId: invoice.invoiceId,
-          invoiceNumber: invoice.invoiceNumber,
-          updatedAt: new Date().toISOString()
-        });
-        
+        await pool.query(
+          `UPDATE orders SET invoice_id = $1, invoice_number = $2, updated_at = NOW() WHERE id = $3`,
+          [invoice.invoiceId, invoice.invoiceNumber, order.id]
+        );
+
         logger.info(`Invoice created for order: ${order.id}`, {
           invoiceId: invoice.invoiceId,
           invoiceNumber: invoice.invoiceNumber,
@@ -303,14 +339,14 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
         logger.error(`Failed to create invoice for order ${order.id}:`, invoiceError);
         // Continue processing even if invoice creation fails
       }
-      
+
       // Generate download links for templates (immediate delivery for most payment methods)
       const templates = [];
       const shouldDeliverImmediately = paymentInfo.immediateDelivery;
-      
+
       if (shouldDeliverImmediately) {
         logger.info(`Preparing templates for immediate delivery for order ${order.id}`);
-        
+
         // Process each item to create template access
         for (const item of items) {
           try {
@@ -323,25 +359,28 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
           }
         }
       }
-      
+
       // Handle email delivery
       const deliveryResult = await this.handleEmailDelivery(
-        order, 
-        templates, 
-        email, 
-        userId, 
+        order,
+        templates,
+        email,
+        userId,
         paymentInfo,
         metadata
       );
-      
+
       // Update order with final delivery status
-      await db.collection('orders').doc(order.id).update({
-        deliveryStatus: deliveryResult.status,
-        deliveryResults: deliveryResult.results || [],
-        templateAccessTokens: templates.map(t => t.accessToken),
-        updatedAt: new Date().toISOString()
-      });
-      
+      await pool.query(
+        `UPDATE orders SET delivery_status = $1, delivery_results = $2, template_access_tokens = $3, updated_at = NOW() WHERE id = $4`,
+        [
+          deliveryResult.status,
+          JSON.stringify(deliveryResult.results || []),
+          templates.map(t => t.accessToken),
+          order.id
+        ]
+      );
+
       const result = {
         success: true,
         orderId: order.id,
@@ -355,7 +394,7 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
         uniPayOrderHashId: order.uniPayOrderHashId,
         merchantOrderId: order.merchantOrderId
       };
-      
+
       logger.info(`Order processing completed: ${order.id}`, {
         deliveryStatus: result.deliveryStatus,
         templateCount: templates.length,
@@ -363,7 +402,7 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
         invoiceCreated: !!invoice,
         uniPayOrderHashId: order.uniPayOrderHashId
       });
-      
+
       return result;
     } catch (error) {
       logger.error(`Error processing payment success: ${error.message}`, error);
@@ -377,20 +416,20 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
   analyzePaymentMethod(paymentData, processor) {
     const paymentTypes = paymentData.payment_method_types || [];
     const metadata = paymentData.metadata || {};
-    
+
     // Determine method name
     let method = 'unknown';
-    
+
     // UniPay handling (NEW)
     if (metadata.payment_method === 'paypal' || processor === 'paypal' || paymentTypes.includes('paypal')) {
       method = 'paypal';
     } else if (metadata.payment_method === 'google_direct' || processor === 'google_direct' || paymentTypes.includes('google_direct')) {
       method = 'google_direct';
     }
-    
+
     // Determine if immediate delivery should happen
     const immediateDelivery = true;
-    
+
     return {
       method,
       immediateDelivery,
@@ -405,16 +444,16 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
   async createTemplateAccess(item, order, email, userId) {
     try {
       const agentId = item.id;
-      
+
       // Get template content
       const templateContent = await this.getAgentTemplate(agentId);
-      
+
       // Get agent details
       let agentName = item.title || 'AI Agent';
       try {
-        const agentDoc = await db.collection('agents').doc(agentId).get();
-        if (agentDoc.exists) {
-          const agent = agentDoc.data();
+        const agentResult = await pool.query('SELECT title, name FROM agents WHERE id = $1', [agentId]);
+        if (agentResult.rows.length > 0) {
+          const agent = agentResult.rows[0];
           agentName = agent.title || agent.name || agentName;
         }
       } catch (agentError) {
@@ -423,22 +462,27 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
 
       // Generate a secure token for template access
       const accessToken = uuidv4();
-      
+
       // Store the template access token in the database
-      await db.collection('templateAccess').doc(accessToken).set({
-        orderId: order.id,
-        agentId,
-        userId,
-        email,
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days expiry
-        used: false,
-        invoiceId: order.invoiceId || null,
-        // UniPay specific tracking
-        uniPayOrderHashId: order.uniPayOrderHashId || null,
-        merchantOrderId: order.merchantOrderId || null
-      });
-      
+      await pool.query(
+        `INSERT INTO template_access (id, order_id, agent_id, user_id, email, used, revoked, expires_at,
+         invoice_id, unipay_order_hash_id, merchant_order_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
+        [
+          accessToken,
+          order.id,
+          agentId,
+          userId,
+          email,
+          false,
+          false,
+          new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days expiry
+          order.invoiceId || null,
+          order.uniPayOrderHashId || null,
+          order.merchantOrderId || null
+        ]
+      );
+
       const result = {
         agentId,
         agentName,
@@ -446,7 +490,7 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
         downloadUrl: `/api/templates/download/${agentId}?orderId=${order.id}&token=${accessToken}`,
         templateContent
       };
-      
+
       logger.info(`Template access created for agent ${agentId} in order ${order.id}`, {
         uniPayOrderHashId: order.uniPayOrderHashId
       });
@@ -464,7 +508,7 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
     try {
       // Check if we should skip email sending
       const skipEmailSending = metadata.skipEmailSending === true;
-      
+
       if (skipEmailSending) {
         logger.info(`Skipping email sending for order ${order.id} due to skipEmailSending flag`);
         return {
@@ -472,7 +516,7 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
           message: 'Email skipped due to skipEmailSending flag'
         };
       }
-      
+
       // Skip if no valid email
       if (!email || !this.isValidEmail(email)) {
         logger.warn(`Cannot deliver templates: No valid email for order ${order.id}`);
@@ -481,21 +525,21 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
           message: 'No valid email provided'
         };
       }
-      
+
       // Deliver templates for each item
       const deliveryResults = [];
-      
+
       for (const item of order.items) {
         try {
           const result = await this.deliverTemplateByEmail(
-            item, 
-            order, 
-            templates, 
-            email, 
-            userId, 
+            item,
+            order,
+            templates,
+            email,
+            userId,
             paymentInfo
           );
-          
+
           deliveryResults.push({
             agentId: item.id,
             success: result.success,
@@ -504,7 +548,7 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
           });
         } catch (deliveryError) {
           logger.error(`Error delivering template for agent ${item.id}:`, deliveryError);
-          
+
           deliveryResults.push({
             agentId: item.id,
             success: false,
@@ -512,11 +556,11 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
           });
         }
       }
-      
+
       // Determine overall delivery status
-      const deliveryStatus = deliveryResults.every(r => r.success) ? 'completed' : 
+      const deliveryStatus = deliveryResults.every(r => r.success) ? 'completed' :
                             deliveryResults.some(r => r.success) ? 'partial' : 'failed';
-      
+
       return {
         status: deliveryStatus,
         results: deliveryResults
@@ -537,49 +581,49 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
     try {
       // Get agent details
       const agentId = item.id;
-      const agentDoc = await db.collection('agents').doc(agentId).get();
-      
-      if (!agentDoc.exists) {
+      const agentResult = await pool.query('SELECT * FROM agents WHERE id = $1', [agentId]);
+
+      if (agentResult.rows.length === 0) {
         throw new Error('Agent not found');
       }
-      
-      const agent = agentDoc.data();
-      
+
+      const agent = agentResult.rows[0];
+
       // Get template content
       const templateContent = await this.getAgentTemplate(agentId);
-      
+
       // Get user's name if available
       let userName = 'Valued Customer';
       if (userId) {
         try {
-          const userDoc = await db.collection('users').doc(userId).get();
-          if (userDoc.exists) {
-            const userData = userDoc.data();
-            userName = userData.displayName || userData.firstName || userData.name || 'Valued Customer';
+          const userResult = await pool.query('SELECT display_name, first_name FROM users WHERE id = $1', [userId]);
+          if (userResult.rows.length > 0) {
+            const userData = userResult.rows[0];
+            userName = userData.display_name || userData.first_name || 'Valued Customer';
           }
         } catch (userError) {
           logger.debug(`Could not fetch user data for ${userId}:`, userError.message);
         }
       }
-      
+
       // Create receipt URL
-      const receiptUrl = order.invoiceId 
+      const receiptUrl = order.invoiceId
         ? `/account/orders/${order.id}?invoice=${order.invoiceId}`
         : `/account/orders/${order.id}`;
-      
+
       // Find template download link if available and make it absolute for emails
       const rawTemplateLink = templates.find(t => t.agentId === agentId)?.downloadUrl || '';
-      const templateLink = rawTemplateLink 
-        ? (rawTemplateLink.startsWith('http') 
-            ? rawTemplateLink 
+      const templateLink = rawTemplateLink
+        ? (rawTemplateLink.startsWith('http')
+            ? rawTemplateLink
             : `${configEmail.websiteUrl}${rawTemplateLink.startsWith('/') ? '' : '/'}${rawTemplateLink}`)
         : '';
-      
+
       // Enhanced email data for new system (Updated for UniPay)
       const emailData = {
         email: email,
         firstName: userName,
-        agentName: agent.title || 'AI Agent',
+        agentName: agent.title || agent.name || 'AI Agent',
         agentDescription: agent.description || 'Your new AI agent',
         price: item.price || 0,
         currency: order.currency || 'USD',
@@ -602,17 +646,17 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
         merchantOrderId: order.merchantOrderId || null,
         conversionInfo: order.conversionInfo || null
       };
-      
+
       // Send email with template
       const emailResult = await emailService.sendAgentPurchaseEmail(emailData);
-      
+
       logger.info(`Template delivery email sent for agent ${agentId} in order ${order.id}`, {
         email,
         messageId: emailResult.messageId,
         paymentProcessor: paymentInfo.processor,
         uniPayOrderHashId: order.uniPayOrderHashId
       });
-      
+
       return {
         success: true,
         messageId: emailResult.messageId
@@ -660,13 +704,41 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
    */
   async getOrderById(orderId) {
     try {
-      const orderDoc = await db.collection('orders').doc(orderId).get();
-      
-      if (!orderDoc.exists) {
+      const result = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+
+      if (result.rows.length === 0) {
         throw new Error(`Order not found: ${orderId}`);
       }
-      
-      return orderDoc.data();
+
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        userId: row.user_id,
+        userEmail: row.user_email,
+        items: row.items,
+        total: parseFloat(row.total),
+        currency: row.currency,
+        status: row.status,
+        paymentId: row.payment_id,
+        paymentMethod: row.payment_method,
+        paymentProcessor: row.payment_processor,
+        deliveryStatus: row.delivery_status,
+        deliveryResults: row.delivery_results,
+        metadata: row.metadata,
+        vatInfo: row.vat_info,
+        invoiceId: row.invoice_id,
+        invoiceNumber: row.invoice_number,
+        templateAccessTokens: row.template_access_tokens,
+        uniPayOrderHashId: row.unipay_order_hash_id,
+        merchantOrderId: row.merchant_order_id,
+        conversionInfo: row.conversion_info,
+        refundId: row.refund_id,
+        refundAmount: row.refund_amount ? parseFloat(row.refund_amount) : null,
+        refundedAt: row.refunded_at,
+        refundReason: row.refund_reason,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      };
     } catch (error) {
       logger.error(`Error getting order: ${error.message}`);
       throw error;
@@ -680,16 +752,36 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
    */
   async getUserOrders(userId) {
     try {
-      const ordersSnapshot = await db.collection('orders')
-        .where('userId', '==', userId)
-        .orderBy('createdAt', 'desc')
-        .get();
-      
-      const orders = [];
-      ordersSnapshot.forEach(doc => {
-        orders.push(doc.data());
-      });
-      
+      const result = await pool.query(
+        'SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC',
+        [userId]
+      );
+
+      const orders = result.rows.map(row => ({
+        id: row.id,
+        userId: row.user_id,
+        userEmail: row.user_email,
+        items: row.items,
+        total: parseFloat(row.total),
+        currency: row.currency,
+        status: row.status,
+        paymentId: row.payment_id,
+        paymentMethod: row.payment_method,
+        paymentProcessor: row.payment_processor,
+        deliveryStatus: row.delivery_status,
+        deliveryResults: row.delivery_results,
+        metadata: row.metadata,
+        vatInfo: row.vat_info,
+        invoiceId: row.invoice_id,
+        invoiceNumber: row.invoice_number,
+        templateAccessTokens: row.template_access_tokens,
+        uniPayOrderHashId: row.unipay_order_hash_id,
+        merchantOrderId: row.merchant_order_id,
+        conversionInfo: row.conversion_info,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      }));
+
       return orders;
     } catch (error) {
       logger.error(`Error getting user orders: ${error.message}`);
@@ -702,14 +794,35 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
    */
   async updateOrderStatus(orderId, status, metadata = {}) {
     try {
-      const updateData = {
-        status,
-        updatedAt: new Date().toISOString(),
-        ...metadata
-      };
+      // Build dynamic SET clause for metadata fields
+      const setClauses = ['status = $1', 'updated_at = NOW()'];
+      const values = [status];
+      let paramIndex = 2;
 
-      await db.collection('orders').doc(orderId).update(updateData);
-      
+      if (metadata.refundId !== undefined) {
+        setClauses.push(`refund_id = $${paramIndex++}`);
+        values.push(metadata.refundId);
+      }
+      if (metadata.refundAmount !== undefined) {
+        setClauses.push(`refund_amount = $${paramIndex++}`);
+        values.push(metadata.refundAmount);
+      }
+      if (metadata.refundedAt !== undefined) {
+        setClauses.push(`refunded_at = $${paramIndex++}`);
+        values.push(metadata.refundedAt);
+      }
+      if (metadata.refundReason !== undefined) {
+        setClauses.push(`refund_reason = $${paramIndex++}`);
+        values.push(metadata.refundReason);
+      }
+
+      values.push(orderId);
+
+      await pool.query(
+        `UPDATE orders SET ${setClauses.join(', ')} WHERE id = $${paramIndex}`,
+        values
+      );
+
       logger.info(`Updated order status: ${orderId} -> ${status}`);
 
       return {
@@ -729,7 +842,7 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
   async processOrderRefund(orderId, refundData) {
     try {
       const order = await this.getOrderById(orderId);
-      
+
       // Update order status
       await this.updateOrderStatus(orderId, 'refunded', {
         refundId: refundData.refund_id,
@@ -746,34 +859,31 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
         });
       }
 
-      // Update UniPay order if exists (NEW)
+      // UniPay order update skipped (uniPayOrders table not in PostgreSQL schema)
       if (order.uniPayOrderHashId) {
-        try {
-          await db.collection('uniPayOrders').doc(order.uniPayOrderHashId).update({
-            status: 'refunded',
-            refundedAt: new Date().toISOString(),
-            refundAmount: refundData.amount,
-            refundReason: refundData.reason || null
-          });
-        } catch (uniPayError) {
-          logger.error(`Error updating UniPay order ${order.uniPayOrderHashId} for refund:`, uniPayError);
-        }
+        logger.info(`UniPay order ${order.uniPayOrderHashId} refund noted (no uniPayOrders table in schema)`);
       }
 
       // Revoke template access tokens
       if (order.templateAccessTokens && order.templateAccessTokens.length > 0) {
-        const batch = db.batch();
-        
-        for (const token of order.templateAccessTokens) {
-          const tokenRef = db.collection('templateAccess').doc(token);
-          batch.update(tokenRef, {
-            revoked: true,
-            revokedAt: new Date().toISOString(),
-            revokedReason: 'order_refunded'
-          });
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+
+          for (const token of order.templateAccessTokens) {
+            await client.query(
+              `UPDATE template_access SET revoked = true, revoked_at = NOW(), revoked_reason = 'order_refunded' WHERE id = $1`,
+              [token]
+            );
+          }
+
+          await client.query('COMMIT');
+        } catch (batchError) {
+          await client.query('ROLLBACK');
+          throw batchError;
+        } finally {
+          client.release();
         }
-        
-        await batch.commit();
       }
 
       logger.info(`Processed refund for order: ${orderId}`, {

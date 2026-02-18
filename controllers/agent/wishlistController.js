@@ -1,4 +1,4 @@
-const { db, admin } = require('../../config/firebase');
+const { pool } = require('../../config/database');
 
 // Modify this line to handle the case where sanitize might not be available
 let sanitizeObject;
@@ -13,143 +13,39 @@ try {
 }
 
 /**
- * Get all wishlists
+ * Get all wishlists (public view)
+ * In the PostgreSQL flat model, wishlists are simple (user_id, agent_id) pairs.
+ * This returns recent wishlist entries joined with agent data.
  */
 exports.getWishlists = async (req, res) => {
   try {
     const { limit = 10 } = req.query;
     const limitNum = parseInt(limit, 10);
-    
-    // Get all public wishlists
-    const wishlistsSnapshot = await db.collection('wishlists')
-      .where('isPublic', '==', true)
-      .orderBy('createdAt', 'desc')
-      .limit(limitNum)
-      .get();
-    
-    if (wishlistsSnapshot.empty) {
+
+    // In the flat PostgreSQL model, return recent wishlist entries with agent info
+    const result = await pool.query(
+      `SELECT w.id, w.user_id, w.agent_id, w.created_at,
+              a.name AS agent_name, a.title AS agent_title, a.image_url AS agent_image_url
+       FROM wishlists w
+       JOIN agents a ON w.agent_id = a.id
+       ORDER BY w.created_at DESC
+       LIMIT $1`,
+      [limitNum]
+    );
+
+    if (result.rows.length === 0) {
       return res.json({ wishlists: [] });
     }
-    
-    const wishlists = [];
-    
-    // Process each wishlist
-    for (const doc of wishlistsSnapshot.docs) {
-      try {
-        const wishlistData = doc.data();
-        
-        // Get creator info
-        let creatorData = null;
-        if (wishlistData.creatorId) {
-          try {
-            const creatorDoc = await db.collection('users').doc(wishlistData.creatorId).get();
-            if (creatorDoc.exists) {
-              const creatorDocData = creatorDoc.data() || {};
-              creatorData = {
-                id: creatorDoc.id,
-                name: creatorDocData.username || creatorDocData.displayName || 'Unknown User',
-                avatar: creatorDocData.photoURL || null
-              };
-            }
-          } catch (creatorError) {
-            console.error('Error getting creator data:', creatorError);
-            // Continue with null creatorData
-          }
-        }
-        
-        // Get first few items in the wishlist
-        const itemsSnapshot = await db.collection('wishlists')
-          .doc(doc.id)
-          .collection('items')
-          .limit(4)
-          .get();
-        
-        const items = [];
-        
-        for (const itemDoc of itemsSnapshot.docs) {
-          try {
-            const itemData = itemDoc.data() || {};
-            
-            // Get basic agent info
-            let agentData = null;
-            if (itemData.agentId) {
-              try {
-                const agentDoc = await db.collection('agents').doc(itemData.agentId).get();
-                if (agentDoc.exists) {
-                  const agent = agentDoc.data() || {};
-                  agentData = {
-                    id: agentDoc.id,
-                    title: agent.title || agent.name || 'Unnamed Agent',
-                    imageUrl: agent.imageUrl || null
-                  };
-                }
-              } catch (agentError) {
-                console.error('Error getting agent data:', agentError);
-                // Continue with null agentData
-              }
-            }
-            
-            // Safely convert dates
-            let addedAtDate = null;
-            if (itemData.addedAt) {
-              try {
-                addedAtDate = itemData.addedAt.toDate();
-              } catch (dateError) {
-                console.error('Error converting addedAt date:', dateError);
-                // Keep as null
-              }
-            }
-            
-            items.push({
-              id: itemDoc.id,
-              agentId: itemData.agentId || null,
-              addedAt: addedAtDate,
-              ...agentData
-            });
-          } catch (itemError) {
-            console.error('Error processing wishlist item:', itemError);
-            // Skip this item and continue
-          }
-        }
-        
-        // Safely convert dates
-        let createdAtDate = null;
-        let updatedAtDate = null;
-        
-        if (wishlistData.createdAt) {
-          try {
-            createdAtDate = wishlistData.createdAt.toDate();
-          } catch (dateError) {
-            console.error('Error converting createdAt date:', dateError);
-            // Keep as null
-          }
-        }
-        
-        if (wishlistData.updatedAt) {
-          try {
-            updatedAtDate = wishlistData.updatedAt.toDate();
-          } catch (dateError) {
-            console.error('Error converting updatedAt date:', dateError);
-            // Keep as null
-          }
-        }
-        
-        wishlists.push({
-          id: doc.id,
-          name: wishlistData.name || 'Unnamed Wishlist',
-          description: wishlistData.description || '',
-          itemCount: wishlistData.itemCount || 0,
-          creator: creatorData,
-          items,
-          createdAt: createdAtDate,
-          updatedAt: updatedAtDate
-        });
-      } catch (wishlistError) {
-        console.error('Error processing wishlist:', wishlistError);
-        // Skip this wishlist and continue
-      }
-    }
-    
+
+    const wishlists = result.rows.map(row => ({
+      id: row.id,
+      userId: row.user_id,
+      agentId: row.agent_id,
+      agentName: row.agent_title || row.agent_name || 'Unnamed Agent',
+      agentImageUrl: row.agent_image_url || null,
+      createdAt: row.created_at
+    }));
+
     return res.json({ wishlists });
   } catch (error) {
     console.error('Error getting wishlists:', error);
@@ -159,35 +55,41 @@ exports.getWishlists = async (req, res) => {
 
 /**
  * Get user's wishlists
+ * Returns all wishlist entries for the authenticated user with agent details.
  */
 exports.getUserWishlists = async (req, res) => {
   try {
     // Get user ID from authenticated request
     const userId = req.user.uid;
-    
-    // Get all wishlists for the user
-    const wishlistsSnapshot = await db.collection('wishlists')
-      .where('creatorId', '==', userId)
-      .orderBy('updatedAt', 'desc')
-      .get();
-    
-    if (wishlistsSnapshot.empty) {
+
+    // Get all wishlist entries for the user
+    const result = await pool.query(
+      `SELECT w.id, w.user_id, w.agent_id, w.created_at,
+              a.name AS agent_name, a.title AS agent_title, a.description AS agent_description,
+              a.image_url AS agent_image_url, a.price, a.creator
+       FROM wishlists w
+       JOIN agents a ON w.agent_id = a.id
+       WHERE w.user_id = $1
+       ORDER BY w.created_at DESC`,
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
       return res.json({ wishlists: [] });
     }
-    
-    const wishlists = wishlistsSnapshot.docs.map(doc => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        name: data.name,
-        description: data.description,
-        isPublic: data.isPublic || false,
-        itemCount: data.itemCount || 0,
-        createdAt: data.createdAt ? data.createdAt.toDate() : null,
-        updatedAt: data.updatedAt ? data.updatedAt.toDate() : null
-      };
-    });
-    
+
+    const wishlists = result.rows.map(row => ({
+      id: row.id,
+      userId: row.user_id,
+      agentId: row.agent_id,
+      agentName: row.agent_title || row.agent_name || 'Unnamed Agent',
+      agentDescription: row.agent_description || '',
+      agentImageUrl: row.agent_image_url || null,
+      price: row.price,
+      creator: row.creator || { name: 'Unknown Creator' },
+      createdAt: row.created_at
+    }));
+
     return res.json({ wishlists });
   } catch (error) {
     console.error('Error getting user wishlists:', error);
@@ -196,91 +98,48 @@ exports.getUserWishlists = async (req, res) => {
 };
 
 /**
- * Get wishlist by ID
+ * Get wishlist entry by ID
+ * In the flat model, each wishlist entry is a single (user_id, agent_id) pair.
  */
 exports.getWishlistById = async (req, res) => {
   try {
     const { wishlistId } = req.params;
-    
-    // Get wishlist document
-    const wishlistDoc = await db.collection('wishlists').doc(wishlistId).get();
-    
-    if (!wishlistDoc.exists) {
-      return res.status(404).json({ error: 'Wishlist not found' });
+
+    // Get wishlist entry with agent details
+    const result = await pool.query(
+      `SELECT w.id, w.user_id, w.agent_id, w.created_at,
+              a.name AS agent_name, a.title AS agent_title, a.description AS agent_description,
+              a.image_url AS agent_image_url, a.price, a.creator, a.rating
+       FROM wishlists w
+       JOIN agents a ON w.agent_id = a.id
+       WHERE w.id = $1`,
+      [wishlistId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Wishlist entry not found' });
     }
-    
-    const wishlistData = wishlistDoc.data();
-    
-    // Check if wishlist is public or belongs to the user
-    if (!wishlistData.isPublic && (!req.user || req.user.uid !== wishlistData.creatorId)) {
-      return res.status(403).json({ error: 'You do not have permission to view this wishlist' });
+
+    const row = result.rows[0];
+
+    // Check if the entry belongs to the user (if authenticated)
+    if (req.user && req.user.uid !== row.user_id) {
+      return res.status(403).json({ error: 'You do not have permission to view this wishlist entry' });
     }
-    
-    // Get creator info
-    let creatorData = null;
-    if (wishlistData.creatorId) {
-      const creatorDoc = await db.collection('users').doc(wishlistData.creatorId).get();
-      if (creatorDoc.exists) {
-        creatorData = {
-          id: creatorDoc.id,
-          name: creatorDoc.data().username || creatorDoc.data().displayName,
-          avatar: creatorDoc.data().photoURL || null
-        };
-      }
-    }
-    
-    // Get items in the wishlist
-    const itemsSnapshot = await db.collection('wishlists')
-      .doc(wishlistId)
-      .collection('items')
-      .orderBy('addedAt', 'desc')
-      .get();
-    
-    const items = [];
-    
-    for (const itemDoc of itemsSnapshot.docs) {
-      const itemData = itemDoc.data();
-      
-      // Get agent info
-      let agentData = null;
-      if (itemData.agentId) {
-        const agentDoc = await db.collection('agents').doc(itemData.agentId).get();
-        if (agentDoc.exists) {
-          const agent = agentDoc.data();
-          agentData = {
-            id: agentDoc.id,
-            title: agent.title || agent.name,
-            description: agent.description,
-            imageUrl: agent.imageUrl || null,
-            price: agent.price,
-            creator: agent.creator || {
-              name: 'Unknown Creator'
-            },
-            rating: agent.rating
-          };
-        }
-      }
-      
-      items.push({
-        id: itemDoc.id,
-        agentId: itemData.agentId,
-        addedAt: itemData.addedAt ? itemData.addedAt.toDate() : null,
-        ...agentData
-      });
-    }
-    
+
     const wishlist = {
-      id: wishlistDoc.id,
-      name: wishlistData.name,
-      description: wishlistData.description,
-      isPublic: wishlistData.isPublic || false,
-      itemCount: wishlistData.itemCount || 0,
-      creator: creatorData,
-      items,
-      createdAt: wishlistData.createdAt ? wishlistData.createdAt.toDate() : null,
-      updatedAt: wishlistData.updatedAt ? wishlistData.updatedAt.toDate() : null
+      id: row.id,
+      userId: row.user_id,
+      agentId: row.agent_id,
+      agentName: row.agent_title || row.agent_name || 'Unnamed Agent',
+      agentDescription: row.agent_description || '',
+      agentImageUrl: row.agent_image_url || null,
+      price: row.price,
+      creator: row.creator || { name: 'Unknown Creator' },
+      rating: row.rating,
+      createdAt: row.created_at
     };
-    
+
     return res.json({ wishlist });
   } catch (error) {
     console.error('Error getting wishlist:', error);
@@ -289,38 +148,60 @@ exports.getWishlistById = async (req, res) => {
 };
 
 /**
- * Create a new wishlist
+ * Create a new wishlist entry
+ * In the PostgreSQL flat model, this adds a (user_id, agent_id) pair.
  */
 exports.createWishlist = async (req, res) => {
   try {
     // Get user ID from authenticated request
     const userId = req.user.uid;
-    
-    const { name, description, isPublic = false } = req.body;
-    
+
+    const { agentId } = req.body;
+
     // Validate required fields
-    if (!name) {
-      return res.status(400).json({ error: 'Wishlist name is required' });
+    if (!agentId) {
+      return res.status(400).json({ error: 'Agent ID is required' });
     }
-    
-    // Create new wishlist
-    const wishlistData = {
-      name,
-      description: description || '',
-      creatorId: userId,
-      isPublic: Boolean(isPublic),
-      itemCount: 0,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    const wishlistRef = await db.collection('wishlists').add(wishlistData);
-    
+
+    // Check if agent exists
+    const agentResult = await pool.query('SELECT id FROM agents WHERE id = $1', [agentId]);
+    if (agentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+
+    // Create wishlist entry with composite ID
+    const wishlistId = `${userId}_${agentId}`;
+
+    const result = await pool.query(
+      `INSERT INTO wishlists (id, user_id, agent_id, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id, agent_id) DO NOTHING
+       RETURNING *`,
+      [wishlistId, userId, agentId]
+    );
+
+    if (result.rows.length === 0) {
+      // Already exists
+      return res.status(200).json({
+        message: 'Agent is already in wishlist',
+        id: wishlistId,
+        userId,
+        agentId
+      });
+    }
+
+    // Update agent wishlist count
+    await pool.query(
+      'UPDATE agents SET wishlist_count = wishlist_count + 1 WHERE id = $1',
+      [agentId]
+    );
+
+    const row = result.rows[0];
     return res.status(201).json({
-      id: wishlistRef.id,
-      ...wishlistData,
-      createdAt: new Date(),
-      updatedAt: new Date()
+      id: row.id,
+      userId: row.user_id,
+      agentId: row.agent_id,
+      createdAt: row.created_at
     });
   } catch (error) {
     console.error('Error creating wishlist:', error);
@@ -330,97 +211,51 @@ exports.createWishlist = async (req, res) => {
 
 /**
  * Update a wishlist
+ * Not applicable in the flat PostgreSQL model (wishlists are simple user_id/agent_id pairs).
  */
 exports.updateWishlist = async (req, res) => {
-  try {
-    // Get user ID from authenticated request
-    const userId = req.user.uid;
-    
-    const { wishlistId } = req.params;
-    const { name, description, isPublic } = req.body;
-    
-    // Get wishlist document
-    const wishlistDoc = await db.collection('wishlists').doc(wishlistId).get();
-    
-    if (!wishlistDoc.exists) {
-      return res.status(404).json({ error: 'Wishlist not found' });
-    }
-    
-    const wishlistData = wishlistDoc.data();
-    
-    // Check if user owns the wishlist
-    if (wishlistData.creatorId !== userId) {
-      return res.status(403).json({ error: 'You do not have permission to update this wishlist' });
-    }
-    
-    // Prepare update data
-    const updateData = {
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    if (name !== undefined) updateData.name = name;
-    if (description !== undefined) updateData.description = description;
-    if (isPublic !== undefined) updateData.isPublic = Boolean(isPublic);
-    
-    // Update wishlist
-    await db.collection('wishlists').doc(wishlistId).update(updateData);
-    
-    // Get updated wishlist
-    const updatedWishlistDoc = await db.collection('wishlists').doc(wishlistId).get();
-    const updatedWishlistData = updatedWishlistDoc.data();
-    
-    return res.json({
-      id: wishlistId,
-      ...updatedWishlistData,
-      createdAt: updatedWishlistData.createdAt ? updatedWishlistData.createdAt.toDate() : null,
-      updatedAt: updatedWishlistData.updatedAt ? updatedWishlistData.updatedAt.toDate() : null
-    });
-  } catch (error) {
-    console.error('Error updating wishlist:', error);
-    return res.status(500).json({ error: 'Failed to update wishlist' });
-  }
+  return res.status(501).json({
+    error: 'Not implemented. Wishlists in the current model are simple user-agent pairs and cannot be updated.'
+  });
 };
 
 /**
- * Delete a wishlist
+ * Delete a wishlist entry
  */
 exports.deleteWishlist = async (req, res) => {
   try {
     // Get user ID from authenticated request
     const userId = req.user.uid;
-    
+
     const { wishlistId } = req.params;
-    
-    // Get wishlist document
-    const wishlistDoc = await db.collection('wishlists').doc(wishlistId).get();
-    
-    if (!wishlistDoc.exists) {
-      return res.status(404).json({ error: 'Wishlist not found' });
+
+    // Get wishlist entry to check ownership and get agent_id
+    const wishlistResult = await pool.query(
+      'SELECT * FROM wishlists WHERE id = $1',
+      [wishlistId]
+    );
+
+    if (wishlistResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Wishlist entry not found' });
     }
-    
-    const wishlistData = wishlistDoc.data();
-    
-    // Check if user owns the wishlist
-    if (wishlistData.creatorId !== userId) {
-      return res.status(403).json({ error: 'You do not have permission to delete this wishlist' });
+
+    const wishlistData = wishlistResult.rows[0];
+
+    // Check if user owns the wishlist entry
+    if (wishlistData.user_id !== userId) {
+      return res.status(403).json({ error: 'You do not have permission to delete this wishlist entry' });
     }
-    
-    // Delete all items in the wishlist
-    const itemsSnapshot = await db.collection('wishlists').doc(wishlistId).collection('items').get();
-    
-    const batch = db.batch();
-    
-    itemsSnapshot.docs.forEach(doc => {
-      batch.delete(doc.ref);
-    });
-    
-    // Delete the wishlist document
-    batch.delete(db.collection('wishlists').doc(wishlistId));
-    
-    // Commit the batch
-    await batch.commit();
-    
-    return res.json({ message: 'Wishlist deleted successfully' });
+
+    // Delete the wishlist entry
+    await pool.query('DELETE FROM wishlists WHERE id = $1 AND user_id = $2', [wishlistId, userId]);
+
+    // Decrement agent wishlist count
+    await pool.query(
+      'UPDATE agents SET wishlist_count = GREATEST(wishlist_count - 1, 0) WHERE id = $1',
+      [wishlistData.agent_id]
+    );
+
+    return res.json({ message: 'Wishlist entry deleted successfully' });
   } catch (error) {
     console.error('Error deleting wishlist:', error);
     return res.status(500).json({ error: 'Failed to delete wishlist' });
@@ -429,92 +264,67 @@ exports.deleteWishlist = async (req, res) => {
 
 /**
  * Toggle agent in wishlist
+ * Adds the agent if not in the user's wishlist, removes it if already present.
  */
 exports.toggleWishlistItem = async (req, res) => {
   try {
     // Get user ID from authenticated request
     const userId = req.user.uid;
-    
+
     const { agentId } = req.body;
-    
+
     // Validate required fields
     if (!agentId) {
       return res.status(400).json({ error: 'Agent ID is required' });
     }
-    
+
     // Check if agent exists
-    const agentDoc = await db.collection('agents').doc(agentId).get();
-    
-    if (!agentDoc.exists) {
+    const agentResult = await pool.query('SELECT id FROM agents WHERE id = $1', [agentId]);
+    if (agentResult.rows.length === 0) {
       return res.status(404).json({ error: 'Agent not found' });
     }
-    
-    // Get or create default wishlist for user
-    let defaultWishlistId;
-    const defaultWishlistQuery = await db.collection('wishlists')
-      .where('creatorId', '==', userId)
-      .where('isDefault', '==', true)
-      .limit(1)
-      .get();
-    
-    if (defaultWishlistQuery.empty) {
-      // Create default wishlist
-      const defaultWishlistData = {
-        name: 'My Wishlist',
-        description: 'My default wishlist',
-        creatorId: userId,
-        isPublic: false,
-        isDefault: true,
-        itemCount: 0,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      };
-      
-      const defaultWishlistRef = await db.collection('wishlists').add(defaultWishlistData);
-      defaultWishlistId = defaultWishlistRef.id;
-    } else {
-      defaultWishlistId = defaultWishlistQuery.docs[0].id;
-    }
-    
-    // Check if agent is already in the wishlist
-    const itemQuery = await db.collection('wishlists')
-      .doc(defaultWishlistId)
-      .collection('items')
-      .where('agentId', '==', agentId)
-      .limit(1)
-      .get();
-    
-    if (itemQuery.empty) {
+
+    // Check if agent is already in the user's wishlist
+    const existingResult = await pool.query(
+      'SELECT id FROM wishlists WHERE user_id = $1 AND agent_id = $2',
+      [userId, agentId]
+    );
+
+    if (existingResult.rows.length === 0) {
       // Add agent to wishlist
-      await db.collection('wishlists').doc(defaultWishlistId).collection('items').add({
-        agentId,
-        addedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      
-      // Increment item count
-      await db.collection('wishlists').doc(defaultWishlistId).update({
-        itemCount: admin.firestore.FieldValue.increment(1),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      
+      const wishlistId = `${userId}_${agentId}`;
+      await pool.query(
+        `INSERT INTO wishlists (id, user_id, agent_id, created_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (user_id, agent_id) DO NOTHING`,
+        [wishlistId, userId, agentId]
+      );
+
+      // Increment wishlist count on agent
+      await pool.query(
+        'UPDATE agents SET wishlist_count = wishlist_count + 1 WHERE id = $1',
+        [agentId]
+      );
+
       return res.json({
         added: true,
-        wishlistId: defaultWishlistId,
         message: 'Agent added to wishlist'
       });
     } else {
       // Remove agent from wishlist
-      await db.collection('wishlists').doc(defaultWishlistId).collection('items').doc(itemQuery.docs[0].id).delete();
-      
-      // Decrement item count
-      await db.collection('wishlists').doc(defaultWishlistId).update({
-        itemCount: admin.firestore.FieldValue.increment(-1),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      
+      await pool.query(
+        'DELETE FROM wishlists WHERE user_id = $1 AND agent_id = $2',
+        [userId, agentId]
+      );
+
+      // Decrement wishlist count on agent
+      await pool.query(
+        'UPDATE agents SET wishlist_count = GREATEST(wishlist_count - 1, 0) WHERE id = $1',
+        [agentId]
+      );
+
       return res.json({
         added: false,
-        wishlistId: defaultWishlistId,
         message: 'Agent removed from wishlist'
       });
     }
@@ -533,42 +343,26 @@ exports.checkWishlistItem = async (req, res) => {
     if (!req.user) {
       return res.json({ isWishlisted: false });
     }
-    
+
     const userId = req.user.uid;
     const { agentId } = req.params;
-    
+
     // Validate required fields
     if (!agentId) {
       return res.status(400).json({ error: 'Agent ID is required' });
     }
-    
-    // Get default wishlist for user
-    const defaultWishlistQuery = await db.collection('wishlists')
-      .where('creatorId', '==', userId)
-      .where('isDefault', '==', true)
-      .limit(1)
-      .get();
-    
-    if (defaultWishlistQuery.empty) {
-      return res.json({ isWishlisted: false });
-    }
-    
-    const defaultWishlistId = defaultWishlistQuery.docs[0].id;
-    
-    // Check if agent is in the wishlist
-    const itemQuery = await db.collection('wishlists')
-      .doc(defaultWishlistId)
-      .collection('items')
-      .where('agentId', '==', agentId)
-      .limit(1)
-      .get();
-    
+
+    // Check if agent is in the user's wishlist
+    const result = await pool.query(
+      'SELECT 1 FROM wishlists WHERE user_id = $1 AND agent_id = $2',
+      [userId, agentId]
+    );
+
     return res.json({
-      isWishlisted: !itemQuery.empty,
-      wishlistId: defaultWishlistId
+      isWishlisted: result.rows.length > 0
     });
   } catch (error) {
     console.error('Error checking wishlist item:', error);
     return res.status(500).json({ error: 'Failed to check wishlist item' });
   }
-}; 
+};

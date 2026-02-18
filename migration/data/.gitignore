@@ -1,0 +1,3 @@
+# Ignore exported Firestore data (contains production data)
+*.json
+!.gitkeep

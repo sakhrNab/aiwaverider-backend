@@ -3,7 +3,7 @@
  * Handles admin-specific functionality
  */
 
-const { db } = require('../../config/firebase');
+const { pool } = require('../../config/database');
 const logger = require('../../utils/logger');
 
 /**
@@ -14,118 +14,104 @@ const logger = require('../../utils/logger');
 exports.updateAgentCreators = async (req, res) => {
   try {
     logger.info('Starting agent creator update process...');
-    
-    // Get all agents from the collection
-    const agentsSnapshot = await db.collection('agents').get();
-    logger.info(`Found ${agentsSnapshot.size} agents to process`);
-    
+
+    // Get all agents from the table
+    const agentsResult = await pool.query('SELECT id, name, title, creator FROM agents');
+    logger.info(`Found ${agentsResult.rows.length} agents to process`);
+
     let updateCount = 0;
     let skippedCount = 0;
     let updatedAgents = [];
-    
-    // Process each agent with batched writes
-    const batchSize = 450; // Firestore batch limit is 500, leave some margin
-    let batches = [db.batch()];
-    let currentBatchCount = 0;
-    let batchIndex = 0;
-    
-    for (const doc of agentsSnapshot.docs) {
-      const agent = doc.data();
-      let needsUpdate = false;
-      let originalCreator = agent.creator ? JSON.stringify(agent.creator) : 'null';
-      
-      // Check if creator exists and has the correct structure
-      if (!agent.creator) {
-        // No creator at all, add a default one
-        agent.creator = {
-          name: 'AI Waverider Team',
-          username: 'AIWaverider',
-          role: 'Admin'
-        };
-        needsUpdate = true;
-        logger.info(`Agent ${doc.id}: Adding default creator (no creator found)`);
-      } else if (typeof agent.creator === 'string') {
-        // Creator is a string, convert to object
-        const creatorName = agent.creator;
-        agent.creator = {
-          name: creatorName,
-          username: creatorName.replace(/\s+/g, ''),
-          role: 'Partner'
-        };
-        needsUpdate = true;
-        logger.info(`Agent ${doc.id}: Converting string creator "${creatorName}" to object`);
-      } else if (typeof agent.creator === 'object') {
-        // Creator is an object, check for missing fields
-        if (!agent.creator.username) {
-          // Add username based on name or default
-          agent.creator.username = agent.creator.name ? 
-            agent.creator.name.replace(/\s+/g, '') : 'AIWaverider';
+
+    // Use a transaction for batched writes
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      for (const row of agentsResult.rows) {
+        let creator = row.creator;
+        let needsUpdate = false;
+        let originalCreator = creator ? JSON.stringify(creator) : 'null';
+
+        // Check if creator exists and has the correct structure
+        if (!creator) {
+          // No creator at all, add a default one
+          creator = {
+            name: 'AI Waverider Team',
+            username: 'AIWaverider',
+            role: 'Admin'
+          };
           needsUpdate = true;
-        }
-        
-        if (!agent.creator.role) {
-          // Add default role
-          agent.creator.role = agent.creator.name && 
-            agent.creator.name.includes('Waverider') ? 'Admin' : 'Partner';
+          logger.info(`Agent ${row.id}: Adding default creator (no creator found)`);
+        } else if (typeof creator === 'string') {
+          // Creator is a string, convert to object
+          const creatorName = creator;
+          creator = {
+            name: creatorName,
+            username: creatorName.replace(/\s+/g, ''),
+            role: 'Partner'
+          };
           needsUpdate = true;
+          logger.info(`Agent ${row.id}: Converting string creator "${creatorName}" to object`);
+        } else if (typeof creator === 'object') {
+          // Creator is an object, check for missing fields
+          if (!creator.username) {
+            // Add username based on name or default
+            creator.username = creator.name ?
+              creator.name.replace(/\s+/g, '') : 'AIWaverider';
+            needsUpdate = true;
+          }
+
+          if (!creator.role) {
+            // Add default role
+            creator.role = creator.name &&
+              creator.name.includes('Waverider') ? 'Admin' : 'Partner';
+            needsUpdate = true;
+          }
+
+          if (needsUpdate) {
+            logger.info(`Agent ${row.id}: Updating creator properties`);
+          }
         }
-        
+
         if (needsUpdate) {
-          logger.info(`Agent ${doc.id}: Updating creator properties`);
+          await client.query(
+            'UPDATE agents SET creator = $1 WHERE id = $2',
+            [JSON.stringify(creator), row.id]
+          );
+          updateCount++;
+
+          // Track updated agents for debugging
+          updatedAgents.push({
+            id: row.id,
+            name: row.name || row.title || 'Unnamed agent',
+            originalCreator,
+            newCreator: JSON.stringify(creator)
+          });
+        } else {
+          skippedCount++;
         }
       }
-      
-      if (needsUpdate) {
-        // Check if we need to create a new batch
-        if (currentBatchCount >= batchSize) {
-          batchIndex++;
-          batches.push(db.batch());
-          currentBatchCount = 0;
-        }
-        
-        // Update the document in the current batch
-        batches[batchIndex].update(doc.ref, { creator: agent.creator });
-        currentBatchCount++;
-        updateCount++;
-        
-        // Track updated agents for debugging
-        updatedAgents.push({
-          id: doc.id,
-          name: agent.name || agent.title || 'Unnamed agent',
-          originalCreator,
-          newCreator: JSON.stringify(agent.creator)
-        });
-      } else {
-        skippedCount++;
-      }
+
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
     }
-    
-    // Commit all batches
-    if (updateCount > 0) {
-      logger.info(`Committing ${batches.length} batches with ${updateCount} updates...`);
-      
-      // Track progress for large batches
-      for (let i = 0; i <= batchIndex; i++) {
-        logger.info(`Committing batch ${i + 1} of ${batchIndex + 1}...`);
-        await batches[i].commit();
-        logger.info(`Batch ${i + 1} committed successfully`);
-      }
-    } else {
-      logger.info('No updates needed, skipping batch commits');
-    }
-    
+
     const result = {
       success: true,
       message: 'Agent creators updated successfully',
       stats: {
-        total: agentsSnapshot.size,
+        total: agentsResult.rows.length,
         updated: updateCount,
-        skipped: skippedCount,
-        batches: batchIndex + 1
+        skipped: skippedCount
       },
       updatedAgents: updatedAgents.slice(0, 10) // Only return first 10 for brevity
     };
-    
+
     logger.info(`Agent creator update completed successfully: ${updateCount} updated, ${skippedCount} skipped`);
     return res.status(200).json(result);
   } catch (error) {
@@ -161,57 +147,52 @@ exports.getDashboardStats = async (req, res) => {
         revenue: 0
       }
     };
-    
+
     // Get agent stats
-    const agentsSnapshot = await db.collection('agents').get();
-    stats.agents.total = agentsSnapshot.size;
-    
-    agentsSnapshot.forEach(doc => {
-      const agent = doc.data();
-      if (agent.isFree || agent.price === 0) {
-        stats.agents.free++;
-      } else {
-        stats.agents.paid++;
-      }
-    });
-    
-    // Get user stats if users collection exists
+    const agentsResult = await pool.query(
+      `SELECT
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE is_free = true OR price = 0) AS free,
+        COUNT(*) FILTER (WHERE is_free IS NOT TRUE AND (price IS NULL OR price != 0)) AS paid
+      FROM agents`
+    );
+    if (agentsResult.rows.length > 0) {
+      stats.agents.total = parseInt(agentsResult.rows[0].total) || 0;
+      stats.agents.free = parseInt(agentsResult.rows[0].free) || 0;
+      stats.agents.paid = parseInt(agentsResult.rows[0].paid) || 0;
+    }
+
+    // Get user stats if users table exists
     try {
-      const usersSnapshot = await db.collection('users').get();
-      stats.users.total = usersSnapshot.size;
-      
+      const usersCountResult = await pool.query('SELECT COUNT(*) AS total FROM users');
+      stats.users.total = parseInt(usersCountResult.rows[0].total) || 0;
+
       // Count active users (logged in within last 30 days)
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      
-      usersSnapshot.forEach(doc => {
-        const user = doc.data();
-        if (user.lastLoginAt && new Date(user.lastLoginAt) > thirtyDaysAgo) {
-          stats.users.active++;
-        }
-      });
+
+      const activeUsersResult = await pool.query(
+        'SELECT COUNT(*) AS active FROM users WHERE last_login_at > $1',
+        [thirtyDaysAgo]
+      );
+      stats.users.active = parseInt(activeUsersResult.rows[0].active) || 0;
     } catch (err) {
       logger.warn('Could not fetch user stats:', err.message);
     }
-    
-    // Get order stats if orders collection exists
+
+    // Get order stats if orders table exists
     try {
-      const ordersSnapshot = await db.collection('orders').get();
-      stats.orders.total = ordersSnapshot.size;
-      
-      ordersSnapshot.forEach(doc => {
-        const order = doc.data();
-        if (order.amount) {
-          stats.orders.revenue += parseFloat(order.amount) || 0;
-        }
-      });
-      
-      // Format revenue to 2 decimal places
-      stats.orders.revenue = parseFloat(stats.orders.revenue.toFixed(2));
+      const ordersResult = await pool.query(
+        'SELECT COUNT(*) AS total, COALESCE(SUM(total), 0) AS revenue FROM orders'
+      );
+      if (ordersResult.rows.length > 0) {
+        stats.orders.total = parseInt(ordersResult.rows[0].total) || 0;
+        stats.orders.revenue = parseFloat(parseFloat(ordersResult.rows[0].revenue).toFixed(2));
+      }
     } catch (err) {
       logger.warn('Could not fetch order stats:', err.message);
     }
-    
+
     return res.status(200).json({
       success: true,
       stats
@@ -224,4 +205,4 @@ exports.getDashboardStats = async (req, res) => {
       error: error.message
     });
   }
-}; 
+};

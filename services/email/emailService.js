@@ -521,7 +521,6 @@ exports.sendAgentPurchaseEmail = async (purchaseData) => {
     } else if (purchaseData.agentId && !purchaseData.isSepaPayment) {
       try {
         // Try to get the template content from the agents collection
-        const { db } = require('../../config/firebase');
         const { getAgentTemplate } = require('../../controllers/payment/orderController');
         const agentId = purchaseData.agentId;
         

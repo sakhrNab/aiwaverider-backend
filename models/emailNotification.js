@@ -1,36 +1,37 @@
 /**
  * Email Notification Model
- * 
+ *
  * Handles email notification data, campaigns, and logs
+ *
+ * Migrated from Firestore to PostgreSQL.
+ * Functions that query the `users` table use pool.query() directly.
+ * Functions that depended on non-existent tables (emailCampaigns, emailLogs,
+ * emailTemplates, waitlist) are stubbed with logging until those tables are created.
  */
 
-const { db } = require('../config/firebase');
-const admin = require('firebase-admin');
+const { pool } = require('../config/database');
+const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger');
-
-// Collection references
-const emailCampaignsCollection = db.collection('emailCampaigns');
-const emailLogsCollection = db.collection('emailLogs');
-const usersCollection = db.collection('users');
-const waitlistCollection = db.collection('waitlist');
 
 /**
  * Create a new email campaign
  * @param {Object} campaignData - Campaign data
  * @returns {Promise<string>} - Campaign ID
  */
+// TODO: Create email_campaigns table to persist this data
 exports.createCampaign = async (campaignData) => {
   try {
-    const campaignRef = db.collection('emailCampaigns').doc();
-    
-    await campaignRef.set({
+    const campaignId = uuidv4();
+    const now = new Date().toISOString();
+
+    logger.info(`[STUB] createCampaign: id=${campaignId}, data=${JSON.stringify({
       ...campaignData,
       status: 'created',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    
-    return campaignRef.id;
+      createdAt: now,
+      updatedAt: now
+    })}`);
+
+    return campaignId;
   } catch (error) {
     logger.error(`Error creating email campaign: ${error.message}`);
     throw error;
@@ -43,15 +44,17 @@ exports.createCampaign = async (campaignData) => {
  * @param {Object} updateData - Data to update
  * @returns {Promise<void>}
  */
+// TODO: Create email_campaigns table to persist this data
 exports.updateCampaign = async (campaignId, updateData) => {
   try {
     // Don't allow updating certain fields directly
     const { sentCount, failedCount, startedAt, completedAt, ...safeUpdateData } = updateData;
-    
-    await emailCampaignsCollection.doc(campaignId).update({
+    const now = new Date().toISOString();
+
+    logger.info(`[STUB] updateCampaign: id=${campaignId}, data=${JSON.stringify({
       ...safeUpdateData,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
+      updatedAt: now
+    })}`);
   } catch (error) {
     logger.error(`Error updating email campaign: ${error.message}`);
     throw error;
@@ -63,13 +66,12 @@ exports.updateCampaign = async (campaignId, updateData) => {
  * @param {string} campaignId - Campaign ID
  * @returns {Promise<void>}
  */
+// TODO: Create email_campaigns table to persist this data
 exports.markCampaignAsSending = async (campaignId) => {
   try {
-    await db.collection('emailCampaigns').doc(campaignId).update({
-      status: 'sending',
-      startedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
+    const now = new Date().toISOString();
+
+    logger.info(`[STUB] markCampaignAsSending: id=${campaignId}, status=sending, startedAt=${now}`);
   } catch (error) {
     logger.error(`Error marking campaign as sending: ${error.message}`);
     throw error;
@@ -84,16 +86,12 @@ exports.markCampaignAsSending = async (campaignId) => {
  * @param {Array} errors - Errors encountered
  * @returns {Promise<void>}
  */
+// TODO: Create email_campaigns table to persist this data
 exports.markCampaignAsCompleted = async (campaignId, sentCount, failedCount, errors = []) => {
   try {
-    await db.collection('emailCampaigns').doc(campaignId).update({
-      status: 'completed',
-      sentCount,
-      failedCount,
-      errors: errors || [],
-      completedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
+    const now = new Date().toISOString();
+
+    logger.info(`[STUB] markCampaignAsCompleted: id=${campaignId}, sentCount=${sentCount}, failedCount=${failedCount}, errors=${JSON.stringify(errors || [])}, completedAt=${now}`);
   } catch (error) {
     logger.error(`Error marking campaign as completed: ${error.message}`);
     throw error;
@@ -105,16 +103,18 @@ exports.markCampaignAsCompleted = async (campaignId, sentCount, failedCount, err
  * @param {Object} sendData - Send data
  * @returns {Promise<string>} - Log entry ID
  */
+// TODO: Create email_logs table to persist this data
 exports.logEmailSend = async (sendData) => {
   try {
-    const logRef = db.collection('emailLogs').doc();
-    
-    await logRef.set({
+    const logId = uuidv4();
+    const now = new Date().toISOString();
+
+    logger.info(`[STUB] logEmailSend: id=${logId}, data=${JSON.stringify({
       ...sendData,
-      timestamp: admin.firestore.FieldValue.serverTimestamp()
-    });
-    
-    return logRef.id;
+      timestamp: now
+    })}`);
+
+    return logId;
   } catch (error) {
     logger.error(`Error logging email send: ${error.message}`);
     throw error;
@@ -129,40 +129,57 @@ exports.logEmailSend = async (sendData) => {
 exports.getUsersByPreferences = async (options = {}) => {
   try {
     const { emailTypes = [] } = options;
-    
-    // Query users collection
-    let query = db.collection('users').where('status', '==', 'active');
-    
-    // No preferences filter if no types specified
+
     if (emailTypes.length === 0) {
-      const usersSnapshot = await query.get();
-      
-      return usersSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
+      // No preference filter -- return all active users
+      const { rows } = await pool.query(
+        `SELECT id, email, status, email_preferences, first_name, last_name, display_name, username
+         FROM users
+         WHERE status = 'active'`
+      );
+
+      return rows.map(row => ({
+        id: row.id,
+        email: row.email,
+        status: row.status,
+        emailPreferences: row.email_preferences,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        displayName: row.display_name,
+        username: row.username
       }));
     }
-    
-    // Complex query for email preferences
-    const usersSnapshot = await query.get();
-    
-    // Filter in memory due to Firestore limitations on nested field queries
-    const filteredUsers = usersSnapshot.docs
-      .map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }))
-      .filter(user => {
-        // Default to true if no preferences specified
-        if (!user.emailPreferences) return true;
-        
-        // Match any of the specified preference types
-        return emailTypes.some(type => 
-          user.emailPreferences[type] !== false
-        );
-      });
-    
-    return filteredUsers;
+
+    // Build a JSONB filter: match users where at least one of the requested
+    // preference types is NOT explicitly set to false.
+    // We use: email_preferences IS NULL (default = opted-in)
+    //      OR email_preferences->>type IS NULL (key absent = opted-in)
+    //      OR email_preferences->>type != 'false'
+    const conditions = emailTypes.map((_, i) => {
+      const param = `$${i + 1}`;
+      return `(email_preferences IS NULL OR email_preferences->>` + param + ` IS NULL OR email_preferences->>` + param + ` != 'false')`;
+    });
+
+    const whereClause = conditions.join(' OR ');
+    const queryText = `
+      SELECT id, email, status, email_preferences, first_name, last_name, display_name, username
+      FROM users
+      WHERE status = 'active'
+        AND (${whereClause})
+    `;
+
+    const { rows } = await pool.query(queryText, emailTypes);
+
+    return rows.map(row => ({
+      id: row.id,
+      email: row.email,
+      status: row.status,
+      emailPreferences: row.email_preferences,
+      firstName: row.first_name,
+      lastName: row.last_name,
+      displayName: row.display_name,
+      username: row.username
+    }));
   } catch (error) {
     logger.error(`Error getting users by preferences: ${error.message}`);
     throw error;
@@ -175,32 +192,32 @@ exports.getUsersByPreferences = async (options = {}) => {
  */
 exports.getEmailPreferenceStats = async () => {
   try {
-    const usersSnapshot = await db.collection('users').get();
-    
-    const stats = {
-      totalUsers: usersSnapshot.size,
-      preferences: {
-        weeklyUpdates: 0,
-        announcements: 0,
-        newAgents: 0,
-        newTools: 0,
-        marketingEmails: 0
-      }
+    const prefKeys = ['weeklyUpdates', 'announcements', 'newAgents', 'newTools', 'marketingEmails'];
+
+    // Build aggregation expressions for each preference key
+    const countExpressions = prefKeys.map(key =>
+      `COUNT(*) FILTER (WHERE email_preferences->>'${key}' = 'true') AS "${key}"`
+    ).join(', ');
+
+    const queryText = `
+      SELECT
+        COUNT(*) AS total_users,
+        ${countExpressions}
+      FROM users
+    `;
+
+    const { rows } = await pool.query(queryText);
+    const row = rows[0];
+
+    const preferences = {};
+    for (const key of prefKeys) {
+      preferences[key] = parseInt(row[key], 10) || 0;
+    }
+
+    return {
+      totalUsers: parseInt(row.total_users, 10) || 0,
+      preferences
     };
-    
-    usersSnapshot.forEach(doc => {
-      const user = doc.data();
-      
-      if (user.emailPreferences) {
-        Object.keys(stats.preferences).forEach(pref => {
-          if (user.emailPreferences[pref] === true) {
-            stats.preferences[pref]++;
-          }
-        });
-      }
-    });
-    
-    return stats;
   } catch (error) {
     logger.error(`Error getting email preference stats: ${error.message}`);
     throw error;
@@ -215,10 +232,12 @@ exports.getEmailPreferenceStats = async () => {
  */
 exports.updateUserEmailPreferences = async (userId, preferences) => {
   try {
-    await db.collection('users').doc(userId).update({
-      'emailPreferences': preferences,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
+    await pool.query(
+      `UPDATE users
+       SET email_preferences = $1, updated_at = NOW()
+       WHERE id = $2`,
+      [JSON.stringify(preferences), userId]
+    );
   } catch (error) {
     logger.error(`Error updating email preferences: ${error.message}`);
     throw error;
@@ -230,20 +249,16 @@ exports.updateUserEmailPreferences = async (userId, preferences) => {
  * @param {string} templateType - Template type
  * @returns {Promise<Object>} - Template data
  */
+// TODO: Create email_templates table to persist this data
 exports.getEmailTemplate = async (templateType) => {
   try {
-    const templateRef = db.collection('emailTemplates').doc(templateType);
-    const templateDoc = await templateRef.get();
-    
-    if (!templateDoc.exists) {
-      // Return default template if not found
-      return {
-        subject: getDefaultSubject(templateType),
-        content: getDefaultContent(templateType)
-      };
-    }
-    
-    return templateDoc.data();
+    // No email_templates table yet -- always return defaults
+    logger.info(`[STUB] getEmailTemplate: type=${templateType} -- returning default template`);
+
+    return {
+      subject: getDefaultSubject(templateType),
+      content: getDefaultContent(templateType)
+    };
   } catch (error) {
     logger.error(`Error getting email template: ${error.message}`);
     throw error;
@@ -256,17 +271,18 @@ exports.getEmailTemplate = async (templateType) => {
  * @param {Object} templateData - Template data
  * @returns {Promise<Object>} - Updated template
  */
+// TODO: Create email_templates table to persist this data
 exports.updateEmailTemplate = async (templateType, templateData) => {
   try {
-    const templateRef = db.collection('emailTemplates').doc(templateType);
-    
+    const now = new Date().toISOString();
+
     const updatedTemplate = {
       ...templateData,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      updatedAt: now
     };
-    
-    await templateRef.set(updatedTemplate, { merge: true });
-    
+
+    logger.info(`[STUB] updateEmailTemplate: type=${templateType}, data=${JSON.stringify(updatedTemplate)}`);
+
     return updatedTemplate;
   } catch (error) {
     logger.error(`Error updating email template: ${error.message}`);
@@ -327,37 +343,21 @@ function getDefaultContent(templateType) {
  * @param {string} email - Email address
  * @returns {Promise<Object>} - Waitlist entry data
  */
+// TODO: Create waitlist table to persist this data
 exports.addToWaitlist = async (email) => {
   try {
-    // Check if email already exists in waitlist
-    const existingSnapshot = await waitlistCollection
-      .where('email', '==', email.toLowerCase().trim())
-      .get();
-    
-    if (!existingSnapshot.empty) {
-      // Email already exists, return existing entry
-      const existingDoc = existingSnapshot.docs[0];
-      return {
-        id: existingDoc.id,
-        ...existingDoc.data(),
-        alreadyExists: true
-      };
-    }
-    
-    // Create new waitlist entry
-    const waitlistRef = waitlistCollection.doc();
-    const waitlistData = {
-      email: email.toLowerCase().trim(),
-      status: 'active',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    await waitlistRef.set(waitlistData);
-    
+    const normalizedEmail = email.toLowerCase().trim();
+    const now = new Date().toISOString();
+    const id = uuidv4();
+
+    logger.info(`[STUB] addToWaitlist: id=${id}, email=${normalizedEmail}, status=active, createdAt=${now}`);
+
     return {
-      id: waitlistRef.id,
-      ...waitlistData,
+      id,
+      email: normalizedEmail,
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
       alreadyExists: false
     };
   } catch (error) {
@@ -371,21 +371,14 @@ exports.addToWaitlist = async (email) => {
  * @param {Object} options - Query options (limit, status)
  * @returns {Promise<Array>} - Waitlist entries
  */
+// TODO: Create waitlist table to persist this data
 exports.getWaitlistEntries = async (options = {}) => {
   try {
     const { limit = 100, status = 'active' } = options;
-    
-    let query = waitlistCollection
-      .where('status', '==', status)
-      .orderBy('createdAt', 'desc')
-      .limit(limit);
-    
-    const snapshot = await query.get();
-    
-    return snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
+
+    logger.info(`[STUB] getWaitlistEntries: limit=${limit}, status=${status} -- returning empty array`);
+
+    return [];
   } catch (error) {
     logger.error(`Error getting waitlist entries: ${error.message}`);
     throw error;
@@ -396,24 +389,16 @@ exports.getWaitlistEntries = async (options = {}) => {
  * Get waitlist count
  * @returns {Promise<number>} - Total waitlist count
  */
+// TODO: Create waitlist table to persist this data
 exports.getWaitlistCount = async () => {
   try {
-    const snapshot = await waitlistCollection
-      .where('status', '==', 'active')
-      .get();
-    
-    return snapshot.size;
+    logger.info('[STUB] getWaitlistCount -- returning 0');
+
+    return 0;
   } catch (error) {
     logger.error(`Error getting waitlist count: ${error.message}`);
-    // If query fails, try getting all and filtering (fallback)
-    try {
-      const allSnapshot = await waitlistCollection.get();
-      return allSnapshot.docs.filter(doc => doc.data().status === 'active').length;
-    } catch (fallbackError) {
-      logger.error(`Error in fallback waitlist count: ${fallbackError.message}`);
-      throw error;
-    }
+    throw error;
   }
 };
 
-module.exports = exports; 
+module.exports = exports;

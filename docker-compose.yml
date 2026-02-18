@@ -4,40 +4,129 @@ services:
       context: .
       dockerfile: Dockerfile.prod
     environment:
+      # Core
       - NODE_ENV=production
       - PORT=5000
+      # PostgreSQL (internal service)
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGUSER=aiwaverider
+      - PGPASSWORD=${PGPASSWORD:-aiwaverider_secret}
+      - PGDATABASE=aiwaverider
+      - PG_POOL_MAX=20
+      # Redis (internal service)
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-    # Use expose instead of ports to avoid host port collisions
-    # Coolify/Traefik will handle external routing
+      # Firebase (set these in Coolify env vars)
+      - FIREBASE_SERVICE_ACCOUNT_PATH=server/aiwaverider8-privatekey.json
+      - FIREBASE_STORAGE_BUCKET=${FIREBASE_STORAGE_BUCKET}
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}
+      # Auth & Security
+      - JWT_SECRET=${JWT_SECRET}
+      - REFRESH_TOKEN_SECRET=${REFRESH_TOKEN_SECRET}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - ADMIN_TOKEN=${ADMIN_TOKEN}
+      - ADMIN_KEY=${ADMIN_KEY}
+      - AUTHORIZED_ADMIN_EMAILS=${AUTHORIZED_ADMIN_EMAILS}
+      # CORS & URLs
+      - CORS_ORIGINS=${CORS_ORIGINS}
+      - FRONTEND_URL=${FRONTEND_URL}
+      - API_URL=${API_URL}
+      # Google OAuth
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_CALLBACK_URL=${GOOGLE_CALLBACK_URL}
+      # Microsoft OAuth
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET}
+      - MICROSOFT_CALLBACK_URL=${MICROSOFT_CALLBACK_URL}
+      # Stripe
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      # PayPal
+      - PAYPAL_CLIENT_ID=${PAYPAL_CLIENT_ID}
+      - PAYPAL_CLIENT_SECRET=${PAYPAL_CLIENT_SECRET}
+      - PAYPAL_ENV=${PAYPAL_ENV:-sandbox}
+      - PAYPAL_SUBS_PLAN_ID=${PAYPAL_SUBS_PLAN_ID}
+      - PAYPAL_WEBHOOK_ID=${PAYPAL_WEBHOOK_ID}
+      # UniPay
+      - UNIPAY_ENVIRONMENT=${UNIPAY_ENVIRONMENT:-test}
+      - UNIPAY_TEST_MERCHANT_ID=${UNIPAY_TEST_MERCHANT_ID}
+      - UNIPAY_TEST_API_KEY=${UNIPAY_TEST_API_KEY}
+      # OpenAI
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Email (SMTP)
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-465}
+      - SMTP_SECURE=${SMTP_SECURE:-true}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - FROM_NAME=${FROM_NAME}
+      - FROM_EMAIL=${FROM_EMAIL}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME}
+      # Video APIs
+      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY}
+      - YOUTUBE_LOOKBACK_DAYS=${YOUTUBE_LOOKBACK_DAYS:-360}
+      - TIKTOK_API_KEY=${TIKTOK_API_KEY}
+      - TIKTOK_SECUID=${TIKTOK_SECUID}
+      - TIKTOK_RAPIDAPI_HOST=${TIKTOK_RAPIDAPI_HOST}
+      - VIDEO_CACHE_TTL=${VIDEO_CACHE_TTL:-300}
+      # Instagram
+      - INSTAGRAM_ACCESS_TOKEN=${INSTAGRAM_ACCESS_TOKEN}
+      - INSTAGRAM_BUSINESS_ACCOUNT_ID=${INSTAGRAM_BUSINESS_ACCOUNT_ID}
+      # GitHub (image storage)
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_REPO=${GITHUB_REPO}
+      - GITHUB_BRANCH=${GITHUB_BRANCH:-main}
+      - GITHUB_DIR=${GITHUB_DIR:-images}
+      # Company info
+      - COMPANY_NAME=${COMPANY_NAME}
+      - COMPANY_EMAIL=${COMPANY_EMAIL}
     expose:
       - "5000"
     depends_on:
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
-    # Health check for container monitoring
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/_health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
       interval: 15s
       timeout: 5s
       retries: 3
       start_period: 30s
-    # Graceful shutdown period
     stop_grace_period: 30s
-    # Logging configuration
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-    # Traefik labels for external routing (Coolify will manage domain)
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.aiwaverider-backend.rule=Host(`api.aiwaverider.com`)
-      - traefik.http.routers.aiwaverider-backend.entrypoints=https
-      - traefik.http.services.aiwaverider-backend.loadbalancer.server.port=5000
-      - traefik.http.routers.aiwaverider-backend.tls=true
-      - traefik.http.routers.aiwaverider-backend.tls.certresolver=letsencrypt
+    networks:
+      - aiwaverider_network
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aiwaverider
+      POSTGRES_PASSWORD: ${PGPASSWORD:-aiwaverider_secret}
+      POSTGRES_DB: aiwaverider
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Auto-run schema + indices + seed on first start (alphabetical order)
+      - ./migration/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+      - ./migration/002_indices.sql:/docker-entrypoint-initdb.d/002_indices.sql:ro
+      - ./migration/003_seed.sql:/docker-entrypoint-initdb.d/003_seed.sql:ro
+    expose:
+      - "5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiwaverider -d aiwaverider"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     networks:
       - aiwaverider_network
 
@@ -46,7 +135,6 @@ services:
     command: redis-server --appendonly yes --save 60 1 --loglevel warning
     volumes:
       - redis_data:/data
-    # Use expose instead of ports for internal communication
     expose:
       - "6379"
     restart: unless-stopped
@@ -59,10 +147,9 @@ services:
       - aiwaverider_network
 
 volumes:
+  postgres_data:
   redis_data:
 
 networks:
   aiwaverider_network:
     driver: bridge
-    # Note: Coolify will manage external networks
-    # If you need external network, use: external: true

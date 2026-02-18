@@ -1,9 +1,11 @@
 /**
  * Site Settings Model
- * 
+ *
  * This file defines the default site settings and utility functions
  * to handle site-wide configuration.
  */
+
+const { pool } = require('../config/database');
 
 // Default settings object
 const defaultSettings = {
@@ -27,23 +29,20 @@ const defaultSettings = {
   }
 };
 
-// Get the settings document reference
-const getSettingsDocRef = (db) => {
-  return db.collection('siteConfig').doc('settings');
-};
-
 // Initialize settings in the database if they don't exist
-const initializeSettings = async (db) => {
+const initializeSettings = async () => {
   try {
-    const settingsRef = getSettingsDocRef(db);
-    const settingsDoc = await settingsRef.get();
-    
-    if (!settingsDoc.exists) {
-      await settingsRef.set({
-        ...defaultSettings,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
+    const { rows } = await pool.query(
+      'SELECT id FROM site_config WHERE id = $1',
+      ['settings']
+    );
+
+    if (rows.length === 0) {
+      await pool.query(
+        `INSERT INTO site_config (id, theme, notifications, advertisement)
+         VALUES ($1, $2, $3, $4)`,
+        ['settings', JSON.stringify(defaultSettings.theme), JSON.stringify(defaultSettings.notifications), JSON.stringify(defaultSettings.advertisement)]
+      );
       console.log('Site settings initialized with default values');
     }
   } catch (error) {
@@ -52,14 +51,19 @@ const initializeSettings = async (db) => {
 };
 
 // Reset settings to default values
-const resetSettings = async (db) => {
+const resetSettings = async () => {
   try {
-    const settingsRef = getSettingsDocRef(db);
-    await settingsRef.set({
-      ...defaultSettings,
-      updatedAt: new Date()
-    });
-    
+    await pool.query(
+      `INSERT INTO site_config (id, theme, notifications, advertisement)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET
+         theme = EXCLUDED.theme,
+         notifications = EXCLUDED.notifications,
+         advertisement = EXCLUDED.advertisement,
+         updated_at = NOW()`,
+      ['settings', JSON.stringify(defaultSettings.theme), JSON.stringify(defaultSettings.notifications), JSON.stringify(defaultSettings.advertisement)]
+    );
+
     return defaultSettings;
   } catch (error) {
     console.error('Error resetting site settings:', error);
@@ -68,17 +72,23 @@ const resetSettings = async (db) => {
 };
 
 // Get current settings
-const getSettings = async (db) => {
+const getSettings = async () => {
   try {
-    const settingsRef = getSettingsDocRef(db);
-    const settingsDoc = await settingsRef.get();
-    
-    if (!settingsDoc.exists) {
-      await initializeSettings(db);
+    const { rows } = await pool.query(
+      'SELECT theme, notifications, advertisement FROM site_config WHERE id = $1',
+      ['settings']
+    );
+
+    if (rows.length === 0) {
+      await initializeSettings();
       return defaultSettings;
     }
-    
-    return settingsDoc.data();
+
+    return {
+      theme: rows[0].theme,
+      notifications: rows[0].notifications,
+      advertisement: rows[0].advertisement
+    };
   } catch (error) {
     console.error('Error getting site settings:', error);
     throw error;
@@ -86,10 +96,8 @@ const getSettings = async (db) => {
 };
 
 // Update settings
-const updateSettings = async (db, newSettings) => {
+const updateSettings = async (newSettings) => {
   try {
-    const settingsRef = getSettingsDocRef(db);
-    
     // Validate the settings object
     const validatedSettings = {
       theme: {
@@ -100,8 +108,8 @@ const updateSettings = async (db, newSettings) => {
         accentColor: newSettings.theme?.accentColor || defaultSettings.theme.accentColor
       },
       notifications: {
-        enableEmailNotifications: typeof newSettings.notifications?.enableEmailNotifications === 'boolean' 
-          ? newSettings.notifications.enableEmailNotifications 
+        enableEmailNotifications: typeof newSettings.notifications?.enableEmailNotifications === 'boolean'
+          ? newSettings.notifications.enableEmailNotifications
           : defaultSettings.notifications.enableEmailNotifications,
         enableMarketingEmails: typeof newSettings.notifications?.enableMarketingEmails === 'boolean'
           ? newSettings.notifications.enableMarketingEmails
@@ -125,13 +133,19 @@ const updateSettings = async (db, newSettings) => {
           : defaultSettings.advertisement.adPositions
       }
     };
-    
-    // Update with validated settings
-    await settingsRef.update({
-      ...validatedSettings,
-      updatedAt: new Date()
-    });
-    
+
+    // Upsert with validated settings
+    await pool.query(
+      `INSERT INTO site_config (id, theme, notifications, advertisement)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET
+         theme = EXCLUDED.theme,
+         notifications = EXCLUDED.notifications,
+         advertisement = EXCLUDED.advertisement,
+         updated_at = NOW()`,
+      ['settings', JSON.stringify(validatedSettings.theme), JSON.stringify(validatedSettings.notifications), JSON.stringify(validatedSettings.advertisement)]
+    );
+
     return validatedSettings;
   } catch (error) {
     console.error('Error updating site settings:', error);
@@ -145,4 +159,4 @@ module.exports = {
   getSettings,
   updateSettings,
   resetSettings
-}; 
+};

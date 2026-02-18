@@ -19,10 +19,7 @@ const {
   incrementViews,
   initializeViewCounts
 } = require('../../controllers/posts/postsController');
-const admin = require('firebase-admin');
 const upload = require('../../middleware/upload');
-// Initialize Firestore
-const db = admin.firestore();
 
 /**
  * @swagger

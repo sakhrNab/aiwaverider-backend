@@ -15,7 +15,11 @@ const invoiceService = require('../../services/invoice/invoiceService');
 const orderController = require('../../controllers/payment/orderController');
 const emailService = require('../../services/email/emailService');
 const logger = require('../../utils/logger');
-const { db } = require('../../config/firebase');
+const { pool } = require('../../config/database');
+
+// In-memory webhook event deduplication (acceptable for single-server deployments)
+// TODO: For multi-server deployments, consider using a dedicated PostgreSQL table for webhook deduplication
+const processedWebhookEvents = new Set();
 
 // PayPal configuration (direct integration) - keeping existing PayPal code
 const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || 'test_client_id';
@@ -172,22 +176,26 @@ router.post('/process-redirect', async (req, res) => {
     }
 
     // Get order data from database
-    const orderDoc = await db.collection('uniPayOrders').doc(orderHashId).get();
-    
-    if (!orderDoc.exists) {
+    const { rows } = await pool.query(
+      'SELECT * FROM orders WHERE unipay_order_hash_id = $1',
+      [orderHashId]
+    );
+
+    if (rows.length === 0) {
       return res.status(404).json({
         error: 'Order not found'
       });
     }
 
-    const orderData = orderDoc.data();
-    
+    const orderData = rows[0];
+    const metadata = orderData.metadata || {};
+
     logger.info(`Processing redirect payment for order: ${orderHashId}`);
 
     return res.status(200).json({
       success: true,
       orderHashId,
-      paymentUrl: orderData.paymentUrl,
+      paymentUrl: metadata.paymentUrl,
       message: 'Redirect to payment URL to complete payment'
     });
   } catch (error) {
@@ -258,11 +266,18 @@ router.post('/confirm-order', async (req, res) => {
     const result = await uniPayService.confirmOrder(orderHashId, amount);
     
     // Update order status in database
-    await db.collection('uniPayOrders').doc(orderHashId).update({
-      status: 'confirmed',
-      confirmedAt: new Date().toISOString(),
-      confirmedAmount: amount
-    });
+    await pool.query(
+      `UPDATE orders
+         SET status = $1,
+             metadata = metadata || $2::jsonb,
+             updated_at = NOW()
+       WHERE unipay_order_hash_id = $3`,
+      [
+        'confirmed',
+        JSON.stringify({ confirmedAt: new Date().toISOString(), confirmedAmount: amount }),
+        orderHashId
+      ]
+    );
 
     logger.info(`Confirmed UniPay order: ${orderHashId}`, {
       amount
@@ -316,8 +331,11 @@ router.get('/status/:orderHashId', async (req, res) => {
     const uniPayStatus = await uniPayService.getPaymentStatus(orderHashId);
     
     // Get order data from our database
-    const orderDoc = await db.collection('uniPayOrders').doc(orderHashId).get();
-    const orderData = orderDoc.exists ? orderDoc.data() : null;
+    const { rows } = await pool.query(
+      'SELECT * FROM orders WHERE unipay_order_hash_id = $1',
+      [orderHashId]
+    );
+    const orderData = rows.length > 0 ? rows[0] : null;
     
     return res.status(200).json({
       success: true,
@@ -393,20 +411,33 @@ router.post('/refund', async (req, res) => {
     const result = await uniPayService.createRefund(orderHashId, amount, reason);
     
     // Update order status in database
-    await db.collection('uniPayOrders').doc(orderHashId).update({
-      status: 'refunded',
-      refundedAt: new Date().toISOString(),
-      refundAmount: amount,
-      refundReason: reason || null
-    });
+    const { rows: refundRows } = await pool.query(
+      `UPDATE orders
+         SET status = $1,
+             refunded_at = NOW(),
+             refund_amount = $2,
+             refund_reason = $3,
+             refund_id = $4,
+             metadata = metadata || $5::jsonb,
+             updated_at = NOW()
+       WHERE unipay_order_hash_id = $6
+       RETURNING *`,
+      [
+        'refunded',
+        amount,
+        reason || null,
+        `unipay_${orderHashId}`,
+        JSON.stringify({ refundedAt: new Date().toISOString() }),
+        orderHashId
+      ]
+    );
 
     // Process order refund
-    const orderDoc = await db.collection('uniPayOrders').doc(orderHashId).get();
-    if (orderDoc.exists) {
-      const orderData = orderDoc.data();
-      if (orderData.orderId) {
+    if (refundRows.length > 0) {
+      const orderData = refundRows[0];
+      if (orderData.id) {
         try {
-          await orderController.processOrderRefund(orderData.orderId, {
+          await orderController.processOrderRefund(orderData.id, {
             refund_id: `unipay_${orderHashId}`,
             amount: amount,
             reason: reason
@@ -478,20 +509,25 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     });
 
     // Check for duplicate processing if webhook has ID
+    // TODO: For multi-server deployments, replace in-memory Set with a PostgreSQL webhook_events table
     if (event.id) {
-      const eventDoc = await db.collection('webhookEvents').doc(event.id).get();
-      if (eventDoc.exists) {
+      if (processedWebhookEvents.has(event.id)) {
         logger.info(`Duplicate webhook event ignored: ${event.id}`);
         return res.status(200).json({ received: true, duplicate: true });
       }
 
-      // Store event for deduplication
-      await db.collection('webhookEvents').doc(event.id).set({
-        eventId: event.id,
+      // Store event ID for deduplication
+      processedWebhookEvents.add(event.id);
+
+      // Prevent unbounded memory growth - keep last 10,000 events
+      if (processedWebhookEvents.size > 10000) {
+        const firstEntry = processedWebhookEvents.values().next().value;
+        processedWebhookEvents.delete(firstEntry);
+      }
+
+      logger.info(`Processing webhook event: ${event.id}`, {
         type: event.type || 'unknown',
-        orderHashId: event.OrderHashID,
-        processedAt: new Date().toISOString(),
-        data: event
+        orderHashId: event.OrderHashID
       });
     }
 
@@ -597,10 +633,18 @@ router.get('/cancel', async (req, res) => {
 
     if (order_hash_id) {
       // Update order status
-      await db.collection('uniPayOrders').doc(order_hash_id).update({
-        status: 'cancelled',
-        cancelledAt: new Date().toISOString()
-      });
+      await pool.query(
+        `UPDATE orders
+           SET status = $1,
+               metadata = metadata || $2::jsonb,
+               updated_at = NOW()
+         WHERE unipay_order_hash_id = $3`,
+        [
+          'cancelled',
+          JSON.stringify({ cancelledAt: new Date().toISOString() }),
+          order_hash_id
+        ]
+      );
     }
 
     // Redirect to frontend
@@ -871,18 +915,34 @@ router.post('/paypal/create-order', async (req, res) => {
       data: payload
     });
 
-    // Store PayPal order in database
-    await db.collection('paypalOrders').doc(response.data.id).set({
-      paypalOrderId: response.data.id,
-      orderId,
-      amount: totalAmount,
-      currency: (currency || 'USD').toUpperCase(),
-      items,
-      customerInfo,
-      metadata,
-      status: 'created',
-      createdAt: new Date().toISOString()
-    });
+    // Store PayPal order in the orders table
+    await pool.query(
+      `INSERT INTO orders (id, user_id, user_email, items, total, currency, status, payment_id, payment_processor, payment_method, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (id) DO UPDATE SET
+         status = EXCLUDED.status,
+         payment_id = EXCLUDED.payment_id,
+         metadata = orders.metadata || EXCLUDED.metadata,
+         updated_at = NOW()`,
+      [
+        orderId,
+        customerInfo?.userId || null,
+        customerInfo?.email || null,
+        JSON.stringify(items),
+        totalAmount,
+        (currency || 'USD').toUpperCase(),
+        'created',
+        response.data.id,
+        'paypal',
+        'paypal',
+        JSON.stringify({
+          ...metadata,
+          paypalOrderId: response.data.id,
+          customerInfo,
+          createdAt: new Date().toISOString()
+        })
+      ]
+    );
 
     logger.info(`Created PayPal order: ${response.data.id}`, { orderId, amount: totalAmount });
 
@@ -953,37 +1013,51 @@ router.post('/paypal/capture', async (req, res) => {
     });
 
     // Get our stored order data
-    const paypalOrderDoc = await db.collection('paypalOrders').doc(orderID).get();
-    const paypalOrderData = paypalOrderDoc.exists ? paypalOrderDoc.data() : null;
+    const { rows: paypalRows } = await pool.query(
+      'SELECT * FROM orders WHERE payment_id = $1 AND payment_processor = $2',
+      [orderID, 'paypal']
+    );
+    const paypalOrderData = paypalRows.length > 0 ? paypalRows[0] : null;
 
     if (!paypalOrderData) {
       logger.error(`PayPal order data not found: ${orderID}`);
       return res.status(404).json({ error: 'PayPal order not found' });
     }
 
+    const paypalMetadata = paypalOrderData.metadata || {};
+    const customerInfo = paypalMetadata.customerInfo || {};
+
     // Update PayPal order status
-    await db.collection('paypalOrders').doc(orderID).update({
-      status: 'captured',
-      capturedAt: new Date().toISOString(),
-      paypalResponse: response.data
-    });
+    await pool.query(
+      `UPDATE orders
+         SET status = $1,
+             metadata = metadata || $2::jsonb,
+             updated_at = NOW()
+       WHERE payment_id = $3 AND payment_processor = $4`,
+      [
+        'captured',
+        JSON.stringify({ capturedAt: new Date().toISOString(), paypalResponse: response.data }),
+        orderID,
+        'paypal'
+      ]
+    );
 
     // Process the order
     try {
       const orderResult = await orderController.processPaymentSuccess({
         id: orderID,
-        amount: paypalOrderData.amount * 100, // Convert to cents
+        amount: paypalOrderData.total * 100, // Convert to cents
         currency: paypalOrderData.currency.toLowerCase(),
         status: 'succeeded',
         payment_method_types: ['paypal'],
         customer: {
-          id: paypalOrderData.customerInfo?.userId || null,
-          email: paypalOrderData.customerInfo?.email || null
+          id: customerInfo.userId || paypalOrderData.user_id || null,
+          email: customerInfo.email || paypalOrderData.user_email || null
         },
         metadata: {
-          ...paypalOrderData.metadata,
+          ...paypalMetadata,
           payment_method: 'paypal',
-          order_id: paypalOrderData.orderId
+          order_id: paypalOrderData.id
         },
         items: paypalOrderData.items
       });
@@ -997,36 +1071,36 @@ router.post('/paypal/capture', async (req, res) => {
           transaction_id: orderID
         },
         {
-          orderId: paypalOrderData.orderId,
+          orderId: paypalOrderData.id,
           items: paypalOrderData.items,
-          total: paypalOrderData.amount,
+          total: paypalOrderData.total,
           currency: paypalOrderData.currency,
-          metadata: paypalOrderData.metadata
+          metadata: paypalMetadata
         },
-        paypalOrderData.customerInfo
+        customerInfo
       );
 
       logger.info(`Successfully processed PayPal order: ${orderID}`, {
-        orderId: paypalOrderData.orderId,
+        orderId: paypalOrderData.id,
         invoiceId: invoice.invoiceId
       });
 
       return res.json({
         success: true,
         orderID,
-        orderId: paypalOrderData.orderId,
+        orderId: paypalOrderData.id,
         orderResult,
         invoice: invoice.invoice,
         ...response.data
       });
     } catch (orderError) {
       logger.error(`Error processing PayPal order: ${orderError.message}`);
-      
+
       // Still return success as payment was captured
       return res.json({
         success: true,
         orderID,
-        orderId: paypalOrderData.orderId,
+        orderId: paypalOrderData.id,
         orderProcessingError: orderError.message,
         ...response.data
       });
@@ -1048,38 +1122,47 @@ router.post('/paypal/capture', async (req, res) => {
 async function handleUniPayWebhook(event) {
   try {
     const orderHashId = event.OrderHashID;
-    
+
     // Get order data
-    const orderDoc = await db.collection('uniPayOrders').doc(orderHashId).get();
-    if (!orderDoc.exists) {
-      logger.error(`UniPay webhook: Order not found: ${orderHashId}`);
+    const { rows } = await pool.query(
+      'SELECT * FROM orders WHERE unipay_order_hash_id = $1',
+      [orderHashId]
+    );
+
+    if (rows.length === 0) {
+      logger.error(`UniPay webhook: Order not found in orders table: ${orderHashId}. Webhook event may have arrived before order creation.`);
       return;
     }
 
-    const orderData = orderDoc.data();
-    
-    // Update order status based on event
-    const updateData = {
-      status: event.Status || 'unknown',
+    // Determine the new status and metadata updates
+    let newStatus = event.Status || 'unknown';
+    const metadataUpdate = {
       lastWebhookAt: new Date().toISOString(),
       webhookData: event
     };
 
     // Handle different event types
     if (event.Status === 'Success' || event.Status === 'success' || event.Status === 'Succeeded') {
-      updateData.status = 'success';
-      updateData.paidAt = new Date().toISOString();
-      
+      newStatus = 'success';
+      metadataUpdate.paidAt = new Date().toISOString();
+
       // Process successful payment
       await handlePaymentSuccess(orderHashId);
     } else if (event.Status === 'Failed' || event.Status === 'failed' || event.Status === 'Error') {
-      updateData.status = 'failed';
-      updateData.failedAt = new Date().toISOString();
-      updateData.failureReason = event.FailureReason || event.ErrorMessage || 'Unknown';
+      newStatus = 'failed';
+      metadataUpdate.failedAt = new Date().toISOString();
+      metadataUpdate.failureReason = event.FailureReason || event.ErrorMessage || 'Unknown';
     }
 
-    await db.collection('uniPayOrders').doc(orderHashId).update(updateData);
-    
+    await pool.query(
+      `UPDATE orders
+         SET status = $1,
+             metadata = metadata || $2::jsonb,
+             updated_at = NOW()
+       WHERE unipay_order_hash_id = $3`,
+      [newStatus, JSON.stringify(metadataUpdate), orderHashId]
+    );
+
     logger.info(`UniPay webhook processed: ${orderHashId}`, {
       status: event.Status
     });
@@ -1092,32 +1175,42 @@ async function handleUniPayWebhook(event) {
 async function handlePaymentSuccess(orderHashId) {
   try {
     // Get order data
-    const orderDoc = await db.collection('uniPayOrders').doc(orderHashId).get();
-    if (!orderDoc.exists) {
+    const { rows } = await pool.query(
+      'SELECT * FROM orders WHERE unipay_order_hash_id = $1',
+      [orderHashId]
+    );
+
+    if (rows.length === 0) {
       throw new Error(`Order not found: ${orderHashId}`);
     }
-    
-    const orderData = orderDoc.data();
-    
+
+    const orderData = rows[0];
+    const metadata = orderData.metadata || {};
+    const customerInfo = metadata.customerInfo || {};
+    const vatInfo = orderData.vat_info || metadata.vatInfo || null;
+    // Original amount/currency may be stored in metadata (from UniPay order creation) or use table columns
+    const originalAmount = metadata.originalAmount || orderData.total;
+    const originalCurrency = metadata.originalCurrency || orderData.currency;
+
     // Process order success
     const orderResult = await orderController.processPaymentSuccess({
       id: orderHashId,
-      amount: orderData.originalAmount * 100, // Convert to cents using original amount
-      currency: orderData.originalCurrency?.toLowerCase() || 'usd',
+      amount: originalAmount * 100, // Convert to cents using original amount
+      currency: originalCurrency?.toLowerCase() || 'usd',
       status: 'succeeded',
       payment_method_types: ['unipay'],
       customer: {
-        id: orderData.customerInfo?.userId || null,
-        email: orderData.customerInfo?.email || null
+        id: customerInfo.userId || orderData.user_id || null,
+        email: customerInfo.email || orderData.user_email || null
       },
       metadata: {
-        ...orderData.metadata,
+        ...metadata,
         order_hash_id: orderHashId,
-        order_id: orderData.orderId
+        order_id: orderData.id
       },
       items: orderData.items,
       processor: 'unipay',
-      vatInfo: orderData.vatInfo
+      vatInfo: vatInfo
     });
 
     // Create invoice
@@ -1127,28 +1220,38 @@ async function handlePaymentSuccess(orderHashId) {
         processor: 'unipay',
         paymentMethod: 'unipay',
         transaction_id: orderHashId,
-        vatInfo: orderData.vatInfo
+        vatInfo: vatInfo
       },
       {
-        orderId: orderData.orderId,
+        orderId: orderData.id,
         items: orderData.items,
-        total: orderData.originalAmount,
-        currency: orderData.originalCurrency,
-        metadata: orderData.metadata
+        total: originalAmount,
+        currency: originalCurrency,
+        metadata: metadata
       },
-      orderData.customerInfo
+      customerInfo
     );
 
-    // Update UniPay order with processing results
-    await db.collection('uniPayOrders').doc(orderHashId).update({
-      orderProcessed: true,
-      processedAt: new Date().toISOString(),
-      invoiceId: invoice.invoiceId,
-      orderResult: orderResult
-    });
+    // Update order with processing results
+    await pool.query(
+      `UPDATE orders
+         SET invoice_id = $1,
+             metadata = metadata || $2::jsonb,
+             updated_at = NOW()
+       WHERE unipay_order_hash_id = $3`,
+      [
+        invoice.invoiceId,
+        JSON.stringify({
+          orderProcessed: true,
+          processedAt: new Date().toISOString(),
+          orderResult: orderResult
+        }),
+        orderHashId
+      ]
+    );
 
     logger.info(`Successfully processed UniPay payment: ${orderHashId}`, {
-      orderId: orderData.orderId,
+      orderId: orderData.id,
       invoiceId: invoice.invoiceId
     });
 

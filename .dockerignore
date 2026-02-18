@@ -11,7 +11,9 @@ yarn-error.log
 /.nuxt
 /.cache
 
-# Environment files
+# Environment files (secrets — injected via Coolify env vars, not baked into image)
+.env
+.env.*
 .env.local
 .env.development.local
 .env.test.local
@@ -41,6 +43,9 @@ pnpm-lock.yaml
 /src/assets/videos
 /src/assets/images
 
+# Migration data is included for auto-seeding on first deploy
+# migration/data
+
 # Logs
 logs
 *.log
@@ -51,4 +56,6 @@ logs
 tests
 test
 
+# Server directory (except Firebase private key needed at runtime)
 server
+!server/aiwaverider8-privatekey.json

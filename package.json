@@ -50,6 +50,8 @@
     "openai": "^4.12.1",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
+    "pg": "^8.18.0",
+    "playwright": "^1.58.2",
     "redis": "^4.7.0",
     "sanitize-html": "^2.14.0",
     "socket.io": "^4.8.1",

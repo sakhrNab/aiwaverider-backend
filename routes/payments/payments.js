@@ -18,7 +18,7 @@ const logger = require('../../utils/logger');
 const orderController = require('../../controllers/payment/orderController');
 const invoiceService = require('../../services/invoice/invoiceService');
 // const uniPayService = null;
-const { db } = require('../../config/firebase');
+const { pool } = require('../../config/database');
 
 /**
  * PAYMENT SYSTEM CONFIGURATION (UPDATED)
@@ -601,13 +601,13 @@ router.get('/status/:id', async (req, res) => {
     // Try UniPay orders first if specified or auto-detecting
     if (!type || type === 'unipay' || type === 'session') {
       try {
-        const uniPayDoc = await db.collection('uniPayOrders').doc(id).get();
-        if (uniPayDoc.exists) {
+        const { rows: uniPayRows } = await pool.query('SELECT * FROM uni_pay_orders WHERE id = $1', [id]);
+        if (uniPayRows.length > 0) {
           result = {
             ...result,
             type: 'unipay_order',
             found: true,
-            data: uniPayDoc.data(),
+            data: uniPayRows[0],
             provider: 'unipay'
           };
         }
@@ -619,13 +619,13 @@ router.get('/status/:id', async (req, res) => {
     // Try legacy payment sessions if not found
     if (!result.found && (!type || type === 'session')) {
       try {
-        const sessionDoc = await db.collection('paymentSessions').doc(id).get();
-        if (sessionDoc.exists) {
+        const { rows: sessionRows } = await pool.query('SELECT * FROM payment_sessions WHERE id = $1', [id]);
+        if (sessionRows.length > 0) {
           result = {
             ...result,
             type: 'session',
             found: true,
-            data: sessionDoc.data(),
+            data: sessionRows[0],
             provider: 'legacy'
           };
         }
@@ -637,13 +637,13 @@ router.get('/status/:id', async (req, res) => {
     if (!result.found && (!type || type === 'order')) {
       // Check orders
       try {
-        const orderDoc = await db.collection('orders').doc(id).get();
-        if (orderDoc.exists) {
+        const { rows: orderRows } = await pool.query('SELECT * FROM orders WHERE id = $1', [id]);
+        if (orderRows.length > 0) {
           result = {
             ...result,
             type: 'order',
             found: true,
-            data: orderDoc.data()
+            data: orderRows[0]
           };
         }
       } catch (orderError) {
@@ -654,13 +654,13 @@ router.get('/status/:id', async (req, res) => {
     if (!result.found && (!type || type === 'paypal')) {
       // Check PayPal orders
       try {
-        const paypalDoc = await db.collection('paypalOrders').doc(id).get();
-        if (paypalDoc.exists) {
+        const { rows: paypalRows } = await pool.query('SELECT * FROM paypal_orders WHERE id = $1', [id]);
+        if (paypalRows.length > 0) {
           result = {
             ...result,
             type: 'paypal_order',
             found: true,
-            data: paypalDoc.data(),
+            data: paypalRows[0],
             provider: 'paypal'
           };
         }

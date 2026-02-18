@@ -1,4 +1,5 @@
-const { db } = require('../config/firebase');
+const crypto = require('crypto');
+const { pool } = require('../config/database');
 const { fetchVideoMetadata, extractVideoId } = require('../services/videoMetadata');
 const { getCache, setCache, deleteCacheByPattern } = require('../utils/cache');
 
@@ -20,34 +21,39 @@ let videosCacheLastUpdated = {
 };
 const VIDEO_CACHE_REFRESH_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
-const normalizeVideoDoc = (doc) => {
-  const data = doc.data();
-  const normalized = {
-    id: doc.id,
-    ...data
+const normalizeVideoRow = (row) => {
+  return {
+    id: row.id,
+    platform: row.platform,
+    originalUrl: row.original_url,
+    embedUrl: row.embed_url,
+    title: row.title,
+    authorName: row.author_name,
+    authorUser: row.author_user,
+    description: row.description,
+    thumbnailUrl: row.thumbnail_url,
+    views: row.views,
+    likes: row.likes,
+    commentsCount: row.comments_count,
+    shares: row.shares,
+    engagementScore: row.engagement_score,
+    addedBy: row.added_by,
+    addedByUid: row.added_by_uid,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    lastFetched: row.last_fetched ? new Date(row.last_fetched).toISOString() : null
   };
-  // Normalize timestamps to ISO strings for consistent transport
-  if (normalized.createdAt && normalized.createdAt.toDate) {
-    normalized.createdAt = normalized.createdAt.toDate().toISOString();
-  }
-  if (normalized.lastFetched && normalized.lastFetched.toDate) {
-    normalized.lastFetched = normalized.lastFetched.toDate().toISOString();
-  }
-  return normalized;
 };
 
 const refreshVideosCache = async (platform) => {
   const platformKey = (platform || '').toLowerCase();
   if (!['youtube', 'tiktok', 'instagram'].includes(platformKey)) return false;
   try {
-    const snapshot = await db
-      .collection('videos')
-      .where('platform', '==', platformKey)
-      .orderBy('createdAt', 'desc')
-      .get();
+    const result = await pool.query(
+      'SELECT * FROM videos WHERE platform = $1 ORDER BY created_at DESC',
+      [platformKey]
+    );
 
-    const list = [];
-    snapshot.forEach((doc) => list.push(normalizeVideoDoc(doc)));
+    const list = result.rows.map(normalizeVideoRow);
 
     videosCacheByPlatform[platformKey] = list;
     videosCacheLastUpdated[platformKey] = new Date();
@@ -108,13 +114,12 @@ const addVideo = async (req, res) => {
     }
 
     // Check if video already exists
-    const existingVideoQuery = await db.collection('videos')
-      .where('platform', '==', platform)
-      .where('originalUrl', '==', originalUrl)
-      .limit(1)
-      .get();
+    const existingResult = await pool.query(
+      'SELECT id FROM videos WHERE platform = $1 AND original_url = $2 LIMIT 1',
+      [platform, originalUrl]
+    );
 
-    if (!existingVideoQuery.empty) {
+    if (existingResult.rows.length > 0) {
       return res.status(409).json({
         error: 'Video already exists',
         message: 'This video has already been added to the gallery'
@@ -133,27 +138,17 @@ const addVideo = async (req, res) => {
       });
     }
 
-    // Create video record
-    const videoRecord = {
-      platform,
-      originalUrl,
-      embedUrl: metadata.embedUrl,
-      title: metadata.title,
-      authorName: metadata.authorName,
-      authorUser: metadata.authorUser,
-      thumbnailUrl: metadata.thumbnailUrl,
-      views: metadata.views,
-      likes: metadata.likes,
-      description: metadata.description || '',
-      addedBy: req.user.email, // Use authenticated user's email
-      addedByUid: req.user.uid, // Also store the user ID
-      createdAt: new Date(),
-      lastFetched: new Date()
-    };
+    const id = crypto.randomUUID();
 
-    // Save to Firestore
-    const docRef = await db.collection('videos').add(videoRecord);
-    const savedVideo = { id: docRef.id, ...videoRecord };
+    // Save to PostgreSQL
+    const insertResult = await pool.query(
+      `INSERT INTO videos (id, platform, original_url, embed_url, title, author_name, author_user, thumbnail_url, views, likes, description, added_by, added_by_uid, created_at, last_fetched)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+       RETURNING *`,
+      [id, platform, originalUrl, metadata.embedUrl, metadata.title, metadata.authorName, metadata.authorUser, metadata.thumbnailUrl, metadata.views, metadata.likes, metadata.description || '', req.user.email, req.user.uid]
+    );
+
+    const savedVideo = normalizeVideoRow(insertResult.rows[0]);
 
     // Invalidate list cache for this platform
     await deleteCacheByPattern(`video_list:${platform}:*`);
@@ -162,11 +157,11 @@ const addVideo = async (req, res) => {
     // Refresh in-memory cache for this platform
     await refreshVideosCache(platform);
 
-    console.log(`Successfully added ${platform} video with ID: ${docRef.id} by ${req.user.email}`);
-    
+    console.log(`Successfully added ${platform} video with ID: ${id} by ${req.user.email}`);
+
     res.status(201).json({
       message: 'Video added successfully',
-      video: { ...savedVideo, id: docRef.id }
+      video: savedVideo
     });
 
   } catch (error) {
@@ -234,27 +229,25 @@ const listVideos = async (req, res) => {
     let videos = [];
 
     if (totalVideos > 0) {
-      // Get all documents for this platform
-      // Note: This is not the most efficient for large datasets, but works for now
-      let allDocsQuery;
+      // Fetch all documents for this platform from PostgreSQL
+      let allVideosResult;
 
-      // For TikTok, we'll fetch all and sort by engagement (likes + views)
-      // For other platforms, use createdAt descending
       if (platform === 'tiktok') {
-        allDocsQuery = await db.collection('videos')
-          .where('platform', '==', platform)
-          .get();
+        allVideosResult = await pool.query(
+          'SELECT * FROM videos WHERE platform = $1',
+          [platform]
+        );
       } else {
-        allDocsQuery = await db.collection('videos')
-          .where('platform', '==', platform)
-          .orderBy('createdAt', 'desc')
-          .get();
+        allVideosResult = await pool.query(
+          'SELECT * FROM videos WHERE platform = $1 ORDER BY created_at DESC',
+          [platform]
+        );
       }
 
-      // Process each video document
+      // Process each video row
       const allVideos = [];
-      for (const doc of allDocsQuery.docs) {
-        const videoData = { id: doc.id, ...doc.data() };
+      for (const row of allVideosResult.rows) {
+        const videoData = normalizeVideoRow(row);
 
         // Only try to refresh metadata for platforms that provide real-time stats
         // Instagram doesn't provide public stats, so skip the refresh
@@ -277,19 +270,11 @@ const listVideos = async (req, res) => {
           }
         }
 
-        // Convert Firestore timestamps to ISO strings
-        if (videoData.createdAt && videoData.createdAt.toDate) {
-          videoData.createdAt = videoData.createdAt.toDate().toISOString();
-        }
-        if (videoData.lastFetched && videoData.lastFetched.toDate) {
-          videoData.lastFetched = videoData.lastFetched.toDate().toISOString();
-        }
-
         // Calculate engagement score for TikTok (likes + views)
         if (platform === 'tiktok') {
           const views = parseInt(videoData.views) || 0;
           const likes = parseInt(videoData.likes) || 0;
-          const comments = parseInt(videoData.comments) || 0;
+          const comments = parseInt(videoData.commentsCount) || 0;
           const shares = parseInt(videoData.shares) || 0;
           // Engagement = likes + (views * 0.01) + (comments * 2) + (shares * 3)
           // This weights likes most heavily, then comments, then shares, then views
@@ -298,7 +283,7 @@ const listVideos = async (req, res) => {
 
         allVideos.push(videoData);
       }
-      
+
       // Sort TikTok videos by engagement score (highest first)
       if (platform === 'tiktok') {
         allVideos.sort((a, b) => {
@@ -307,14 +292,13 @@ const listVideos = async (req, res) => {
           return scoreB - scoreA; // Descending order
         });
       }
-      
+
       // Apply pagination
-      const allDocs = allVideos.slice(offset, offset + PAGE_SIZE);
-      videos = allDocs;
+      videos = allVideos.slice(offset, offset + PAGE_SIZE);
     }
 
     const response = {
-      videos: paginated,
+      videos,
       currentPage: pageNum,
       totalPages,
       totalVideos,
@@ -363,18 +347,19 @@ const refreshVideoStats = async (req, res) => {
 
     console.log(`Refreshing stats for video: ${id}`);
 
-    // Get video document
-    const videoDoc = await db.collection('videos').doc(id).get();
-    
-    if (!videoDoc.exists) {
+    // Get video row
+    const videoResult = await pool.query('SELECT * FROM videos WHERE id = $1', [id]);
+
+    if (videoResult.rows.length === 0) {
       return res.status(404).json({
         error: 'Video not found',
         message: 'Video with the specified ID does not exist'
       });
     }
 
-    const videoData = videoDoc.data();
-    const { platform, originalUrl } = videoData;
+    const videoData = videoResult.rows[0];
+    const platform = videoData.platform;
+    const originalUrl = videoData.original_url;
 
     // Fetch fresh metadata
     let metadata;
@@ -388,14 +373,11 @@ const refreshVideoStats = async (req, res) => {
       });
     }
 
-    // Update Firestore with new stats
-    const updateData = {
-      views: metadata.views,
-      likes: metadata.likes,
-      lastFetched: new Date()
-    };
-
-    await db.collection('videos').doc(id).update(updateData);
+    // Update PostgreSQL with new stats
+    await pool.query(
+      'UPDATE videos SET views = $1, likes = $2, last_fetched = NOW() WHERE id = $3',
+      [metadata.views, metadata.likes, id]
+    );
 
     // Invalidate list cache for this platform
     await deleteCacheByPattern(`video_list:${platform}:*`);
@@ -412,7 +394,7 @@ const refreshVideoStats = async (req, res) => {
       stats: {
         views: metadata.views,
         likes: metadata.likes,
-        lastFetched: updateData.lastFetched.toISOString()
+        lastFetched: new Date().toISOString()
       }
     });
 
@@ -436,16 +418,14 @@ const deleteVideo = async (req, res) => {
       return res.status(400).json({ error: 'Missing video ID', message: 'Video ID is required' });
     }
 
-    const docRef = db.collection('videos').doc(id);
-    const docSnap = await docRef.get();
-    if (!docSnap.exists) {
+    const videoResult = await pool.query('SELECT * FROM videos WHERE id = $1', [id]);
+    if (videoResult.rows.length === 0) {
       return res.status(404).json({ error: 'Video not found', message: 'No video with this ID' });
     }
 
-    const data = docSnap.data();
-    const platform = data.platform;
+    const platform = videoResult.rows[0].platform;
 
-    await docRef.delete();
+    await pool.query('DELETE FROM videos WHERE id = $1', [id]);
 
     // Invalidate caches related to this platform
     await deleteCacheByPattern(`video_list:${platform}:*`);

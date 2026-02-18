@@ -1,10 +1,8 @@
-const { db } = require('../../config/firebase');
+const { pool } = require('../../config/database');
 const bcrypt = require('bcrypt');
 const { sanitizeUser } = require('../../utils/sanitize');
 const admin = require('firebase-admin');
-
-// Collection reference
-const usersCollection = db.collection('users');
+const { v4: uuidv4 } = require('uuid');
 
 /**
  * Get all users with pagination, filtering and sorting
@@ -46,27 +44,36 @@ exports.getUsers = async (req, res) => {
     const totalUsers = filteredUsers.length;
     const paginatedUsers = filteredUsers.slice(offset, offset + limitNum);
 
-    // Optionally join with Firestore for extra profile data (uncomment if needed)
-    // const { db } = require('../config/firebase');
-    // const usersCollection = db.collection('users');
-    // for (let i = 0; i < paginatedUsers.length; i++) {
-    //   const doc = await usersCollection.doc(paginatedUsers[i].uid).get();
-    //   if (doc.exists) {
-    //     paginatedUsers[i].profile = doc.data();
-    //   }
-    // }
+    // Join with PostgreSQL for extra profile data
+    const uids = paginatedUsers.map(u => u.uid);
+    let profileMap = {};
+    if (uids.length > 0) {
+      const placeholders = uids.map((_, i) => `$${i + 1}`).join(', ');
+      const profileResult = await pool.query(
+        `SELECT * FROM users WHERE id IN (${placeholders})`,
+        uids
+      );
+      for (const row of profileResult.rows) {
+        profileMap[row.id] = row;
+      }
+    }
 
     // Format data for frontend
-    const users = paginatedUsers.map(user => ({
-      id: user.uid,
-      username: user.displayName || '',
-      email: user.email || '',
-      photoURL: user.photoURL || '',
-      role: user.customClaims && user.customClaims.role ? user.customClaims.role : 'user',
-      status: user.disabled ? 'disabled' : 'active',
-      createdAt: user.metadata && user.metadata.creationTime ? user.metadata.creationTime : null,
-      updatedAt: user.metadata && user.metadata.lastSignInTime ? user.metadata.lastSignInTime : null
-    }));
+    const users = paginatedUsers.map(user => {
+      const profile = profileMap[user.uid];
+      return {
+        id: user.uid,
+        username: profile ? profile.username : (user.displayName || ''),
+        email: user.email || '',
+        firstName: profile ? profile.first_name : '',
+        lastName: profile ? profile.last_name : '',
+        photoURL: profile ? (profile.photo_url || '') : (user.photoURL || ''),
+        role: profile ? profile.role : (user.customClaims && user.customClaims.role ? user.customClaims.role : 'user'),
+        status: profile ? profile.status : (user.disabled ? 'disabled' : 'active'),
+        createdAt: profile && profile.created_at ? profile.created_at.toISOString() : (user.metadata && user.metadata.creationTime ? user.metadata.creationTime : null),
+        updatedAt: profile && profile.updated_at ? profile.updated_at.toISOString() : (user.metadata && user.metadata.lastSignInTime ? user.metadata.lastSignInTime : null)
+      };
+    });
 
     const totalPages = Math.ceil(totalUsers / limitNum);
 
@@ -89,27 +96,27 @@ exports.getUsers = async (req, res) => {
 exports.getUserById = async (req, res) => {
   try {
     const { userId } = req.params;
-    
-    const userDoc = await usersCollection.doc(userId).get();
-    
-    if (!userDoc.exists) {
+
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+
+    if (userResult.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
-    
-    const userData = userDoc.data();
-    
+
+    const userData = userResult.rows[0];
+
     // Return user data without sensitive information
     return res.json({
-      id: userDoc.id,
-      username: userData.username || userData.displayName,
+      id: userData.id,
+      username: userData.username || userData.display_name,
       email: userData.email,
-      firstName: userData.firstName,
-      lastName: userData.lastName,
-      photoURL: userData.photoURL,
+      firstName: userData.first_name,
+      lastName: userData.last_name,
+      photoURL: userData.photo_url,
       role: userData.role,
       status: userData.status || 'active',
-      createdAt: userData.createdAt ? userData.createdAt.toDate().toISOString() : null,
-      updatedAt: userData.updatedAt ? userData.updatedAt.toDate().toISOString() : null
+      createdAt: userData.created_at ? userData.created_at.toISOString() : null,
+      updatedAt: userData.updated_at ? userData.updated_at.toISOString() : null
     });
   } catch (error) {
     console.error('Error in getUserById:', error);
@@ -123,58 +130,64 @@ exports.getUserById = async (req, res) => {
 exports.createUser = async (req, res) => {
   try {
     const { username, email, password, firstName, lastName, role, status } = req.body;
-    
+
     // Validate required fields
     if (!username || !email || !password) {
       return res.status(400).json({ error: 'Username, email, and password are required' });
     }
-    
+
     // Check if email already exists
-    const emailQuery = await usersCollection.where('email', '==', email.toLowerCase()).get();
-    if (!emailQuery.empty) {
+    const emailResult = await pool.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
+    if (emailResult.rows.length > 0) {
       return res.status(400).json({ error: 'Email is already registered' });
     }
-    
+
     // Check if username already exists
-    const usernameQuery = await usersCollection.where('username', '==', username).get();
-    if (!usernameQuery.empty) {
+    const usernameResult = await pool.query('SELECT id FROM users WHERE username = $1', [username]);
+    if (usernameResult.rows.length > 0) {
       return res.status(400).json({ error: 'Username is already taken' });
     }
-    
+
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
-    
+
     // Create searchable fields
     const searchField = `${username.toLowerCase()} ${email.toLowerCase()} ${firstName ? firstName.toLowerCase() : ''} ${lastName ? lastName.toLowerCase() : ''}`;
-    
-    // Prepare user data
-    const userData = {
-      username,
-      email: email.toLowerCase(),
-      password: hashedPassword,
-      firstName: firstName || '',
-      lastName: lastName || '',
-      role: role || 'user',
-      status: status || 'active',
-      searchField,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-    
-    // Create user in Firestore
-    const userRef = await usersCollection.add(userData);
-    
+
+    // Generate UUID for id
+    const id = uuidv4();
+
+    // Create user in database
+    const insertResult = await pool.query(
+      `INSERT INTO users (id, username, email, password_hash, first_name, last_name, role, status, search_field, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+       RETURNING *`,
+      [
+        id,
+        username,
+        email.toLowerCase(),
+        hashedPassword,
+        firstName || '',
+        lastName || '',
+        role || 'user',
+        status || 'active',
+        searchField
+      ]
+    );
+
+    const createdUser = insertResult.rows[0];
+
     // Return success with user data (excluding password)
     return res.status(201).json({
-      id: userRef.id,
-      username,
-      email: email.toLowerCase(),
-      firstName: firstName || '',
-      lastName: lastName || '',
-      role: role || 'user',
-      status: status || 'active',
-      createdAt: userData.createdAt.toISOString(),
-      updatedAt: userData.updatedAt.toISOString()
+      id: createdUser.id,
+      username: createdUser.username,
+      email: createdUser.email,
+      firstName: createdUser.first_name || '',
+      lastName: createdUser.last_name || '',
+      role: createdUser.role || 'user',
+      status: createdUser.status || 'active',
+      createdAt: createdUser.created_at.toISOString(),
+      updatedAt: createdUser.updated_at.toISOString()
     });
   } catch (error) {
     console.error('Error in createUser:', error);
@@ -189,91 +202,103 @@ exports.updateUser = async (req, res) => {
   try {
     const { userId } = req.params;
     const { username, email, password, firstName, lastName, role, status } = req.body;
-    
+
     // Validate user exists
-    const userDoc = await usersCollection.doc(userId).get();
-    if (!userDoc.exists) {
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
-    
-    const userData = userDoc.data();
-    
+
+    const existingUser = userResult.rows[0];
+
     // Check if email is being changed and already exists
-    if (email && email.toLowerCase() !== userData.email) {
-      const emailQuery = await usersCollection.where('email', '==', email.toLowerCase()).get();
-      if (!emailQuery.empty) {
+    if (email && email.toLowerCase() !== existingUser.email) {
+      const emailResult = await pool.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
+      if (emailResult.rows.length > 0) {
         return res.status(400).json({ error: 'Email is already registered' });
       }
     }
-    
+
     // Check if username is being changed and already exists
-    if (username && username !== userData.username) {
-      const usernameQuery = await usersCollection.where('username', '==', username).get();
-      if (!usernameQuery.empty) {
+    if (username && username !== existingUser.username) {
+      const usernameResult = await pool.query('SELECT id FROM users WHERE username = $1', [username]);
+      if (usernameResult.rows.length > 0) {
         return res.status(400).json({ error: 'Username is already taken' });
       }
     }
-    
-    // Prepare update data
-    const updateData = {
-      updatedAt: new Date()
-    };
-    
+
+    // Build dynamic update query
+    const setClauses = ['updated_at = NOW()'];
+    const values = [];
+    let paramIndex = 1;
+
     // Only add fields that are provided
-    if (username) updateData.username = username;
-    if (email) updateData.email = email.toLowerCase();
-    if (firstName !== undefined) updateData.firstName = firstName;
-    if (lastName !== undefined) updateData.lastName = lastName;
-    if (role) updateData.role = role;
-    if (status) updateData.status = status;
-    
+    if (username) {
+      setClauses.push(`username = $${paramIndex}`);
+      values.push(username);
+      paramIndex++;
+    }
+    if (email) {
+      setClauses.push(`email = $${paramIndex}`);
+      values.push(email.toLowerCase());
+      paramIndex++;
+    }
+    if (firstName !== undefined) {
+      setClauses.push(`first_name = $${paramIndex}`);
+      values.push(firstName);
+      paramIndex++;
+    }
+    if (lastName !== undefined) {
+      setClauses.push(`last_name = $${paramIndex}`);
+      values.push(lastName);
+      paramIndex++;
+    }
+    if (role) {
+      setClauses.push(`role = $${paramIndex}`);
+      values.push(role);
+      paramIndex++;
+    }
+    if (status) {
+      setClauses.push(`status = $${paramIndex}`);
+      values.push(status);
+      paramIndex++;
+    }
+
     // Update searchable field if any of these fields change
     if (username || email || firstName || lastName) {
-      updateData.searchField = `${username || userData.username}.toLowerCase() ${email ? email.toLowerCase() : userData.email} ${firstName !== undefined ? firstName.toLowerCase() : userData.firstName ? userData.firstName.toLowerCase() : ''} ${lastName !== undefined ? lastName.toLowerCase() : userData.lastName ? userData.lastName.toLowerCase() : ''}`;
+      const searchField = `${username || existingUser.username || ''} ${email ? email.toLowerCase() : existingUser.email} ${firstName !== undefined ? firstName.toLowerCase() : (existingUser.first_name ? existingUser.first_name.toLowerCase() : '')} ${lastName !== undefined ? lastName.toLowerCase() : (existingUser.last_name ? existingUser.last_name.toLowerCase() : '')}`.toLowerCase();
+      setClauses.push(`search_field = $${paramIndex}`);
+      values.push(searchField);
+      paramIndex++;
     }
-    
+
     // Hash password if provided
     if (password) {
-      updateData.password = await bcrypt.hash(password, 10);
+      const hashedPassword = await bcrypt.hash(password, 10);
+      setClauses.push(`password_hash = $${paramIndex}`);
+      values.push(hashedPassword);
+      paramIndex++;
     }
-    
-    // Update user in Firestore
-    await usersCollection.doc(userId).update(updateData);
-    
-    // Get updated user data
-    const updatedUserDoc = await usersCollection.doc(userId).get();
-    const updatedUserData = updatedUserDoc.data();
-    
-    // Helper function to safely format timestamps
-    const formatTimestamp = (timestamp) => {
-      if (!timestamp) return null;
-      // Check if it's a Firestore timestamp with toDate function
-      if (timestamp && typeof timestamp.toDate === 'function') {
-        return timestamp.toDate().toISOString();
-      }
-      // If it's already a Date object
-      if (timestamp instanceof Date) {
-        return timestamp.toISOString();
-      }
-      // If it's a string that might be ISO format already
-      if (typeof timestamp === 'string') {
-        return timestamp;
-      }
-      // Fallback
-      return null;
-    };
-    
+
+    // Add userId as the last parameter for WHERE clause
+    values.push(userId);
+
+    // Update user in database and return updated row
+    const updateQuery = `UPDATE users SET ${setClauses.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    const updatedResult = await pool.query(updateQuery, values);
+    const updatedUser = updatedResult.rows[0];
+
     // Return updated user data
     return res.json({
-      id: userId,
-      username: updatedUserData.username || updatedUserData.displayName,
-      email: updatedUserData.email,
-      firstName: updatedUserData.firstName || '',
-      lastName: updatedUserData.lastName || '',
-      role: updatedUserData.role,
-      status: updatedUserData.status || 'active',
-      createdAt: formatTimestamp(updatedUserData.createdAt),
-      updatedAt: formatTimestamp(updatedUserData.updatedAt)
+      id: updatedUser.id,
+      username: updatedUser.username || updatedUser.display_name,
+      email: updatedUser.email,
+      firstName: updatedUser.first_name || '',
+      lastName: updatedUser.last_name || '',
+      role: updatedUser.role,
+      status: updatedUser.status || 'active',
+      createdAt: updatedUser.created_at ? updatedUser.created_at.toISOString() : null,
+      updatedAt: updatedUser.updated_at ? updatedUser.updated_at.toISOString() : null
     });
   } catch (error) {
     console.error('Error in updateUser:', error);
@@ -287,28 +312,28 @@ exports.updateUser = async (req, res) => {
 exports.deleteUser = async (req, res) => {
   try {
     const { userId } = req.params;
-    
+
     // Validate user exists
-    const userDoc = await usersCollection.doc(userId).get();
-    if (!userDoc.exists) {
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
-    
+
     // Check if this is the last admin user
-    const userData = userDoc.data();
+    const userData = userResult.rows[0];
     if (userData.role === 'admin') {
-      const adminQuery = await usersCollection.where('role', '==', 'admin').get();
-      if (adminQuery.size <= 1) {
+      const adminResult = await pool.query("SELECT COUNT(*) FROM users WHERE role = 'admin'");
+      if (parseInt(adminResult.rows[0].count, 10) <= 1) {
         return res.status(400).json({ error: 'Cannot delete the last admin user' });
       }
     }
-    
-    // Delete user from Firestore
-    await usersCollection.doc(userId).delete();
-    
+
+    // Delete user from database
+    await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+
     return res.json({ message: 'User deleted successfully' });
   } catch (error) {
     console.error('Error in deleteUser:', error);
     return res.status(500).json({ error: 'Failed to delete user' });
   }
-}; 
+};

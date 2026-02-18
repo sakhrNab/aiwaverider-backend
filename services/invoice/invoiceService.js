@@ -1,15 +1,12 @@
 /**
  * Invoice Service - Invoice Creation and Management
- * 
+ *
  * Handles invoice creation, storage, and retrieval for payments
  */
 
-const admin = require('firebase-admin');
+const { pool } = require('../../config/database');
 const { v4: uuidv4 } = require('uuid');
 const logger = require('../../utils/logger');
-
-// Initialize Firestore
-const db = admin.firestore();
 
 class InvoiceService {
   constructor() {
@@ -44,8 +41,8 @@ class InvoiceService {
     try {
       const invoiceId = uuidv4();
       const invoiceNumber = this.generateInvoiceNumber();
-      const issueDate = new Date().toISOString();
-      const dueDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 days from now
+      const issueDate = new Date();
+      const dueDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days from now
 
       // Calculate totals
       const subtotal = orderData.items?.reduce((sum, item) => {
@@ -87,91 +84,78 @@ class InvoiceService {
         category: 'Digital Product'
       }];
 
-      // Create invoice object
+      // Prepare payment info
+      const payment = {
+        id: paymentData.id || paymentData.transaction_id,
+        method: paymentData.paymentMethod || 'card',
+        processor: paymentData.processor || 'unipay',
+        transactionId: paymentData.transaction_id || paymentData.id,
+        sessionId: paymentData.session_id || null,
+        paidAt: issueDate.toISOString()
+      };
+
+      // Prepare metadata
+      const metadata = {
+        ...orderData.metadata,
+        vatInfo: paymentData.vatInfo || null,
+        originalAmount: paymentData.vatInfo?.originalAmount || subtotal
+      };
+
+      const orderId = orderData.orderId || orderData.id || null;
+
+      // Save invoice to database
+      await pool.query(
+        `INSERT INTO invoices (
+          id, invoice_number, status, issue_date, due_date, paid_date,
+          paid_amount, total_amount, subtotal, vat_rate, vat_amount,
+          currency, company, customer, line_items, payment,
+          order_id, metadata
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+        [
+          invoiceId, invoiceNumber, 'paid', issueDate, dueDate, issueDate,
+          totalAmount, totalAmount, subtotal, vatRate, vatAmount,
+          orderData.currency?.toUpperCase() || 'USD',
+          JSON.stringify(this.companyInfo), JSON.stringify(customer),
+          JSON.stringify(lineItems), JSON.stringify(payment),
+          orderId, JSON.stringify(metadata)
+        ]
+      );
+
+      // Update order with invoice ID
+      if (orderId) {
+        await pool.query(
+          'UPDATE orders SET invoice_id = $1, invoice_number = $2 WHERE id = $3',
+          [invoiceId, invoiceNumber, orderId]
+        );
+      }
+
+      // Build invoice response object
       const invoice = {
         id: invoiceId,
         invoiceNumber,
-        status: 'paid', // Since this is created after successful payment
-        issueDate,
-        dueDate,
-        paidDate: issueDate,
-        
-        // Company information
+        status: 'paid',
+        issueDate: issueDate.toISOString(),
+        dueDate: dueDate.toISOString(),
+        paidDate: issueDate.toISOString(),
         company: this.companyInfo,
-        
-        // Customer information
         customer,
-        
-        // Financial details
         currency: orderData.currency?.toUpperCase() || 'USD',
         subtotal,
         vatRate,
         vatAmount,
         totalAmount,
         paidAmount: totalAmount,
-        
-        // Line items
         lineItems,
-        
-        // Payment information
-        payment: {
-          id: paymentData.id || paymentData.transaction_id,
-          method: paymentData.paymentMethod || 'card',
-          processor: paymentData.processor || 'unipay',
-          transactionId: paymentData.transaction_id || paymentData.id,
-          sessionId: paymentData.session_id || null,
-          paidAt: issueDate
-        },
-        
-        // Order reference
-        order: {
-          id: orderData.orderId || orderData.id,
-          createdAt: orderData.createdAt || issueDate
-        },
-        
-        // Metadata
-        metadata: {
-          ...orderData.metadata,
-          vatInfo: paymentData.vatInfo || null,
-          originalAmount: paymentData.vatInfo?.originalAmount || subtotal
-        },
-        
-        // Timestamps
-        createdAt: issueDate,
-        updatedAt: issueDate
+        payment,
+        order: { id: orderId, createdAt: orderData.createdAt || issueDate.toISOString() },
+        metadata,
+        createdAt: issueDate.toISOString(),
+        updatedAt: issueDate.toISOString()
       };
-
-      // Save invoice to database
-      await db.collection('invoices').doc(invoiceId).set(invoice);
-      
-      // Also save a reference in the order
-      if (orderData.orderId || orderData.id) {
-        const orderId = orderData.orderId || orderData.id;
-        await db.collection('orders').doc(orderId).update({
-          invoiceId,
-          invoiceNumber,
-          updatedAt: issueDate
-        });
-      }
-
-      // If customer is registered, add invoice to their profile
-      if (customer.id) {
-        await db.collection('users').doc(customer.id).collection('invoices').doc(invoiceId).set({
-          invoiceId,
-          invoiceNumber,
-          totalAmount,
-          currency: invoice.currency,
-          status: invoice.status,
-          issueDate,
-          paidDate: issueDate,
-          orderId: orderData.orderId || orderData.id,
-          createdAt: issueDate
-        });
-      }
 
       logger.info(`Created invoice: ${invoiceNumber}`, {
         invoiceId,
-        orderId: orderData.orderId || orderData.id,
+        orderId,
         totalAmount,
         currency: invoice.currency,
         customerId: customer.id,
@@ -195,15 +179,18 @@ class InvoiceService {
    */
   async getInvoiceById(invoiceId) {
     try {
-      const invoiceDoc = await db.collection('invoices').doc(invoiceId).get();
-      
-      if (!invoiceDoc.exists) {
+      const { rows } = await pool.query(
+        'SELECT * FROM invoices WHERE id = $1',
+        [invoiceId]
+      );
+
+      if (rows.length === 0) {
         throw new Error(`Invoice not found: ${invoiceId}`);
       }
 
       return {
         success: true,
-        invoice: invoiceDoc.data()
+        invoice: this._mapRowToInvoice(rows[0])
       };
     } catch (error) {
       logger.error(`Error getting invoice ${invoiceId}:`, error);
@@ -216,20 +203,18 @@ class InvoiceService {
    */
   async getInvoiceByNumber(invoiceNumber) {
     try {
-      const invoicesSnapshot = await db.collection('invoices')
-        .where('invoiceNumber', '==', invoiceNumber)
-        .limit(1)
-        .get();
-      
-      if (invoicesSnapshot.empty) {
+      const { rows } = await pool.query(
+        'SELECT * FROM invoices WHERE invoice_number = $1 LIMIT 1',
+        [invoiceNumber]
+      );
+
+      if (rows.length === 0) {
         throw new Error(`Invoice not found: ${invoiceNumber}`);
       }
 
-      const invoice = invoicesSnapshot.docs[0].data();
-      
       return {
         success: true,
-        invoice
+        invoice: this._mapRowToInvoice(rows[0])
       };
     } catch (error) {
       logger.error(`Error getting invoice by number ${invoiceNumber}:`, error);
@@ -240,28 +225,22 @@ class InvoiceService {
   /**
    * Get invoices for a customer
    */
-  async getCustomerInvoices(customerId, limit = 20, startAfter = null) {
+  async getCustomerInvoices(customerId, limit = 20, offset = 0) {
     try {
-      let query = db.collection('users').doc(customerId).collection('invoices')
-        .orderBy('createdAt', 'desc')
-        .limit(limit);
+      const { rows } = await pool.query(
+        `SELECT * FROM invoices
+         WHERE customer->>'id' = $1
+         ORDER BY created_at DESC
+         LIMIT $2 OFFSET $3`,
+        [customerId, limit, offset]
+      );
 
-      if (startAfter) {
-        query = query.startAfter(startAfter);
-      }
-
-      const invoicesSnapshot = await query.get();
-      
-      const invoices = [];
-      invoicesSnapshot.forEach(doc => {
-        invoices.push(doc.data());
-      });
+      const invoices = rows.map(row => this._mapRowToInvoice(row));
 
       return {
         success: true,
         invoices,
-        hasMore: invoicesSnapshot.docs.length === limit,
-        lastDocument: invoicesSnapshot.docs[invoicesSnapshot.docs.length - 1] || null
+        hasMore: rows.length === limit
       };
     } catch (error) {
       logger.error(`Error getting customer invoices for ${customerId}:`, error);
@@ -274,15 +253,12 @@ class InvoiceService {
    */
   async getInvoicesByOrderId(orderId) {
     try {
-      const invoicesSnapshot = await db.collection('invoices')
-        .where('order.id', '==', orderId)
-        .orderBy('createdAt', 'desc')
-        .get();
-      
-      const invoices = [];
-      invoicesSnapshot.forEach(doc => {
-        invoices.push(doc.data());
-      });
+      const { rows } = await pool.query(
+        'SELECT * FROM invoices WHERE order_id = $1 ORDER BY created_at DESC',
+        [orderId]
+      );
+
+      const invoices = rows.map(row => this._mapRowToInvoice(row));
 
       return {
         success: true,
@@ -299,14 +275,27 @@ class InvoiceService {
    */
   async updateInvoiceStatus(invoiceId, status, metadata = {}) {
     try {
-      const updateData = {
-        status,
-        updatedAt: new Date().toISOString(),
-        ...metadata
-      };
+      const setClauses = ['status = $1', 'updated_at = NOW()'];
+      const values = [status];
+      let paramIndex = 2;
 
-      await db.collection('invoices').doc(invoiceId).update(updateData);
-      
+      if (metadata.refundId) {
+        setClauses.push(`metadata = jsonb_set(COALESCE(metadata, '{}'), '{refundId}', $${paramIndex}::jsonb)`);
+        values.push(JSON.stringify(metadata.refundId));
+        paramIndex++;
+      }
+      if (metadata.refundedAt) {
+        setClauses.push(`metadata = jsonb_set(COALESCE(metadata, '{}'), '{refundedAt}', $${paramIndex}::jsonb)`);
+        values.push(JSON.stringify(metadata.refundedAt));
+        paramIndex++;
+      }
+
+      values.push(invoiceId);
+      await pool.query(
+        `UPDATE invoices SET ${setClauses.join(', ')} WHERE id = $${paramIndex}`,
+        values
+      );
+
       logger.info(`Updated invoice status: ${invoiceId} -> ${status}`);
 
       return {
@@ -321,20 +310,16 @@ class InvoiceService {
   }
 
   /**
-   * Generate invoice PDF (placeholder - you might want to use a PDF library)
+   * Generate invoice PDF (placeholder)
    */
   async generateInvoicePDF(invoiceId) {
     try {
       const { invoice } = await this.getInvoiceById(invoiceId);
-      
-      // This is a placeholder - you would integrate with a PDF generation library
-      // like puppeteer, jsPDF, or a service like Invoice Ninja
-      
+
       logger.info(`PDF generation requested for invoice: ${invoice.invoiceNumber}`);
-      
-      // For now, return a download URL that points to a PDF generation endpoint
+
       const pdfUrl = `${process.env.API_URL || 'http://localhost:4000'}/api/invoices/${invoiceId}/pdf`;
-      
+
       return {
         success: true,
         invoiceId,
@@ -363,42 +348,55 @@ class InvoiceService {
         limit = 20
       } = searchParams;
 
-      let query = db.collection('invoices');
+      const conditions = [];
+      const values = [];
+      let paramIndex = 1;
 
-      // Apply filters
       if (customerEmail) {
-        query = query.where('customer.email', '==', customerEmail);
+        conditions.push(`customer->>'email' = $${paramIndex}`);
+        values.push(customerEmail);
+        paramIndex++;
       }
-      
+
       if (invoiceNumber) {
-        query = query.where('invoiceNumber', '==', invoiceNumber);
+        conditions.push(`invoice_number = $${paramIndex}`);
+        values.push(invoiceNumber);
+        paramIndex++;
       }
-      
+
       if (orderId) {
-        query = query.where('order.id', '==', orderId);
+        conditions.push(`order_id = $${paramIndex}`);
+        values.push(orderId);
+        paramIndex++;
       }
-      
+
       if (status) {
-        query = query.where('status', '==', status);
+        conditions.push(`status = $${paramIndex}`);
+        values.push(status);
+        paramIndex++;
       }
 
-      // Date range filtering (if needed, you might need composite indexes)
       if (startDate) {
-        query = query.where('createdAt', '>=', startDate);
+        conditions.push(`created_at >= $${paramIndex}`);
+        values.push(startDate);
+        paramIndex++;
       }
-      
+
       if (endDate) {
-        query = query.where('createdAt', '<=', endDate);
+        conditions.push(`created_at <= $${paramIndex}`);
+        values.push(endDate);
+        paramIndex++;
       }
 
-      query = query.orderBy('createdAt', 'desc').limit(limit);
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      values.push(limit);
 
-      const invoicesSnapshot = await query.get();
-      
-      const invoices = [];
-      invoicesSnapshot.forEach(doc => {
-        invoices.push(doc.data());
-      });
+      const { rows } = await pool.query(
+        `SELECT * FROM invoices ${whereClause} ORDER BY created_at DESC LIMIT $${paramIndex}`,
+        values
+      );
+
+      const invoices = rows.map(row => this._mapRowToInvoice(row));
 
       return {
         success: true,
@@ -433,32 +431,40 @@ class InvoiceService {
           startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       }
 
-      const invoicesSnapshot = await db.collection('invoices')
-        .where('createdAt', '>=', startDate.toISOString())
-        .get();
+      const { rows } = await pool.query(
+        `SELECT
+           COUNT(*) as total_count,
+           COALESCE(SUM(total_amount), 0) as total_revenue,
+           COALESCE(AVG(total_amount), 0) as average_amount,
+           currency,
+           status
+         FROM invoices
+         WHERE created_at >= $1
+         GROUP BY currency, status`,
+        [startDate.toISOString()]
+      );
 
       let totalRevenue = 0;
       let totalCount = 0;
       const currencyBreakdown = {};
       const statusBreakdown = { paid: 0, pending: 0, overdue: 0, cancelled: 0 };
 
-      invoicesSnapshot.forEach(doc => {
-        const invoice = doc.data();
-        totalCount++;
-        totalRevenue += invoice.totalAmount;
-        
-        // Currency breakdown
-        if (!currencyBreakdown[invoice.currency]) {
-          currencyBreakdown[invoice.currency] = { count: 0, total: 0 };
+      for (const row of rows) {
+        const count = parseInt(row.total_count);
+        const revenue = parseFloat(row.total_revenue);
+        totalCount += count;
+        totalRevenue += revenue;
+
+        if (!currencyBreakdown[row.currency]) {
+          currencyBreakdown[row.currency] = { count: 0, total: 0 };
         }
-        currencyBreakdown[invoice.currency].count++;
-        currencyBreakdown[invoice.currency].total += invoice.totalAmount;
-        
-        // Status breakdown
-        if (statusBreakdown.hasOwnProperty(invoice.status)) {
-          statusBreakdown[invoice.status]++;
+        currencyBreakdown[row.currency].count += count;
+        currencyBreakdown[row.currency].total += revenue;
+
+        if (statusBreakdown.hasOwnProperty(row.status)) {
+          statusBreakdown[row.status] += count;
         }
-      });
+      }
 
       return {
         success: true,
@@ -475,6 +481,34 @@ class InvoiceService {
       logger.error(`Error getting invoice stats for period ${period}:`, error);
       throw error;
     }
+  }
+
+  /**
+   * Map a database row to an invoice object
+   */
+  _mapRowToInvoice(row) {
+    return {
+      id: row.id,
+      invoiceNumber: row.invoice_number,
+      status: row.status,
+      issueDate: row.issue_date,
+      dueDate: row.due_date,
+      paidDate: row.paid_date,
+      paidAmount: parseFloat(row.paid_amount) || 0,
+      totalAmount: parseFloat(row.total_amount) || 0,
+      subtotal: parseFloat(row.subtotal) || 0,
+      vatRate: parseFloat(row.vat_rate) || 0,
+      vatAmount: parseFloat(row.vat_amount) || 0,
+      currency: row.currency,
+      company: row.company,
+      customer: row.customer,
+      lineItems: row.line_items,
+      payment: row.payment,
+      orderId: row.order_id,
+      metadata: row.metadata,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
   }
 }
 

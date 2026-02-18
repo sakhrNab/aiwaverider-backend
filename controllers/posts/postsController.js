@@ -1,11 +1,12 @@
 // backend/controllers/postsController.js
 
+const crypto = require('crypto');
 const sanitizeUtils = require('../../utils/sanitize');
 const {
   uploadImageToStorage,
   deleteImageFromStorage
 } = require('../../utils/storage');
-const admin = require('firebase-admin');
+const { pool } = require('../../config/database');
 const {
   getCache,
   setCache,
@@ -16,10 +17,6 @@ const {
   generateCommentsCacheKey,
 } = require('../../utils/cache');
 
-const postsCollection = admin.firestore().collection('posts');
-const commentsCollection = admin.firestore().collection('comments');
-const usersCollection = admin.firestore().collection('users');
-
 const createPost = async (req, res) => {
   try {
     const { title, description, category, additionalHTML, graphHTML } = req.body;
@@ -29,12 +26,12 @@ const createPost = async (req, res) => {
     if (!user?.uid) {
       return res.status(401).json({ error: 'Authentication required' });
     }
-    
+
     // Check if user is admin
     if (user.role !== 'admin') {
       return res.status(403).json({ error: 'Admin privileges required to create posts.' });
     }
-    
+
     // Validate required fields
     if (!title || !description || !category) {
       return res.status(400).json({ error: 'Title, description, and category are required.' });
@@ -45,48 +42,42 @@ const createPost = async (req, res) => {
     let imageFilename = null;
     if (req.file) {
       const uploadResult = await uploadImageToStorage(
-        req.file.buffer, 
-        req.file.originalname, 
+        req.file.buffer,
+        req.file.originalname,
         'posts'
       );
-      
+
       if (!uploadResult || !uploadResult.url || !uploadResult.filename) {
         throw new Error('Image upload failed: Missing URL or filename.');
       }
-      
+
       imageUrl = uploadResult.url;
       imageFilename = uploadResult.filename;
     }
 
-    // Get username from users collection
-    const userDoc = await usersCollection.doc(user.uid).get();
-    const username = userDoc.exists ? userDoc.data().username : 'Unknown User';
+    // Get username from users table
+    const userResult = await pool.query('SELECT username FROM users WHERE id = $1', [user.uid]);
+    const username = userResult.rows.length > 0 ? userResult.rows[0].username : 'Unknown User';
 
     // Sanitize inputs
     const sanitizedAdditionalHTML = sanitizeUtils.sanitizeContent(additionalHTML || '');
     const sanitizedGraphHTML = sanitizeUtils.sanitizeContent(graphHTML || '');
 
-    // Add post to Firestore
-    const newPostRef = await postsCollection.add({
-      title,
-      description,
-      category,
-      imageUrl,
-      imageFilename,
-      additionalHTML: sanitizedAdditionalHTML,
-      graphHTML: sanitizedGraphHTML,
-      createdBy: user.uid || null,
-      createdByUsername: username,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    const postId = crypto.randomUUID();
 
-    const newPostDoc = await newPostRef.get();
-    const newPost = { id: newPostRef.id, ...newPostDoc.data() };
+    // Add post to PostgreSQL
+    const insertResult = await pool.query(
+      `INSERT INTO posts (id, title, description, category, image_url, image_filename, additional_html, graph_html, created_by, created_by_username, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+       RETURNING *`,
+      [postId, title, description, category, imageUrl, imageFilename, sanitizedAdditionalHTML, sanitizedGraphHTML, user.uid || null, username]
+    );
+
+    const newPost = insertResult.rows[0];
 
     // Invalidate relevant caches
     await deleteCacheByPattern('posts:*');
-    await setCache(generatePostCacheKey(newPostRef.id), newPost);
+    await setCache(generatePostCacheKey(postId), newPost);
 
     return res.json({
       message: 'Post created successfully.',
@@ -101,44 +92,47 @@ const createPost = async (req, res) => {
 const getPosts = async (req, res) => {
   try {
     const { category = 'All', limit = 10, startAfter = null } = req.query;
-    
+
     // Generate cache key
     const cacheKey = generatePostsCacheKey({ category, limit, startAfter });
-    
+
     // Try to get from cache first
     const cachedData = await getCache(cacheKey);
     if (cachedData) {
       return res.json(cachedData);
     }
 
-    // If not in cache, query Firestore
-    let query = postsCollection.orderBy('createdAt', 'desc');
-    
+    // If not in cache, query PostgreSQL
+    const params = [];
+    let paramIndex = 1;
+    let whereConditions = [];
+
     if (category !== 'All') {
-      query = query.where('category', '==', category);
+      whereConditions.push(`category = $${paramIndex++}`);
+      params.push(category);
     }
-    
+
     if (startAfter) {
-      const startAfterDoc = await postsCollection.doc(startAfter).get();
-      if (startAfterDoc.exists) {
-        query = query.startAfter(startAfterDoc);
+      // Cursor-based pagination: get the created_at of the startAfter post
+      const cursorResult = await pool.query('SELECT created_at FROM posts WHERE id = $1', [startAfter]);
+      if (cursorResult.rows.length > 0) {
+        whereConditions.push(`created_at < $${paramIndex++}`);
+        params.push(cursorResult.rows[0].created_at);
       }
     }
-    
-    query = query.limit(parseInt(limit));
-    
-    const snapshot = await query.get();
-    const posts = [];
-    let lastDoc = null;
 
-    snapshot.forEach((doc) => {
-      posts.push({ id: doc.id, ...doc.data() });
-      lastDoc = doc;
-    });
+    const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : '';
+    params.push(parseInt(limit));
+
+    const query = `SELECT * FROM posts ${whereClause} ORDER BY created_at DESC LIMIT $${paramIndex}`;
+    const result = await pool.query(query, params);
+    const posts = result.rows;
+
+    const lastPost = posts.length > 0 ? posts[posts.length - 1] : null;
 
     const response = {
       posts,
-      lastPostId: lastDoc ? lastDoc.id : null,
+      lastPostId: lastPost ? lastPost.id : null,
       hasMore: posts.length === parseInt(limit)
     };
 
@@ -156,7 +150,7 @@ const getPostById = async (req, res) => {
   try {
     const { postId } = req.params;
     const skipCache = req.query.skipCache === 'true';
-    
+
     // Try to get from cache first (unless skipCache is true)
     if (!skipCache) {
       const cacheKey = generatePostCacheKey(postId);
@@ -169,15 +163,15 @@ const getPostById = async (req, res) => {
       console.log(`Skipping cache for post ${postId} as requested by client`);
     }
 
-    // If skipCache=true or not in cache, get from Firestore
-    const postDoc = await postsCollection.doc(postId).get();
-    
-    if (!postDoc.exists) {
+    // If skipCache=true or not in cache, get from PostgreSQL
+    const result = await pool.query('SELECT * FROM posts WHERE id = $1', [postId]);
+
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Post not found.' });
     }
 
-    const post = { id: postDoc.id, ...postDoc.data() };
-    
+    const post = result.rows[0];
+
     // Cache the post (unless skipCache is true)
     if (!skipCache) {
       const cacheKey = generatePostCacheKey(postId);
@@ -185,7 +179,7 @@ const getPostById = async (req, res) => {
       console.log(`Cached post ${postId}`);
     }
 
-    console.log(`Serving fresh post ${postId} from Firestore, views: ${post.views || 0}`);
+    console.log(`Serving fresh post ${postId} from PostgreSQL, views: ${post.views || 0}`);
     return res.json(post);
   } catch (err) {
     console.error('Error in getPostById:', err);
@@ -200,29 +194,29 @@ const updatePost = async (req, res) => {
     const user = req.user;
 
     // Validate user and post ownership
-    const postDoc = await postsCollection.doc(postId).get();
-    if (!postDoc.exists) {
+    const postResult = await pool.query('SELECT * FROM posts WHERE id = $1', [postId]);
+    if (postResult.rows.length === 0) {
       return res.status(404).json({ error: 'Post not found.' });
     }
 
-    const postData = postDoc.data();
-    if (postData.createdBy !== user.uid && user.role !== 'admin') {
+    const postData = postResult.rows[0];
+    if (postData.created_by !== user.uid && user.role !== 'admin') {
       return res.status(403).json({ error: 'Unauthorized to update this post.' });
     }
 
     // Handle image updates if needed
     if (req.file) {
       // Delete old image if it exists
-      if (postData.imageFilename) {
-        await deleteImageFromStorage(postData.imageFilename);
+      if (postData.image_filename) {
+        await deleteImageFromStorage(postData.image_filename);
       }
 
       const uploadResult = await uploadImageToStorage(
-        req.file.buffer, 
-        req.file.originalname, 
+        req.file.buffer,
+        req.file.originalname,
         'posts'
       );
-      
+
       if (!uploadResult || !uploadResult.url || !uploadResult.filename) {
         throw new Error('Image upload failed');
       }
@@ -239,21 +233,49 @@ const updatePost = async (req, res) => {
       updates.graphHTML = sanitizeUtils.sanitizeContent(updates.graphHTML);
     }
 
-    // Update the post
-    updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
-    await postsCollection.doc(postId).update(updates);
+    // Build dynamic UPDATE query from updates object
+    // Map camelCase keys to snake_case columns
+    const columnMap = {
+      title: 'title',
+      description: 'description',
+      category: 'category',
+      imageUrl: 'image_url',
+      imageFilename: 'image_filename',
+      additionalHTML: 'additional_html',
+      graphHTML: 'graph_html',
+    };
 
-    // Get updated post and return it
-    const updatedDoc = await postsCollection.doc(postId).get();
-    const updatedPost = { id: updatedDoc.id, ...updatedDoc.data() };
+    const setClauses = [];
+    const values = [];
+    let paramIndex = 1;
+
+    for (const [key, value] of Object.entries(updates)) {
+      const column = columnMap[key];
+      if (column) {
+        setClauses.push(`${column} = $${paramIndex++}`);
+        values.push(value);
+      }
+    }
+
+    // Always update updated_at
+    setClauses.push(`updated_at = NOW()`);
+
+    if (setClauses.length === 0) {
+      return res.status(400).json({ error: 'No valid fields to update' });
+    }
+
+    values.push(postId);
+    const updateQuery = `UPDATE posts SET ${setClauses.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    const updateResult = await pool.query(updateQuery, values);
+    const updatedPost = updateResult.rows[0];
 
     // Clear cache for this post
     await deleteCache(generatePostCacheKey(postId));
     await deleteCacheByPattern('posts:*'); // Clear all post lists
 
-    return res.json({ 
+    return res.json({
       message: 'Post updated successfully',
-      post: updatedPost 
+      post: updatedPost
     });
   } catch (error) {
     console.error('Error updating post:', error);
@@ -267,34 +289,34 @@ const deletePost = async (req, res) => {
     const user = req.user;
 
     // Validate user and post ownership
-    const postDoc = await postsCollection.doc(postId).get();
-    if (!postDoc.exists) {
+    const postResult = await pool.query('SELECT * FROM posts WHERE id = $1', [postId]);
+    if (postResult.rows.length === 0) {
       return res.status(404).json({ error: 'Post not found.' });
     }
 
-    const postData = postDoc.data();
-    if (postData.createdBy !== user.uid && user.role !== 'admin') {
+    const postData = postResult.rows[0];
+    if (postData.created_by !== user.uid && user.role !== 'admin') {
       return res.status(403).json({ error: 'Unauthorized to delete this post.' });
     }
 
-    // Delete image from Firebase Storage if it exists
-    if (postData.imageFilename) {
-      await deleteImageFromStorage(postData.imageFilename);
+    // Delete image from storage if it exists
+    if (postData.image_filename) {
+      await deleteImageFromStorage(postData.image_filename);
     }
 
-    // Delete the post
-    await postsCollection.doc(postId).delete();
-
-    // Delete all comments for this post
-    const commentsSnapshot = await commentsCollection
-      .where('postId', '==', postId)
-      .get();
-    
-    const batch = admin.firestore().batch();
-    commentsSnapshot.docs.forEach((doc) => {
-      batch.delete(doc.ref);
-    });
-    await batch.commit();
+    // Delete comments for this post and then the post itself in a transaction
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM comments WHERE post_id = $1', [postId]);
+      await client.query('DELETE FROM posts WHERE id = $1', [postId]);
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
+    }
 
     // Invalidate caches
     await deleteCacheByPattern('posts:*');
@@ -319,15 +341,14 @@ const toggleLike = async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const postRef = postsCollection.doc(postId);
-    const postDoc = await postRef.get();
+    const postResult = await pool.query('SELECT * FROM posts WHERE id = $1', [postId]);
 
-    if (!postDoc.exists) {
+    if (postResult.rows.length === 0) {
       console.log(`Post ${postId} not found`);
       return res.status(404).json({ error: 'Post not found' });
     }
 
-    const post = postDoc.data();
+    const post = postResult.rows[0];
     const likes = post.likes || [];
     const isLiked = likes.includes(userId);
     console.log(`Current like status for user ${userId} on post ${postId}: ${isLiked ? 'liked' : 'not liked'}`);
@@ -336,37 +357,33 @@ const toggleLike = async (req, res) => {
     try {
       if (isLiked) {
         console.log(`Removing like from user ${userId} on post ${postId}`);
-        await postRef.update({
-          likes: admin.firestore.FieldValue.arrayRemove(userId)
-        });
+        await pool.query(
+          'UPDATE posts SET likes = array_remove(likes, $1) WHERE id = $2',
+          [userId, postId]
+        );
       } else {
         console.log(`Adding like from user ${userId} on post ${postId}`);
-        await postRef.update({
-          likes: admin.firestore.FieldValue.arrayUnion(userId)
-        });
+        await pool.query(
+          'UPDATE posts SET likes = array_append(likes, $1) WHERE id = $2',
+          [userId, postId]
+        );
       }
     } catch (updateError) {
       console.error(`Error updating like status: ${updateError.message}`);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: 'Failed to update like status',
         details: updateError.message
       });
     }
 
     // Get updated post
-    const updatedDoc = await postRef.get();
-    const updatedPost = { 
-      id: updatedDoc.id, 
-      ...updatedDoc.data(),
-      // Ensure createdAt is serialized properly
-      createdAt: updatedDoc.data().createdAt ? updatedDoc.data().createdAt.toDate().toISOString() : null,
-      updatedAt: updatedDoc.data().updatedAt ? updatedDoc.data().updatedAt.toDate().toISOString() : null
-    };
+    const updatedResult = await pool.query('SELECT * FROM posts WHERE id = $1', [postId]);
+    const updatedPost = updatedResult.rows[0];
 
     // Double-check the like status was actually changed
     const updatedLikes = updatedPost.likes || [];
     const newIsLiked = updatedLikes.includes(userId);
-    
+
     if (newIsLiked === isLiked) {
       console.warn(`Like status didn't change for user ${userId} on post ${postId}!`);
     } else {
@@ -407,56 +424,43 @@ const getMultiCategoryPosts = async (req, res) => {
     const results = {};
 
     for (const cat of categoryArray) {
-      let query = postsCollection.orderBy('createdAt', 'desc').limit(limitNumber);
+      let postsQuery;
+      let postsParams;
+
       if (cat !== 'All') {
-        query = query.where('category', '==', cat);
+        postsQuery = 'SELECT * FROM posts WHERE category = $1 ORDER BY created_at DESC LIMIT $2';
+        postsParams = [cat, limitNumber];
+      } else {
+        postsQuery = 'SELECT * FROM posts ORDER BY created_at DESC LIMIT $1';
+        postsParams = [limitNumber];
       }
 
-      const snapshot = await query.get();
-      const postIds = snapshot.docs.map((doc) => doc.id);
-      const postsForThisCategory = snapshot.docs.map((doc) => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          createdAt: data.createdAt ? data.createdAt.toDate().toISOString() : null,
-          comments: [],
-        };
-      });
+      const postsResult = await pool.query(postsQuery, postsParams);
+      const postIds = postsResult.rows.map((row) => row.id);
+      const postsForThisCategory = postsResult.rows.map((row) => ({
+        ...row,
+        createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+        comments: [],
+      }));
 
       let allCommentsForThisCategory = [];
       if (postIds.length > 0) {
-        const chunkSize = 10;
-        const chunks = [];
-        for (let i = 0; i < postIds.length; i += chunkSize) {
-          chunks.push(postIds.slice(i, i + chunkSize));
-        }
-        const commentsPromises = chunks.map((chunk) =>
-          commentsCollection
-            .where('postId', 'in', chunk)
-            .orderBy('createdAt', 'desc')
-            .get()
+        const commentsResult = await pool.query(
+          'SELECT * FROM comments WHERE post_id = ANY($1) ORDER BY created_at DESC',
+          [postIds]
         );
-        const commentsSnapshots = await Promise.all(commentsPromises);
-
-        allCommentsForThisCategory = commentsSnapshots.flatMap((snap) =>
-          snap.docs.map((commentDoc) => {
-            const cdata = commentDoc.data();
-            return {
-              id: commentDoc.id,
-              ...cdata,
-              createdAt: cdata.createdAt ? cdata.createdAt.toDate().toISOString() : null,
-            };
-          })
-        );
+        allCommentsForThisCategory = commentsResult.rows.map((row) => ({
+          ...row,
+          createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+        }));
       }
 
       const commentsByPostId = {};
       allCommentsForThisCategory.forEach((comment) => {
-        if (!commentsByPostId[comment.postId]) {
-          commentsByPostId[comment.postId] = [];
+        if (!commentsByPostId[comment.post_id]) {
+          commentsByPostId[comment.post_id] = [];
         }
-        commentsByPostId[comment.postId].push(comment);
+        commentsByPostId[comment.post_id].push(comment);
       });
 
       postsForThisCategory.forEach((post) => {
@@ -479,11 +483,11 @@ const getBatchComments = async (req, res) => {
   try {
     // Support both GET (query params) and POST (request body) methods
     let postIds = [];
-    
+
     if (req.method === 'POST' && req.body.postIds) {
       // Get postIds from request body (for the optimized client)
-      postIds = Array.isArray(req.body.postIds) 
-        ? req.body.postIds 
+      postIds = Array.isArray(req.body.postIds)
+        ? req.body.postIds
         : req.body.postIds.split(',');
     } else if (req.query.postIds) {
       // Support both comma-separated format and multiple parameter instances
@@ -495,9 +499,9 @@ const getBatchComments = async (req, res) => {
         postIds = req.query.postIds.split(',');
       }
     } else {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'No postIds provided',
-        message: 'Please provide postIds as a comma-separated list or as multiple parameters' 
+        message: 'Please provide postIds as a comma-separated list or as multiple parameters'
       });
     }
 
@@ -505,33 +509,33 @@ const getBatchComments = async (req, res) => {
     postIds = [...new Set(postIds.filter(id => id && id.trim()))];
 
     if (!postIds.length) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'No valid postIds provided',
         message: 'Please provide at least one valid postId'
       });
     }
-    
+
     console.log(`Processing batch comments request for ${postIds.length} posts:`, postIds);
-    
+
     // Limit the number of posts we'll process at once
     if (postIds.length > 50) {
       console.warn(`Limiting batch request from ${postIds.length} to 50 posts`);
       postIds = postIds.slice(0, 50);
     }
-    
+
     // Check cache first
     const cachingEnabled = req.query.skipCache !== 'true';
     const results = {};
-    
+
     if (cachingEnabled) {
       // Check if all requested posts are in cache
       const cachedResults = {};
       let allCached = true;
-      
+
       for (const postId of postIds) {
         const cacheKey = `comments:${postId}`;
         const cachedComments = await getCache(cacheKey);
-        
+
         if (cachedComments) {
           try {
             cachedResults[postId] = JSON.parse(cachedComments);
@@ -545,61 +549,49 @@ const getBatchComments = async (req, res) => {
           break;
         }
       }
-      
+
       // If all posts have cached comments, return them
       if (allCached) {
         console.log('Returning all batch comments from cache');
         return res.json(cachedResults);
       }
     }
-    
-    // Fetch comments for all posts in batches to avoid Firestore limits
-    const batchSize = 10; // Firestore "in" query supports up to 10 items
-    const batches = [];
-    
-    for (let i = 0; i < postIds.length; i += batchSize) {
-      batches.push(postIds.slice(i, i + batchSize));
-    }
-    
-    console.log(`Processing ${batches.length} batches of comments`);
-    
-    const promises = batches.map(async (batchIds) => {
-      try {
-        const snapshot = await commentsCollection
-          .where('postId', 'in', batchIds)
-          .orderBy('createdAt', 'desc')
-          .get();
-          
-        return snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data(),
-          createdAt: doc.data().createdAt ? doc.data().createdAt.toDate().toISOString() : new Date().toISOString()
-        }));
-      } catch (error) {
-        console.error(`Error fetching comments batch:`, error);
-        // Return empty array for this batch to avoid failing the entire request
-        return [];
+
+    // Fetch comments for all posts using ANY($1) - no batch size limit needed with PostgreSQL
+    console.log(`Fetching comments for ${postIds.length} posts`);
+
+    try {
+      const commentsResult = await pool.query(
+        'SELECT * FROM comments WHERE post_id = ANY($1) ORDER BY created_at DESC',
+        [postIds]
+      );
+
+      const allComments = commentsResult.rows.map(row => ({
+        ...row,
+        createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
+      }));
+
+      console.log(`Retrieved ${allComments.length} total comments`);
+
+      // Group comments by post_id
+      for (const comment of allComments) {
+        if (!results[comment.post_id]) {
+          results[comment.post_id] = [];
+        }
+        results[comment.post_id].push(comment);
       }
-    });
-    
-    const allComments = (await Promise.all(promises)).flat();
-    console.log(`Retrieved ${allComments.length} total comments`);
-    
-    // Group comments by postId
-    for (const comment of allComments) {
-      if (!results[comment.postId]) {
-        results[comment.postId] = [];
-      }
-      results[comment.postId].push(comment);
+    } catch (error) {
+      console.error(`Error fetching comments batch:`, error);
+      // Return empty arrays for all posts on error
     }
-    
+
     // Add empty arrays for posts with no comments
     for (const postId of postIds) {
       if (!results[postId]) {
         results[postId] = [];
       }
     }
-    
+
     // Cache individual post comments
     if (cachingEnabled) {
       for (const [postId, comments] of Object.entries(results)) {
@@ -607,7 +599,7 @@ const getBatchComments = async (req, res) => {
         await setCache(cacheKey, JSON.stringify(comments), 60 * 5); // Cache for 5 minutes
       }
     }
-    
+
     return res.json(results);
   } catch (err) {
     console.error('Error in getBatchComments:', err);
@@ -618,44 +610,42 @@ const getBatchComments = async (req, res) => {
 const getPostComments = async (req, res) => {
   try {
     const { postId } = req.params;
-    const snapshot = await commentsCollection
-      .where('postId', '==', postId)
-      .orderBy('createdAt', 'desc')
-      .get();
+    const commentsResult = await pool.query(
+      'SELECT * FROM comments WHERE post_id = $1 ORDER BY created_at DESC',
+      [postId]
+    );
 
     const allComments = [];
     const commentMap = new Map();
 
-    for (const doc of snapshot.docs) {
-      const data = doc.data();
-      const likes = data.likes || [];
+    for (const row of commentsResult.rows) {
+      const likes = row.likes || [];
       let likedBy = [];
-      
+
       if (likes.length > 0) {
-        const userPromises = likes.map(userId =>
-          usersCollection.doc(userId).get()
+        // Fetch usernames for users who liked this comment
+        const usersResult = await pool.query(
+          'SELECT id, username FROM users WHERE id = ANY($1)',
+          [likes]
         );
-        const userDocs = await Promise.all(userPromises);
-        likedBy = userDocs
-          .filter(doc => doc.exists)
-          .map(doc => ({ id: doc.id, username: doc.data().username }));
+        likedBy = usersResult.rows.map(u => ({ id: u.id, username: u.username }));
       }
 
       const comment = {
-        id: doc.id,
-        postId: data.postId,
-        userId: data.userId,
-        text: data.text,
-        username: data.username || 'Anonymous',
-        userRole: data.userRole || 'user',
+        id: row.id,
+        postId: row.post_id,
+        userId: row.user_id,
+        text: row.text,
+        username: row.username || 'Anonymous',
+        userRole: row.user_role || 'user',
         likes: likes,
         likedBy: likedBy,
-        parentCommentId: data.parentCommentId || null,
+        parentCommentId: row.parent_comment_id || null,
         replies: [],
-        createdAt: data.createdAt ? data.createdAt.toDate().toISOString() : new Date().toISOString()
+        createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
       };
 
-      commentMap.set(doc.id, comment);
+      commentMap.set(row.id, comment);
     }
 
     for (const comment of commentMap.values()) {
@@ -688,20 +678,17 @@ const addComment = async (req, res) => {
   try {
     const { postId } = req.params;
     const { commentText, parentCommentId } = req.body;
-    
-    const newCommentRef = await commentsCollection.add({
-      postId,
-      text: commentText,
-      parentCommentId: parentCommentId || null,
-      userId: req.user.uid,
-      username: req.user.username,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      likes: []
-    });
 
-    const newCommentDoc = await newCommentRef.get();
-    const newComment = { id: newCommentRef.id, ...newCommentDoc.data() };
+    const commentId = crypto.randomUUID();
+
+    const insertResult = await pool.query(
+      `INSERT INTO comments (id, post_id, text, parent_comment_id, user_id, username, created_at, updated_at, likes)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW(), '{}')
+       RETURNING *`,
+      [commentId, postId, commentText, parentCommentId || null, req.user.uid, req.user.username]
+    );
+
+    const newComment = insertResult.rows[0];
 
     await deleteCache(generateCommentsCacheKey(postId));
     await deleteCacheByPattern('batchComments_*');
@@ -718,63 +705,57 @@ const likeComment = async (req, res) => {
     const { postId, commentId } = req.params;
     const uid = req.user.uid;
     console.log(`User ${uid} attempting to like comment ${commentId} for post ${postId}`);
-    
-    const commentRef = commentsCollection.doc(commentId);
-    const commentDoc = await commentRef.get();
-    
-    if (!commentDoc.exists) {
+
+    const commentResult = await pool.query('SELECT * FROM comments WHERE id = $1', [commentId]);
+
+    if (commentResult.rows.length === 0) {
       console.log(`Comment ${commentId} not found`);
       return res.status(404).json({ error: 'Comment not found.' });
     }
-    
-    let commentData = commentDoc.data();
+
+    let commentData = commentResult.rows[0];
     let likes = commentData.likes || [];
-    
+
     if (!likes.includes(uid)) {
       console.log(`Adding user ${uid} to likes for comment ${commentId}`);
-      likes.push(uid);
-      await commentRef.update({ likes });
-      const updatedDoc = await commentRef.get();
-      const updatedData = updatedDoc.data();
-
-      const userPromises = likes.map(userId =>
-        usersCollection.doc(userId).get()
+      await pool.query(
+        'UPDATE comments SET likes = array_append(likes, $1) WHERE id = $2',
+        [uid, commentId]
       );
-      const userDocs = await Promise.all(userPromises);
-      const likedBy = userDocs
-        .filter(doc => doc.exists)
-        .map(doc => ({ id: doc.id, username: doc.data().username }));
-
-      const updatedComment = {
-        id: updatedDoc.id,
-        ...updatedData,
-        likes,
-        likedBy,
-        createdAt: updatedData.createdAt ? updatedData.createdAt.toDate().toISOString() : null
-      };
-
-      console.log(`Successfully liked comment ${commentId}, returning updated comment`);
-      return res.json({ updatedComment });
     } else {
       console.log(`User ${uid} already liked comment ${commentId}, no changes made`);
-      const userPromises = likes.map(userId =>
-        usersCollection.doc(userId).get()
-      );
-      const userDocs = await Promise.all(userPromises);
-      const likedBy = userDocs
-        .filter(doc => doc.exists)
-        .map(doc => ({ id: doc.id, username: doc.data().username }));
-
-      const updatedComment = {
-        id: commentDoc.id,
-        ...commentData,
-        likes,
-        likedBy,
-        createdAt: commentData.createdAt ? commentData.createdAt.toDate().toISOString() : null
-      };
-
-      return res.json({ updatedComment });
     }
+
+    // Get updated comment
+    const updatedResult = await pool.query('SELECT * FROM comments WHERE id = $1', [commentId]);
+    const updatedData = updatedResult.rows[0];
+    const updatedLikes = updatedData.likes || [];
+
+    // Fetch usernames for users who liked this comment
+    let likedBy = [];
+    if (updatedLikes.length > 0) {
+      const usersResult = await pool.query(
+        'SELECT id, username FROM users WHERE id = ANY($1)',
+        [updatedLikes]
+      );
+      likedBy = usersResult.rows.map(u => ({ id: u.id, username: u.username }));
+    }
+
+    const updatedComment = {
+      id: updatedData.id,
+      postId: updatedData.post_id,
+      userId: updatedData.user_id,
+      text: updatedData.text,
+      username: updatedData.username,
+      userRole: updatedData.user_role,
+      likes: updatedLikes,
+      likedBy,
+      parentCommentId: updatedData.parent_comment_id,
+      createdAt: updatedData.created_at ? new Date(updatedData.created_at).toISOString() : null
+    };
+
+    console.log(`Successfully processed like for comment ${commentId}, returning updated comment`);
+    return res.json({ updatedComment });
   } catch (err) {
     console.error('Error in likeComment:', err);
     return res.status(500).json({ error: 'Internal server error.' });
@@ -786,64 +767,57 @@ const unlikeComment = async (req, res) => {
     const { postId, commentId } = req.params;
     const uid = req.user.uid;
     console.log(`User ${uid} attempting to unlike comment ${commentId} for post ${postId}`);
-    
-    const commentRef = commentsCollection.doc(commentId);
-    const commentDoc = await commentRef.get();
-    
-    if (!commentDoc.exists) {
+
+    const commentResult = await pool.query('SELECT * FROM comments WHERE id = $1', [commentId]);
+
+    if (commentResult.rows.length === 0) {
       console.log(`Comment ${commentId} not found`);
       return res.status(404).json({ error: 'Comment not found.' });
     }
-    
-    let commentData = commentDoc.data();
+
+    let commentData = commentResult.rows[0];
     let likes = commentData.likes || [];
-    
+
     if (likes.includes(uid)) {
       console.log(`Removing user ${uid} from likes for comment ${commentId}`);
-      likes = likes.filter(id => id !== uid);
-      await commentRef.update({ likes });
-      
-      const updatedDoc = await commentRef.get();
-      const updatedData = updatedDoc.data();
-      
-      const userPromises = likes.map(userId =>
-        usersCollection.doc(userId).get()
+      await pool.query(
+        'UPDATE comments SET likes = array_remove(likes, $1) WHERE id = $2',
+        [uid, commentId]
       );
-      const userDocs = await Promise.all(userPromises);
-      const likedBy = userDocs
-        .filter(doc => doc.exists)
-        .map(doc => ({ id: doc.id, username: doc.data().username }));
-      
-      const updatedComment = {
-        id: updatedDoc.id,
-        ...updatedData,
-        likes,
-        likedBy,
-        createdAt: updatedData.createdAt ? updatedData.createdAt.toDate().toISOString() : null
-      };
-      
-      console.log(`Successfully unliked comment ${commentId}, returning updated comment`);
-      return res.json({ updatedComment });
     } else {
       console.log(`User ${uid} hasn't liked comment ${commentId}, no changes made`);
-      const userPromises = likes.map(userId =>
-        usersCollection.doc(userId).get()
-      );
-      const userDocs = await Promise.all(userPromises);
-      const likedBy = userDocs
-        .filter(doc => doc.exists)
-        .map(doc => ({ id: doc.id, username: doc.data().username }));
-      
-      const updatedComment = {
-        id: commentDoc.id,
-        ...commentData,
-        likes,
-        likedBy,
-        createdAt: commentData.createdAt ? commentData.createdAt.toDate().toISOString() : null
-      };
-      
-      return res.json({ updatedComment });
     }
+
+    // Get updated comment
+    const updatedResult = await pool.query('SELECT * FROM comments WHERE id = $1', [commentId]);
+    const updatedData = updatedResult.rows[0];
+    const updatedLikes = updatedData.likes || [];
+
+    // Fetch usernames for users who liked this comment
+    let likedBy = [];
+    if (updatedLikes.length > 0) {
+      const usersResult = await pool.query(
+        'SELECT id, username FROM users WHERE id = ANY($1)',
+        [updatedLikes]
+      );
+      likedBy = usersResult.rows.map(u => ({ id: u.id, username: u.username }));
+    }
+
+    const updatedComment = {
+      id: updatedData.id,
+      postId: updatedData.post_id,
+      userId: updatedData.user_id,
+      text: updatedData.text,
+      username: updatedData.username,
+      userRole: updatedData.user_role,
+      likes: updatedLikes,
+      likedBy,
+      parentCommentId: updatedData.parent_comment_id,
+      createdAt: updatedData.created_at ? new Date(updatedData.created_at).toISOString() : null
+    };
+
+    console.log(`Successfully processed unlike for comment ${commentId}, returning updated comment`);
+    return res.json({ updatedComment });
   } catch (err) {
     console.error('Error in unlikeComment:', err);
     return res.status(500).json({ error: 'Internal server error.' });
@@ -854,19 +828,19 @@ const deleteComment = async (req, res) => {
   try {
     const { postId, commentId } = req.params;
     const uid = req.user.uid;
-    const commentRef = commentsCollection.doc(commentId);
-    const commentDoc = await commentRef.get();
-    
-    if (!commentDoc.exists) {
+
+    const commentResult = await pool.query('SELECT * FROM comments WHERE id = $1', [commentId]);
+
+    if (commentResult.rows.length === 0) {
       return res.status(404).json({ error: 'Comment not found.' });
     }
-    
-    const commentData = commentDoc.data();
-    if (commentData.userId !== uid && req.user.role !== 'admin') {
+
+    const commentData = commentResult.rows[0];
+    if (commentData.user_id !== uid && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Forbidden.' });
     }
-    
-    await commentRef.delete();
+
+    await pool.query('DELETE FROM comments WHERE id = $1', [commentId]);
     await deleteCache(generateCommentsCacheKey(postId));
     await deleteCacheByPattern('batchComments_*');
 
@@ -882,25 +856,23 @@ const updateComment = async (req, res) => {
     const { postId, commentId } = req.params;
     const { commentText } = req.body;
     const uid = req.user.uid;
-    const commentRef = commentsCollection.doc(commentId);
-    const commentDoc = await commentRef.get();
-    
-    if (!commentDoc.exists) {
+
+    const commentResult = await pool.query('SELECT * FROM comments WHERE id = $1', [commentId]);
+
+    if (commentResult.rows.length === 0) {
       return res.status(404).json({ error: 'Comment not found' });
     }
-    
-    const commentData = commentDoc.data();
-    if (commentData.userId !== uid && req.user.role !== 'admin') {
+
+    const commentData = commentResult.rows[0];
+    if (commentData.user_id !== uid && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Forbidden' });
     }
-    
-    await commentRef.update({
-      text: commentText,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    
-    const updatedDoc = await commentRef.get();
-    const updatedComment = { id: updatedDoc.id, ...updatedDoc.data() };
+
+    const updateResult = await pool.query(
+      'UPDATE comments SET text = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+      [commentText, commentId]
+    );
+    const updatedComment = updateResult.rows[0];
 
     await deleteCache(generateCommentsCacheKey(postId));
     await deleteCacheByPattern('batchComments_*');
@@ -917,25 +889,23 @@ const incrementViews = async (req, res) => {
   try {
     const { postId } = req.params;
     console.log(`Incrementing view count for post ${postId}`);
-    
-    // Update the post's view count in Firestore
-    const postRef = postsCollection.doc(postId);
-    const postDoc = await postRef.get();
-    
-    if (!postDoc.exists) {
+
+    // Update the post's view count in PostgreSQL
+    const result = await pool.query(
+      'UPDATE posts SET views = views + 1 WHERE id = $1 RETURNING id',
+      [postId]
+    );
+
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Post not found' });
     }
-    
-    await postRef.update({
-      views: admin.firestore.FieldValue.increment(1)
-    });
-    
+
     console.log(`View count incremented for post ${postId}`);
-    
+
     // Invalidate cache
     await deleteCache(generatePostCacheKey(postId));
     await deleteCacheByPattern('posts:*');
-    
+
     return res.status(200).json({ success: true });
   } catch (err) {
     console.error('Error incrementing view count:', err);
@@ -950,35 +920,27 @@ const initializeViewCounts = async (req, res) => {
     if (req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Only admins can run this operation' });
     }
-    
+
     console.log('Initializing view counts for posts...');
-    const snapshot = await postsCollection.get();
-    const batch = admin.firestore().batch();
-    let updatedCount = 0;
-    
-    for (const doc of snapshot.docs) {
-      const post = doc.data();
-      // Only update posts that don't have a views field
-      if (post.views === undefined) {
-        batch.update(doc.ref, { views: 0 });
-        updatedCount++;
-      }
-    }
-    
+
+    const result = await pool.query(
+      'UPDATE posts SET views = 0 WHERE views IS NULL RETURNING id'
+    );
+    const updatedCount = result.rowCount;
+
     if (updatedCount > 0) {
-      await batch.commit();
       console.log(`Initialized view counts for ${updatedCount} posts`);
     } else {
       console.log('No posts needed view count initialization');
     }
-    
+
     // Invalidate all post caches
     await deleteCacheByPattern('posts:*');
-    
-    return res.status(200).json({ 
-      success: true, 
+
+    return res.status(200).json({
+      success: true,
       updatedCount,
-      message: `Initialized view counts for ${updatedCount} posts` 
+      message: `Initialized view counts for ${updatedCount} posts`
     });
   } catch (err) {
     console.error('Error initializing view counts:', err);

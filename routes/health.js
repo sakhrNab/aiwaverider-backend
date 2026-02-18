@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { db } = require('../config/firebase');
+const { pool } = require('../config/database');
 const logger = require('../utils/logger');
 const { getCache, setCache } = require('../utils/cache');
 
@@ -10,26 +10,19 @@ const { getCache, setCache } = require('../utils/cache');
  */
 router.get('/', async (req, res) => {
   try {
-    // Check Firebase connection
-    let firebaseStatus = 'ok';
+    // Check PostgreSQL connection
+    let databaseStatus = 'ok';
     try {
-      // Attempt to access Firestore
-      const snapshot = await db.collection('system').doc('health').get();
-      if (!snapshot.exists) {
-        // Create health document if it doesn't exist
-        await db.collection('system').doc('health').set({
-          lastChecked: new Date().toISOString(),
-          status: 'ok'
-        });
-      } else {
-        // Update last checked timestamp
-        await db.collection('system').doc('health').update({
-          lastChecked: new Date().toISOString()
-        });
-      }
+      // Attempt to query PostgreSQL
+      const { rows } = await pool.query(
+        `INSERT INTO system (id, last_checked, status)
+         VALUES ('health', NOW(), 'ok')
+         ON CONFLICT (id) DO UPDATE SET last_checked = NOW(), status = 'ok'
+         RETURNING *`
+      );
     } catch (error) {
-      logger.error('Health check: Firebase connection error', error);
-      firebaseStatus = 'error';
+      logger.error('Health check: PostgreSQL connection error', error);
+      databaseStatus = 'error';
     }
 
     // Check Redis connection
@@ -56,7 +49,7 @@ router.get('/', async (req, res) => {
       version: process.env.npm_package_version || '1.0.0',
       environment: process.env.NODE_ENV || 'development',
       services: {
-        firebase: firebaseStatus,
+        database: databaseStatus,
         redis: redisStatus
       }
     });

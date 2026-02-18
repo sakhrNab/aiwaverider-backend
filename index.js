@@ -10,10 +10,9 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 const logger = require('./utils/logger');
 const { initializePassport } = require('./config/passport');
-const { db } = require('./config/firebase');
+const { pool } = require('./config/database');
 const { initializeSettings } = require('./models/siteSettings');
 const uploadMiddleware = require('./middleware/upload');
-const admin = require('firebase-admin');
 const cron = require('node-cron');
 const { syncAllChannels } = require('./services/videoSync');
 
@@ -33,7 +32,7 @@ const isDevelopment = process.env.NODE_ENV === 'development';
 const PORT = process.env.PORT || (isProduction ? 8080 : 4000);
 
 // Initialize site settings
-initializeSettings(db).catch(err => {
+initializeSettings().catch(err => {
   logger.error('Failed to initialize site settings:', err);
 });
 
@@ -298,37 +297,28 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Check if agents collection exists in development mode
+// Check if tables have data in development mode
 if (!isProduction) {
-  // Check if agents collection exists
-  const checkAgentsCollection = async () => {
+  const checkTables = async () => {
     try {
-      console.log('Checking if agents collection exists...');
-      const agentsSnapshot = await db.collection('agents').limit(1).get();
-      if (agentsSnapshot.empty) {
-        console.log('⚠️ Agents collection is empty or does not exist.');
-        console.log('You may want to run: npm run check:agents');
-        console.log('This will populate the database with mock agents for development.');
+      console.log('Checking PostgreSQL tables...');
+      const { rows: agentRows } = await pool.query('SELECT COUNT(*) as count FROM agents');
+      const agentCount = parseInt(agentRows[0].count);
+      if (agentCount === 0) {
+        console.log('⚠️ Agents table is empty.');
+        console.log('You may want to run the seed script to populate the database.');
       } else {
-        console.log('✅ Agents collection exists with data.');
+        console.log(`✅ Agents table has ${agentCount} records.`);
       }
-    } catch (error) {
-      console.error('Error checking agents collection:', error);
-    }
-  };
-  
-  // NEW: Check if prompts collection exists and initialize cache
-  const checkPromptsCollection = async () => {
-    try {
-      console.log('Checking if prompts collection exists...');
-      const promptsSnapshot = await db.collection('prompts').limit(1).get();
-      if (promptsSnapshot.empty) {
-        console.log('⚠️ Prompts collection is empty or does not exist.');
-        console.log('Prompts collection will be created when you add your first prompt via the API.');
+
+      const { rows: promptRows } = await pool.query('SELECT COUNT(*) as count FROM prompts');
+      const promptCount = parseInt(promptRows[0].count);
+      if (promptCount === 0) {
+        console.log('⚠️ Prompts table is empty.');
       } else {
-        console.log('✅ Prompts collection exists with data.');
+        console.log(`✅ Prompts table has ${promptCount} records.`);
       }
-      
+
       // Initialize prompts cache
       console.log('🔄 Initializing prompts cache...');
       try {
@@ -338,15 +328,12 @@ if (!isProduction) {
       } catch (cacheError) {
         console.error('❌ Failed to initialize prompts cache:', cacheError.message);
       }
-      
     } catch (error) {
-      console.error('Error checking prompts collection:', error);
+      console.error('Error checking PostgreSQL tables:', error.message);
     }
   };
-  
-  // Run the checks
-  checkAgentsCollection();
-  checkPromptsCollection();
+
+  checkTables();
 }
 
 // ------------------ Start the Server ------------------
@@ -356,7 +343,7 @@ const server = app.listen(PORT, async () => {
   console.log(`Firebase credentials available: ${!!process.env.FIREBASE_SERVICE_ACCOUNT_JSON}`);
   console.log(`CORS origins: ${allowedOrigins.join(', ')}`);
   console.log(`Storage bucket: ${process.env.FIREBASE_STORAGE_BUCKET}`);
-  console.log(`Firestore database available: ${!!db}`);
+  console.log(`PostgreSQL database: ${process.env.PGDATABASE || 'aiwaverider'}@${process.env.PGHOST || 'localhost'}:${process.env.PGPORT || '5432'}`);
   
   // Initialize prompts cache on production startup
   if (isProduction) {

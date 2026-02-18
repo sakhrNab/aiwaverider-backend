@@ -1,5 +1,5 @@
 const admin = require('firebase-admin');
-const { db } = require('../config/firebase');
+const { pool } = require('../config/database');
 
 /**
  * Admin authentication middleware for video endpoints
@@ -32,18 +32,21 @@ const adminAuth = async (req, res, next) => {
 
     console.log('Token verified for user:', decodedToken.email);
 
-    // Get user data from Firestore to check admin role
-    const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-    
-    if (!userDoc.exists) {
+    // Get user data from PostgreSQL to check admin role
+    const { rows } = await pool.query(
+      'SELECT role, username FROM users WHERE id = $1',
+      [decodedToken.uid]
+    );
+
+    if (rows.length === 0) {
       console.log('User not found in database for uid:', decodedToken.uid);
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: 'User not found',
-        message: 'User not found in database' 
+        message: 'User not found in database'
       });
     }
 
-    const userData = userDoc.data();
+    const userData = rows[0];
     const isAdmin = userData.role === 'admin';
 
     if (!isAdmin) {

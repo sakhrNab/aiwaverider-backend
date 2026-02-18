@@ -1,0 +1,16 @@
+{
+  "name": "aiwaverider-migration",
+  "version": "1.0.0",
+  "description": "Firestore → PostgreSQL migration scripts for AI Waverider",
+  "private": true,
+  "scripts": {
+    "export": "node export-firestore.js",
+    "seed": "node seed-from-json.js",
+    "migrate": "npm run export && npm run seed"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "firebase-admin": "^13.0.0",
+    "pg": "^8.18.0"
+  }
+}
