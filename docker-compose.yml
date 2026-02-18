@@ -97,6 +97,8 @@ services:
       # Company info
       - COMPANY_NAME=${COMPANY_NAME:-}
       - COMPANY_EMAIL=${COMPANY_EMAIL:-}
+      # Qdrant (vector search for RAG)
+      - QDRANT_URL=http://qdrant:6333
     expose:
       - "5000"
     depends_on:
@@ -159,6 +161,11 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
