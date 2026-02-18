@@ -3,6 +3,11 @@ const OpenAI = require('openai');
 const { searchRelevant } = require('../../services/rag/qdrantService');
 const { pool } = require('../../config/database');
 
+// Create OpenAI client once at module level
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
+
 /**
  * Look up missing detail-page data from PostgreSQL so the chatbot
  * always knows which product the user is viewing.
@@ -47,12 +52,43 @@ async function resolvePageContext(pageContext) {
         data.promptName = rows[0].title;
       }
     }
+
+    if (page === 'post-detail' && data.postId && !data.postTitle) {
+      const { rows } = await pool.query(
+        'SELECT title, category, description FROM posts WHERE id = $1 LIMIT 1',
+        [data.postId]
+      );
+      if (rows[0]) {
+        data.postTitle = rows[0].title;
+        data.postCategory = rows[0].category;
+        data.postDescription = (rows[0].description || '').slice(0, 200);
+      }
+    }
   } catch (err) {
     // Non-critical — chatbot still works without enrichment
     console.warn('resolvePageContext lookup failed:', err.message);
   }
 
   return pageContext;
+}
+
+/**
+ * Sanitize messages from the client before sending to OpenAI.
+ * - Only allow 'user' and 'assistant' roles (block 'system' injection)
+ * - Truncate overly long messages
+ * - Limit conversation history length
+ */
+function sanitizeMessages(messages) {
+  const MAX_MESSAGES = 30;
+  const MAX_MSG_LENGTH = 2000;
+
+  return messages
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .slice(-MAX_MESSAGES)
+    .map((m) => ({
+      role: m.role,
+      content: typeof m.content === 'string' ? m.content.slice(0, MAX_MSG_LENGTH) : '',
+    }));
 }
 
 const BASE_SYSTEM_PROMPT = `You are a helpful AI assistant for the AI Waverider website, founded by Sakhr Al-Absi (CS degree from TU Berlin, 7+ years enterprise experience, Fortune 500 background, hackathon winner). Your purpose is to assist users in navigating the site, understanding our offerings, and answering questions.
@@ -85,6 +121,18 @@ Available pages and what they contain:
 - Monetization Paths (/monetization-paths): Detailed breakdown of 4 ways to monetize AI
 - Checkout (/checkout): Payment processing
 - Profile (/profile): User account management
+
+NAVIGATION GUIDANCE — use these to direct users to the correct page:
+- For latest news, articles, or tutorials → direct to /posts
+- For AI workflows/automations → direct to /agents
+- For AI apps built by AI Waverider → direct to /apps
+- For external third-party AI tools → direct to /ai-tools (NOT /prompts, NOT /apps)
+- For AI prompts (text prompts for LLMs) → direct to /prompts
+- For video content → direct to /videos
+- For sponsorship or creator partnerships → direct to /media-kit
+- For B2B services or enterprise partnerships → direct to /media-kit-business
+- IMPORTANT: /ai-tools shows EXTERNAL tools (not ours). /apps shows OUR apps. /agents shows N8N WORKFLOWS. /prompts shows TEXT PROMPTS. Never confuse these pages.
+- When the "RELEVANT PRODUCTS" section below includes results, you may mention them, but ALWAYS also direct the user to the appropriate page listed above so they can browse more.
 
 CRITICAL BOOKING INSTRUCTIONS - ALWAYS FOLLOW THESE:
 When a user mentions ANY of these phrases or similar requests, you MUST include [SHOW_BOOKING_BUTTON] at the end:
@@ -188,7 +236,10 @@ function buildSystemPrompt(pageContext, ragResults) {
         break;
       case 'post-detail':
         if (pageContext.data) {
-          prompt += `\nThey are reading a post/article.`;
+          prompt += `\nThey are reading a post/article called "${pageContext.data.postTitle || 'unknown'}".`;
+          if (pageContext.data.postCategory) prompt += ` Category: ${pageContext.data.postCategory}.`;
+          if (pageContext.data.postDescription) prompt += `\nSummary: ${pageContext.data.postDescription}`;
+          prompt += '\nAnswer questions about this specific post when asked.';
         }
         break;
       case 'checkout':
@@ -237,14 +288,12 @@ exports.processChat = async (req, res) => {
       });
     }
 
-    if (!process.env.OPENAI_API_KEY) {
+    if (!openai) {
       return res.status(500).json({
         success: false,
         error: 'OpenAI API key not configured',
       });
     }
-
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
     // RAG search based on last user message
     let ragResults = [];
@@ -258,8 +307,9 @@ exports.processChat = async (req, res) => {
     }
 
     const systemPrompt = buildSystemPrompt(pageContext, ragResults);
+    const safeMessages = sanitizeMessages(messages);
 
-    const fullMessages = [{ role: 'system', content: systemPrompt }, ...messages];
+    const fullMessages = [{ role: 'system', content: systemPrompt }, ...safeMessages];
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -270,7 +320,7 @@ exports.processChat = async (req, res) => {
 
     const assistantMessage = completion.choices[0].message.content;
     const shouldShowBookingButton = assistantMessage.includes('[SHOW_BOOKING_BUTTON]');
-    const cleanMessage = assistantMessage.replace('[SHOW_BOOKING_BUTTON]', '').trim();
+    const cleanMessage = assistantMessage.replaceAll('[SHOW_BOOKING_BUTTON]', '').trim();
 
     return res.status(200).json({
       success: true,
@@ -311,14 +361,12 @@ exports.processChatStream = async (req, res) => {
       });
     }
 
-    if (!process.env.OPENAI_API_KEY) {
+    if (!openai) {
       return res.status(500).json({
         success: false,
         error: 'OpenAI API key not configured',
       });
     }
-
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
     // RAG search based on last user message
     let ragResults = [];
@@ -332,7 +380,8 @@ exports.processChatStream = async (req, res) => {
     }
 
     const systemPrompt = buildSystemPrompt(pageContext, ragResults);
-    const fullMessages = [{ role: 'system', content: systemPrompt }, ...messages];
+    const safeMessages = sanitizeMessages(messages);
+    const fullMessages = [{ role: 'system', content: systemPrompt }, ...safeMessages];
 
     // Set SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
