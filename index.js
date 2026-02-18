@@ -407,7 +407,7 @@ const server = app.listen(PORT, async () => {
       if (fs.existsSync(migrationPath)) {
         const sql = fs.readFileSync(migrationPath, 'utf8');
         await pool.query(sql);
-        console.log('✅ Apps table created successfully');
+        console.log('✅ Apps table created and seeded successfully');
       } else {
         // Inline fallback if migration file not found
         await pool.query(`
@@ -430,7 +430,18 @@ const server = app.listen(PORT, async () => {
           );
           CREATE OR REPLACE TRIGGER trg_apps_updated_at BEFORE UPDATE ON apps FOR EACH ROW EXECUTE FUNCTION update_updated_at();
         `);
-        console.log('✅ Apps table created (inline fallback)');
+        // Seed 6 production apps
+        await pool.query(`
+          INSERT INTO apps (id, title, type, category, categories, description, short_description, features, tags, platform_support, is_featured, is_published) VALUES
+          ('app-ai-wavecut', 'AI WaveCut', 'app', 'Video Editing', '{"Video Editing","AI","Productivity"}', 'AI-powered video editor with intelligent scene detection, auto-captioning, and smart trimming.', 'AI-powered video editor with smart scene detection and auto-captioning.', '{"AI scene detection","Auto-captioning","Smart trimming","Batch export","Timeline editing","Multi-format support"}', '{"video","editor","AI","captions","vibe coding"}', '{"Windows","Mac","Linux","Web"}', TRUE, TRUE),
+          ('app-flowstate', 'FlowState', 'app', 'Productivity', '{"Productivity","AI","Focus"}', 'AI-driven productivity app combining Pomodoro timing, focus music, and task prioritization.', 'AI productivity app combining focus timing, task management, and distraction blocking.', '{"Pomodoro timer","AI task prioritization","Focus music","Distraction blocking","Daily analytics"}', '{"productivity","focus","pomodoro","AI","vibe coding"}', '{"Windows","Mac","Linux","Web"}', TRUE, TRUE),
+          ('app-srt-translator-pro', 'SRT Translator Pro', 'app', 'Translation', '{"Translation","AI","Subtitles"}', 'Professional subtitle translator supporting 50+ languages with context-aware AI translation.', 'AI subtitle translator for 50+ languages with context-aware translation.', '{"50+ languages","Context-aware translation","SRT/VTT/ASS export","Batch processing","Timing preservation"}', '{"subtitles","translation","SRT","AI","vibe coding"}', '{"Windows","Mac","Linux","Web"}', TRUE, TRUE),
+          ('app-ai-job-writer', 'AI Job Writer', 'app', 'Career', '{"Career","AI","Resume"}', 'AI resume and cover letter generator with ATS optimization and interview prep.', 'AI-powered resume and cover letter generator with ATS optimization.', '{"Job description analysis","ATS optimization","Cover letter generation","Interview prep","Keyword matching"}', '{"resume","cover letter","job","career","AI","vibe coding"}', '{"Web"}', TRUE, TRUE),
+          ('app-outbound-ai', 'Outbound AI', 'app', 'Sales', '{"Sales","AI","Outreach"}', 'AI cold outreach platform with prospect research and multi-channel follow-up sequences.', 'AI cold outreach tool with prospect research and multi-channel follow-ups.', '{"Prospect research","Personalized messaging","Multi-channel outreach","Follow-up sequences","Analytics dashboard"}', '{"sales","outreach","cold email","AI","automation","vibe coding"}', '{"Web"}', TRUE, TRUE),
+          ('app-email-ai', 'Email AI', 'app', 'Automation', '{"Automation","AI","Email"}', 'Intelligent email automation for categorization, smart replies, and follow-up management.', 'AI email automation for categorization, smart replies, and follow-up management.', '{"Email categorization","AI draft replies","Smart follow-ups","Gmail integration","Outlook integration"}', '{"email","automation","AI","Gmail","Outlook","vibe coding"}', '{"Web"}', TRUE, TRUE)
+          ON CONFLICT (id) DO NOTHING;
+        `);
+        console.log('✅ Apps table created and seeded (inline fallback)');
       }
     }
   } catch (err) {
