@@ -177,25 +177,42 @@ async function indexPrompts() {
   const texts = rows.map((row) => {
     const tags = Array.isArray(row.tags) ? row.tags.join(', ') : '';
     const keywords = Array.isArray(row.keywords) ? row.keywords.join(', ') : '';
-    return `[prompt] ${row.title}: ${(row.description || '').slice(0, 500)}. Category: ${row.category || ''}. Tags: ${tags}. Keywords: ${keywords}`;
+    return sanitize(`[prompt] ${row.title}: ${(row.description || '').slice(0, 500)}. Category: ${row.category || ''}. Tags: ${tags}. Keywords: ${keywords}`);
   });
 
   const vectors = await embedBatch(texts);
-  const points = rows.map((row, idx) => ({
-    id: toPointId(row.id),
-    vector: vectors[idx],
-    payload: {
-      id: row.id,
-      type: 'prompt',
-      name: sanitize(row.title),
-      description: sanitize((row.description || '').slice(0, 200)),
-      category: sanitize(row.category || ''),
-      url_path: `/prompts/${row.id}`,
-    },
-  }));
 
-  await getQdrantClient().upsert('prompts', { points });
-  return points.length;
+  const UPSERT_BATCH = 100;
+  for (let i = 0; i < rows.length; i += UPSERT_BATCH) {
+    const batchRows = rows.slice(i, i + UPSERT_BATCH);
+    const points = batchRows.map((row, idx) => ({
+      id: toPointId(row.id),
+      vector: vectors[i + idx],
+      payload: {
+        id: row.id,
+        type: 'prompt',
+        name: sanitize(row.title),
+        description: sanitize((row.description || '').slice(0, 200)),
+        category: sanitize(row.category || ''),
+        url_path: `/prompts/${row.id}`,
+      },
+    }));
+    try {
+      await getQdrantClient().upsert('prompts', { points });
+      console.log(`  Upserted prompts ${i + 1}-${i + batchRows.length}`);
+    } catch (err) {
+      console.error(`  Failed batch ${i + 1}-${i + batchRows.length}: ${err.message}`);
+      for (const pt of points) {
+        try {
+          await getQdrantClient().upsert('prompts', { points: [pt] });
+        } catch (e2) {
+          console.error(`    Bad record: ${pt.payload.id} — ${e2.message}`);
+        }
+      }
+    }
+  }
+
+  return rows.length;
 }
 
 async function indexPosts() {

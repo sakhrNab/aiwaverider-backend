@@ -280,7 +280,6 @@ function buildSystemPrompt(pageContext, ragResults) {
 exports.processChat = async (req, res) => {
   try {
     let { messages, pageContext } = req.body;
-    pageContext = await resolvePageContext(pageContext);
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({
@@ -296,16 +295,18 @@ exports.processChat = async (req, res) => {
       });
     }
 
-    // RAG search based on last user message
-    let ragResults = [];
+    // Run page context enrichment and RAG search in parallel (independent DB/API calls)
     const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
-    if (lastUserMsg) {
-      try {
-        ragResults = await searchRelevant(lastUserMsg.content, 5);
-      } catch (err) {
-        console.warn('RAG search failed, continuing without:', err.message);
-      }
-    }
+    const [resolvedContext, ragResults] = await Promise.all([
+      resolvePageContext(pageContext),
+      lastUserMsg
+        ? searchRelevant(lastUserMsg.content, 5).catch((err) => {
+            console.warn('RAG search failed, continuing without:', err.message);
+            return [];
+          })
+        : Promise.resolve([]),
+    ]);
+    pageContext = resolvedContext;
 
     const systemPrompt = buildSystemPrompt(pageContext, ragResults);
     const safeMessages = sanitizeMessages(messages);
@@ -353,7 +354,6 @@ exports.processChat = async (req, res) => {
 exports.processChatStream = async (req, res) => {
   try {
     let { messages, pageContext } = req.body;
-    pageContext = await resolvePageContext(pageContext);
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({
@@ -369,16 +369,18 @@ exports.processChatStream = async (req, res) => {
       });
     }
 
-    // RAG search based on last user message
-    let ragResults = [];
+    // Run page context enrichment and RAG search in parallel (independent DB/API calls)
     const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
-    if (lastUserMsg) {
-      try {
-        ragResults = await searchRelevant(lastUserMsg.content, 5);
-      } catch (err) {
-        console.warn('RAG search failed, continuing without:', err.message);
-      }
-    }
+    const [resolvedContext, ragResults] = await Promise.all([
+      resolvePageContext(pageContext),
+      lastUserMsg
+        ? searchRelevant(lastUserMsg.content, 5).catch((err) => {
+            console.warn('RAG search failed, continuing without:', err.message);
+            return [];
+          })
+        : Promise.resolve([]),
+    ]);
+    pageContext = resolvedContext;
 
     const systemPrompt = buildSystemPrompt(pageContext, ragResults);
     const safeMessages = sanitizeMessages(messages);
