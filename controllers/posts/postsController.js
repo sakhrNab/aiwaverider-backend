@@ -16,6 +16,7 @@ const {
   generatePostCacheKey,
   generateCommentsCacheKey,
 } = require('../../utils/cache');
+const { indexSinglePost, removeFromIndex } = require('../../services/rag/qdrantService');
 
 const createPost = async (req, res) => {
   try {
@@ -78,6 +79,9 @@ const createPost = async (req, res) => {
     // Invalidate relevant caches
     await deleteCacheByPattern('posts:*');
     await setCache(generatePostCacheKey(postId), newPost);
+
+    // Auto-index into Qdrant (fire-and-forget)
+    indexSinglePost(newPost).catch(() => {});
 
     return res.json({
       message: 'Post created successfully.',
@@ -273,6 +277,9 @@ const updatePost = async (req, res) => {
     await deleteCache(generatePostCacheKey(postId));
     await deleteCacheByPattern('posts:*'); // Clear all post lists
 
+    // Auto-index updated post in Qdrant (fire-and-forget)
+    indexSinglePost(updatedPost).catch(() => {});
+
     return res.json({
       message: 'Post updated successfully',
       post: updatedPost
@@ -322,6 +329,9 @@ const deletePost = async (req, res) => {
     await deleteCacheByPattern('posts:*');
     await deleteCache(generatePostCacheKey(postId));
     await deleteCache(generateCommentsCacheKey(postId));
+
+    // Remove deleted post from Qdrant index (fire-and-forget)
+    removeFromIndex('posts', postId).catch(() => {});
 
     return res.json({ success: true, message: 'Post deleted successfully.' });
   } catch (err) {

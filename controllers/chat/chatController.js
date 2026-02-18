@@ -2,27 +2,35 @@
 const OpenAI = require('openai');
 const { searchRelevant } = require('../../services/rag/qdrantService');
 
-const BASE_SYSTEM_PROMPT = `You are a helpful AI assistant for the AI Waverider website. Your purpose is to assist users in navigating the site, understanding our offerings, and answering questions.
+const BASE_SYSTEM_PROMPT = `You are a helpful AI assistant for the AI Waverider website, founded by Sakhr Al-Absi (CS degree from TU Berlin, 7+ years enterprise experience, Fortune 500 background, hackathon winner). Your purpose is to assist users in navigating the site, understanding our offerings, and answering questions.
 
 Key information about AI Waverider:
-- We help people build profitable AI businesses earning $5,000-$25,000/month through proven strategies
-- Our main offerings include: Training Portal, Private Online Community, Live Online Classes, and AI-powered software tools
-- We create AI-powered video editing tools, automated workflows using AI, and other cutting-edge AI solutions
+- We help people build production AI apps in 2-12 hours using Claude Code, Cursor, and N8N
+- Sakhr built 6 production apps himself: AI WaveCut (video editor), FlowState (productivity), SRT Translator Pro (subtitles), AI Job Writer (resumes), Outbound AI (cold outreach), Email AI (automation)
+- 5,600+ pre-built N8N AI workflows available for download
+- 50+ AI prompts across categories (Code Generation, Content Writing, Marketing, Data Analysis, Images, Business Strategy)
+- Free Skool community for learning and networking
 - We have 4 proven monetization paths:
-  1. AI Tool Affiliate Marketing ($2,000-$15,000/month)
-  2. n8n Automation Workflows ($3,000-$20,000/month)
-  3. AI Consulting Services ($8,000-$50,000/month)
-  4. Teaching & Training Programs ($5,000-$100,000/month)
-- We help users overcome common obstacles like technical complexity, time constraints, client acquisition, pricing, and scaling
-- Our program is designed to be accessible for non-technical people
-- We're located in Tbilisi, Georgia and offer services globally in multiple languages (Arabic, German, English, Spanish)
+  1. AI App Development with Vibe Coding
+  2. N8N Workflow Automation
+  3. AI Tool Affiliate Marketing
+  4. Teaching & Community Building
+- B2B automation services available (discovery call, custom proposal, build & test, launch & support)
+- Services offered globally in Arabic, German, English, and Spanish
 
-Available pages:
-- HomePage: Overview of all offerings and features
-- Monetization Paths: Detailed information on the 4 ways to monetize AI
-- AITools: Browse tools that help with AI implementation
-- Profile: User account management
-- Checkout: Payment processing
+Available pages and what they contain:
+- Home (/): Hero section, founder credentials, tool stack (Claude Code + Cursor + N8N), 4 AI business models, 6 common challenges addressed, learning path, 6 apps showcase, agent library, FAQ
+- About (/about): Mission statement, core values (Build First, Nobody Builds Alone, Speed Is the New Skill, Open by Default), founder bio, what we offer (6 apps, workflow marketplace, prompts, videos, community, B2B services)
+- Agents/Workflows (/agents): Browse 5,600+ N8N AI workflows with search, filtering by category, and sorting
+- Apps (/apps): Browse production AI apps and tools with filtering
+- Prompts (/prompts): Browse 50+ AI prompts for various use cases
+- Posts/Tech News (/posts): Latest tech news, tutorials, and articles
+- Videos (/videos): YouTube tutorials, build-alongs, tool reviews, launch demos
+- Media Kit (/media-kit): TikTok creator media kit — 167K peak views, 8.2% engagement, sponsorship packages (Promo Reel, Promo+Funnel, Campaign, Monthly Retainer), ROI calculator
+- Business Media Kit (/media-kit-business): Full B2B platform media kit — platform stats, 6 production apps, featured workflows, service packages (Starter/Professional/Enterprise/Retainer), 200+ integrations, 9 industries automated
+- Monetization Paths (/monetization-paths): Detailed breakdown of 4 ways to monetize AI
+- Checkout (/checkout): Payment processing
+- Profile (/profile): User account management
 
 CRITICAL BOOKING INSTRUCTIONS - ALWAYS FOLLOW THESE:
 When a user mentions ANY of these phrases or similar requests, you MUST include [SHOW_BOOKING_BUTTON] at the end:
@@ -75,19 +83,59 @@ function buildSystemPrompt(pageContext, ragResults) {
           if (pageContext.data.currentSearch) prompt += `\nThey searched for: "${pageContext.data.currentSearch}"`;
           if (pageContext.data.currentCategory) prompt += `\nFiltered by category: "${pageContext.data.currentCategory}"`;
         }
+        prompt += '\nThis page shows 5,600+ N8N AI workflows. Help them find the right one.';
         break;
       case 'prompts':
         if (pageContext.data && pageContext.data.currentSearch) {
           prompt += `\nThey searched for prompts: "${pageContext.data.currentSearch}"`;
         }
+        prompt += '\nThis page shows 50+ AI prompts across categories like Code, Content, Marketing, Data, Images, and Business.';
         break;
       case 'prompt-detail':
         if (pageContext.data) {
           prompt += `\nThey are viewing a prompt called "${pageContext.data.promptName || 'unknown'}".`;
         }
         break;
+      case 'apps':
+        prompt += '\nThis page shows production AI apps and tools. Help them explore, compare, or understand the apps.';
+        break;
+      case 'app-detail':
+        if (pageContext.data) {
+          prompt += `\nThey are viewing an app called "${pageContext.data.appTitle || 'unknown'}".`;
+          if (pageContext.data.appPrice) prompt += ` Price: $${pageContext.data.appPrice}.`;
+          if (pageContext.data.appCategory) prompt += ` Category: ${pageContext.data.appCategory}.`;
+          if (pageContext.data.appType) prompt += ` Type: ${pageContext.data.appType}.`;
+          prompt += '\nAnswer questions about this specific app.';
+        }
+        break;
+      case 'home':
+        prompt += '\nThis is the homepage. It showcases the full platform: apps, workflows, prompts, community, and monetization paths. Help them discover what interests them.';
+        break;
+      case 'about':
+        prompt += '\nThis is the About page. It covers the mission, values, founder Sakhr Al-Absi\'s background, and everything AI Waverider offers. Answer questions about the team, mission, or offerings.';
+        break;
+      case 'media-kit':
+        prompt += '\nThis is the personal Media Kit page for TikTok creator sponsorships. It shows engagement metrics (167K peak views, 8.2% engagement), sponsorship packages, ROI calculator, and how brand partnerships work. Help with sponsorship questions.';
+        break;
+      case 'media-kit-business':
+        prompt += '\nThis is the Business Media Kit page for B2B partnerships. It covers the full platform (apps, workflows, prompts, community), service packages (Starter to Enterprise), 200+ integrations, and industries served. Help with B2B and partnership questions.';
+        break;
+      case 'posts':
+        prompt += '\nThis page shows tech news, tutorials, and articles. Help them find relevant content.';
+        break;
+      case 'post-detail':
+        if (pageContext.data) {
+          prompt += `\nThey are reading a post/article.`;
+        }
+        break;
       case 'checkout':
         prompt += '\nThey are on the checkout page. Help them with payment questions.';
+        break;
+      case 'videos':
+        prompt += '\nThis page shows video tutorials, build-alongs, tool reviews, and launch demos.';
+        break;
+      case 'monetization-paths':
+        prompt += '\nThis page details the 4 AI monetization paths: Vibe Coding Apps, N8N Automation, Affiliate Marketing, and Teaching. Help them choose the right path.';
         break;
       default:
         break;

@@ -394,12 +394,29 @@ const server = app.listen(PORT, async () => {
     }
   }
 
-  // Initialize Qdrant collections (RAG)
+  // Initialize Qdrant collections + auto-index on first run (RAG)
   try {
     console.log('🔄 Initializing Qdrant collections...');
-    const { initCollections } = require('./services/rag/qdrantService');
+    const { initCollections, indexAll } = require('./services/rag/qdrantService');
     await initCollections();
     console.log('✅ Qdrant collections initialized');
+
+    // Auto-index content into Qdrant if collections are empty (first deploy)
+    try {
+      const { QdrantClient } = require('@qdrant/js-client-rest');
+      const qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6333';
+      const client = new QdrantClient({ url: qdrantUrl });
+      const agentsInfo = await client.getCollection('agents');
+      if (agentsInfo.points_count === 0) {
+        console.log('🔄 Qdrant collections are empty — running initial indexing...');
+        const counts = await indexAll();
+        console.log(`✅ Qdrant initial indexing complete: ${JSON.stringify(counts)}`);
+      } else {
+        console.log(`✅ Qdrant already has data (${agentsInfo.points_count} agent points) — skipping bulk index`);
+      }
+    } catch (indexErr) {
+      console.warn('⚠️ Qdrant auto-indexing skipped:', indexErr.message);
+    }
   } catch (error) {
     console.warn('⚠️ Qdrant initialization skipped (service may not be running):', error.message);
   }

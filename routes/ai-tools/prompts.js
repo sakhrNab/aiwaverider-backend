@@ -20,6 +20,7 @@ const {
   generatePromptCountCacheKey,
   generatePromptSearchCacheKey
 } = require('../../utils/cache');
+const { indexSinglePrompt, removeFromIndex } = require('../../services/rag/qdrantService');
 
 // Rate limiter for OpenAI-backed JSON generation to prevent billing spikes
 const jsonGenerationLimiter = rateLimit({
@@ -1628,6 +1629,9 @@ router.post('/', auth, upload.fields([
       logger.error('Error during cache invalidation in createPrompt:', cacheError);
     }
 
+    // Auto-index into Qdrant (fire-and-forget)
+    indexSinglePrompt(createdPrompt).catch(() => {});
+
     return res.status(201).json({
       success: true,
       data: createdPrompt
@@ -2088,6 +2092,9 @@ router.put('/:id', auth, upload.fields([
       logger.error('Error during cache invalidation in updatePrompt:', cacheError);
     }
 
+    // Auto-index into Qdrant (fire-and-forget)
+    indexSinglePrompt(updatedPrompt).catch(() => {});
+
     return res.json({
       success: true,
       data: updatedPrompt
@@ -2197,7 +2204,10 @@ router.delete('/:id', auth, async (req, res) => {
     } catch (cacheError) {
       logger.error('Error during cache invalidation in deletePrompt:', cacheError);
     }
-    
+
+    // Remove from Qdrant (fire-and-forget)
+    removeFromIndex('prompts', id).catch(() => {});
+
     return res.json({
       success: true,
       message: `Prompt ${id} has been deleted`

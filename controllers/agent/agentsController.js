@@ -7,6 +7,7 @@ const logger = require('../../utils/logger');
 const { getCache, setCache, deleteCache, deleteCacheByPattern, generateAgentCategoryCacheKey, generateAgentSearchCacheKey, generateAgentCacheKey, generateAgentCountCacheKey } = require('../../utils/cache');
 const { incrementCounter } = require('../../utils/cache');
 const { v4: uuidv4 } = require('uuid');
+const { indexSingleAgent, removeFromIndex } = require('../../services/rag/qdrantService');
 
 // ==========================================
 // COLUMN MAPPING HELPERS
@@ -1268,6 +1269,9 @@ const createAgent = async (req, res) => {
       logger.error('Error during cache invalidation in createAgent:', cacheError);
     }
 
+    // Auto-index into Qdrant (fire-and-forget)
+    indexSingleAgent(newAgent).catch(() => {});
+
     return res.status(201).json(newAgent);
   } catch (error) {
     logger.error('Error creating agent:', error);
@@ -1450,6 +1454,9 @@ const updateAgent = async (req, res) => {
     } catch (cacheError) {
       logger.error('Error during cache invalidation in updateAgent:', cacheError);
     }
+
+    // Auto-index into Qdrant (fire-and-forget)
+    indexSingleAgent(updatedAgent).catch(() => {});
 
     return res.status(200).json(updatedAgent);
 
@@ -1742,6 +1749,9 @@ const deleteAgent = async (req, res) => {
     } catch (cacheError) {
       logger.error('Error during cache invalidation in deleteAgent:', cacheError);
     }
+
+    // Remove from Qdrant (fire-and-forget)
+    removeFromIndex('agents', sanitizedAgentId).catch(() => {});
 
     return res.status(200).json({
       success: true,

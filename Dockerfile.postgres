@@ -2,3 +2,4 @@ FROM postgres:16-alpine
 COPY migration/001_schema.sql /docker-entrypoint-initdb.d/001_schema.sql
 COPY migration/002_indices.sql /docker-entrypoint-initdb.d/002_indices.sql
 COPY migration/003_seed.sql /docker-entrypoint-initdb.d/003_seed.sql
+COPY migration/004_apps.sql /docker-entrypoint-initdb.d/004_apps.sql
