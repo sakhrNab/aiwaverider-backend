@@ -121,17 +121,15 @@ services:
       - aiwaverider_network
 
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
     environment:
       POSTGRES_USER: aiwaverider
       POSTGRES_PASSWORD: ${PGPASSWORD:-aiwaverider_secret}
       POSTGRES_DB: aiwaverider
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Auto-run schema + indices + seed on first start (alphabetical order)
-      - ./migration/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
-      - ./migration/002_indices.sql:/docker-entrypoint-initdb.d/002_indices.sql:ro
-      - ./migration/003_seed.sql:/docker-entrypoint-initdb.d/003_seed.sql:ro
     expose:
       - "5432"
     restart: unless-stopped
