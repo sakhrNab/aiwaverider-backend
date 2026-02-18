@@ -23,10 +23,16 @@ const initializeFirebase = () => {
 
   if (process.env.NODE_ENV === 'production') {
     let serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-    // Coolify's UI textarea can insert spaces when long values wrap —
-    // strip wrapping quotes and fix corrupted whitespace before parsing
+    // Coolify may wrap values in quotes and/or escape internal quotes
     if (serviceAccountJson) {
-      serviceAccountJson = serviceAccountJson.trim().replace(/^['"]|['"]$/g, '');
+      serviceAccountJson = serviceAccountJson.trim();
+      // Remove surrounding single or double quotes
+      serviceAccountJson = serviceAccountJson.replace(/^['"]|['"]$/g, '');
+      // Unescape backslash-escaped quotes (Coolify escaping)
+      serviceAccountJson = serviceAccountJson.replace(/\\'/g, "'").replace(/\\"/g, '"');
+      // If still wrapped in quotes after unescaping, strip again
+      serviceAccountJson = serviceAccountJson.replace(/^['"]|['"]$/g, '');
+      console.log('Firebase JSON first 50 chars:', serviceAccountJson.substring(0, 50));
     }
     if (!serviceAccountJson) {
       console.error('FIREBASE_SERVICE_ACCOUNT_JSON environment variable is not set.');
