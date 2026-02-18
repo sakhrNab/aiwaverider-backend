@@ -78,11 +78,21 @@ const initializeFirebase = () => {
         serviceAccount = JSON.parse(fixed);
         console.log('Successfully parsed after whitespace cleanup');
       }
-      // Clean any remaining spaces inside the private key value
+      // Clean any whitespace corruption inside the private key
       if (serviceAccount && serviceAccount.private_key) {
-        serviceAccount.private_key = serviceAccount.private_key
-          .replace(/-----BEGIN PRIVATE\s+KEY-----/, '-----BEGIN PRIVATE KEY-----')
-          .replace(/-----END PRIVATE\s+KEY-----/, '-----END PRIVATE KEY-----');
+        // Split key into lines, strip whitespace from each base64 line, rejoin
+        const lines = serviceAccount.private_key.split('\n');
+        serviceAccount.private_key = lines.map(line => {
+          // Preserve header/footer lines but fix internal spaces
+          if (line.includes('BEGIN') || line.includes('END')) {
+            return line.replace(/-----BEGIN PRIVATE\s+KEY-----/, '-----BEGIN PRIVATE KEY-----')
+                       .replace(/-----END PRIVATE\s+KEY-----/, '-----END PRIVATE KEY-----');
+          }
+          // Strip ALL whitespace from base64 lines
+          return line.replace(/\s+/g, '');
+        }).join('\n');
+        console.log('Private key starts with:', serviceAccount.private_key.substring(0, 30));
+        console.log('Private key length:', serviceAccount.private_key.length);
       }
       console.log('Successfully parsed service account JSON');
     } catch (error) {
