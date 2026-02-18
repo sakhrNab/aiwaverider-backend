@@ -267,25 +267,40 @@ async function indexAll() {
 
 // --- Search ---
 
+const SCORE_THRESHOLD = 0.35; // Minimum similarity score to include a result
+
 async function searchRelevant(query, limit = 5) {
-  const vector = await embed(query);
-  const client = getQdrantClient();
-
-  const collections = ['agents', 'prompts', 'posts', 'apps'];
-  const allResults = [];
-
-  for (const collection of collections) {
-    try {
-      const results = await client.search(collection, {
-        vector,
-        limit,
-        with_payload: true,
-      });
-      allResults.push(...results);
-    } catch (err) {
-      logger.warn(`Qdrant search failed for "${collection}": ${err.message}`);
-    }
+  let vector;
+  try {
+    vector = await embed(query);
+  } catch (err) {
+    logger.warn(`Embedding failed for search query, returning empty: ${err.message}`);
+    return [];
   }
+
+  const client = getQdrantClient();
+  const collections = ['agents', 'prompts', 'posts', 'apps'];
+
+  // Search all collections in parallel (4x faster)
+  const results = await Promise.allSettled(
+    collections.map((collection) =>
+      client.search(collection, {
+        vector,
+        limit: Math.ceil(limit / collections.length) + 1, // ~2 per collection, not `limit` each
+        with_payload: true,
+        score_threshold: SCORE_THRESHOLD,
+      })
+    )
+  );
+
+  const allResults = [];
+  results.forEach((result, i) => {
+    if (result.status === 'fulfilled') {
+      allResults.push(...result.value);
+    } else {
+      logger.warn(`Qdrant search failed for "${collections[i]}": ${result.reason?.message}`);
+    }
+  });
 
   // Sort by score descending and take top `limit`
   allResults.sort((a, b) => b.score - a.score);
