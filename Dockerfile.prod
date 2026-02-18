@@ -6,7 +6,10 @@ WORKDIR /usr/src/app
 COPY package*.json ./
 
 # Install production dependencies only
-RUN npm install --omit=dev
+# --legacy-peer-deps: @qdrant/js-client-rest requires typescript as a
+# non-optional peer dep, but this is a JS project with no TypeScript.
+# Without this flag, npm silently skips the qdrant package.
+RUN npm install --omit=dev --legacy-peer-deps
 
 COPY . .
 
