@@ -1,4 +1,9 @@
-const { QdrantClient } = require('@qdrant/js-client-rest');
+let QdrantClient;
+try {
+  QdrantClient = require('@qdrant/js-client-rest').QdrantClient;
+} catch (e) {
+  // Qdrant client not installed — RAG features will be unavailable
+}
 const OpenAI = require('openai');
 const { pool } = require('../../config/database');
 const logger = require('../../utils/logger');
@@ -11,6 +16,9 @@ let qdrant;
 let openai;
 
 function getQdrantClient() {
+  if (!QdrantClient) {
+    throw new Error('Qdrant client not installed. Install @qdrant/js-client-rest to use RAG features.');
+  }
   if (!qdrant) {
     qdrant = new QdrantClient({ url: QDRANT_URL });
   }

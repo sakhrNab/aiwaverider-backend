@@ -25,14 +25,23 @@ const initializeFirebase = () => {
     let serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
     // Coolify may wrap values in quotes and/or escape internal quotes
     if (serviceAccountJson) {
+      console.log('Raw Firebase JSON length:', serviceAccountJson.length);
+      console.log('Raw Firebase JSON first 10 chars:', JSON.stringify(serviceAccountJson.substring(0, 10)));
+      console.log('Raw Firebase JSON last 10 chars:', JSON.stringify(serviceAccountJson.substring(serviceAccountJson.length - 10)));
       serviceAccountJson = serviceAccountJson.trim();
-      // Remove surrounding single or double quotes
-      serviceAccountJson = serviceAccountJson.replace(/^['"]|['"]$/g, '');
+      // Remove surrounding single or double quotes (possibly nested)
+      while (/^['"]/.test(serviceAccountJson) && /['"]$/.test(serviceAccountJson)) {
+        serviceAccountJson = serviceAccountJson.slice(1, -1);
+      }
       // Unescape backslash-escaped quotes (Coolify escaping)
       serviceAccountJson = serviceAccountJson.replace(/\\'/g, "'").replace(/\\"/g, '"');
-      // If still wrapped in quotes after unescaping, strip again
-      serviceAccountJson = serviceAccountJson.replace(/^['"]|['"]$/g, '');
-      console.log('Firebase JSON first 50 chars:', serviceAccountJson.substring(0, 50));
+      // Extract just the JSON object if there's extra content
+      const jsonMatch = serviceAccountJson.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        serviceAccountJson = jsonMatch[0];
+      }
+      console.log('Cleaned Firebase JSON first 50 chars:', serviceAccountJson.substring(0, 50));
+      console.log('Cleaned Firebase JSON last 10 chars:', serviceAccountJson.substring(serviceAccountJson.length - 10));
     }
     if (!serviceAccountJson) {
       console.error('FIREBASE_SERVICE_ACCOUNT_JSON environment variable is not set.');
