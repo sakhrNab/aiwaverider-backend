@@ -394,6 +394,49 @@ const server = app.listen(PORT, async () => {
     }
   }
 
+  // Auto-migrate: create apps table if it doesn't exist
+  try {
+    const { rows } = await pool.query(
+      "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'apps')"
+    );
+    if (!rows[0].exists) {
+      console.log('🔄 Apps table not found — running migration...');
+      const fs = require('fs');
+      const path = require('path');
+      const migrationPath = path.join(__dirname, 'migration', '004_apps.sql');
+      if (fs.existsSync(migrationPath)) {
+        const sql = fs.readFileSync(migrationPath, 'utf8');
+        await pool.query(sql);
+        console.log('✅ Apps table created successfully');
+      } else {
+        // Inline fallback if migration file not found
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS apps (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL, type TEXT DEFAULT 'app',
+            category TEXT, categories TEXT[] DEFAULT '{}', description TEXT,
+            short_description TEXT, version TEXT DEFAULT '1.0.0',
+            price NUMERIC(10,2) DEFAULT 0, is_free BOOLEAN DEFAULT TRUE,
+            price_details JSONB DEFAULT '{}', image_url TEXT, image_filename TEXT,
+            icon_url TEXT, icon_filename TEXT, external_url TEXT, download_url TEXT,
+            download_filename TEXT, video_url TEXT, screenshots JSONB DEFAULT '[]',
+            features TEXT[] DEFAULT '{}', tags TEXT[] DEFAULT '{}',
+            platform_support TEXT[] DEFAULT '{}', system_requirements TEXT,
+            resources JSONB DEFAULT '[]', related_apps JSONB DEFAULT '[]',
+            is_featured BOOLEAN DEFAULT FALSE, is_published BOOLEAN DEFAULT TRUE,
+            download_count INTEGER DEFAULT 0, view_count INTEGER DEFAULT 0,
+            likes TEXT[] DEFAULT '{}', rating_average NUMERIC(3,2) DEFAULT 0,
+            rating_count INTEGER DEFAULT 0, created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
+          );
+          CREATE OR REPLACE TRIGGER trg_apps_updated_at BEFORE UPDATE ON apps FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+        `);
+        console.log('✅ Apps table created (inline fallback)');
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️ Apps table migration check failed:', err.message);
+  }
+
   // Initialize Qdrant collections + auto-index on first run (RAG)
   try {
     console.log('🔄 Initializing Qdrant collections...');

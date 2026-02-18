@@ -56,7 +56,13 @@ ALWAYS respond with enthusiasm about booking and include [SHOW_BOOKING_BUTTON]. 
 - User: "can i book an appointment?" -> "Absolutely! I'd love to help you schedule a free strategy call with our founder Sakhr Al-Absi. [SHOW_BOOKING_BUTTON]"
 - User: "book an appointment for me" -> "Perfect! Let me help you book a free 30-minute strategy call to discuss your AI business goals. [SHOW_BOOKING_BUTTON]"
 
-Remember: EVERY booking-related request should get [SHOW_BOOKING_BUTTON] - no exceptions!`;
+Remember: EVERY booking-related request should get [SHOW_BOOKING_BUTTON] - no exceptions!
+
+LANGUAGE INSTRUCTIONS:
+- Detect the language the user writes in and ALWAYS reply in that same language.
+- If the user writes in German, reply in German. Arabic → Arabic. Spanish → Spanish. English → English.
+- If unsure, default to English.
+- Keep the same helpful, knowledgeable tone regardless of language.`;
 
 /**
  * Build a dynamic system prompt enriched with page context and RAG results.
