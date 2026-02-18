@@ -1,6 +1,24 @@
 const express = require('express');
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
 const chatController = require('../../controllers/chat/chatController');
+const { getRateLimits, defaultSettings } = require('../../models/siteSettings');
+
+// Dynamic rate limiter for OpenAI-backed chat — reads config from admin settings
+const chatLimiter = rateLimit({
+  windowMs: defaultSettings.rateLimits.chatOpenAI.windowMinutes * 60 * 1000,
+  max: async () => {
+    try {
+      const limits = await getRateLimits();
+      return limits.chatOpenAI?.maxRequests || defaultSettings.rateLimits.chatOpenAI.maxRequests;
+    } catch {
+      return defaultSettings.rateLimits.chatOpenAI.maxRequests;
+    }
+  },
+  message: { success: false, error: 'Too many chat requests. Please try again in a few minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
 
 /**
  * @swagger
@@ -55,6 +73,8 @@ const chatController = require('../../controllers/chat/chatController');
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
+ *       429:
+ *         description: Too many requests - Rate limited
  *       500:
  *         description: Internal server error
  *         content:
@@ -62,6 +82,6 @@ const chatController = require('../../controllers/chat/chatController');
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post('/', chatController.processChat);
+router.post('/', chatLimiter, chatController.processChat);
 
 module.exports = router; 

@@ -38,8 +38,16 @@ const upload = multer({
       }
     }
     
-    // Allow other file types by default
-    return cb(null, true);
+    // Restrict unknown fields to safe file types only
+    const safeTypes = /jpeg|jpg|png|gif|json|pdf|zip|txt|csv|md|svg|webp/;
+    const ext = path.extname(file.originalname).toLowerCase().replace('.', '');
+    const safeMimes = /image\/|application\/json|application\/pdf|application\/zip|text\//;
+
+    if (safeTypes.test(ext) && safeMimes.test(file.mimetype)) {
+      return cb(null, true);
+    }
+
+    return cb(new Error(`File type not allowed: ${file.originalname} (${file.mimetype})`));
   }
 });
 

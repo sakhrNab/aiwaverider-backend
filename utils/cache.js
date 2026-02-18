@@ -12,15 +12,19 @@ if (process.env.REDIS_URL) {
     lazyConnect: true
   });
 } else {
-  // Fallback to traditional configuration for local development
-  redis = new Redis({
+  const redisOpts = {
     host: process.env.REDIS_HOST || 'localhost',
     port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD,
+    password: process.env.REDIS_PASSWORD || undefined,
     retryStrategy: (times) => Math.min(times * 50, 2000),
     maxRetriesPerRequest: 3,
     lazyConnect: true
-  });
+  };
+  // Enable TLS for external Redis (e.g. DigitalOcean managed Redis)
+  if (process.env.REDIS_TLS === 'true') {
+    redisOpts.tls = { rejectUnauthorized: false };
+  }
+  redis = new Redis(redisOpts);
 }
 
 // Default TTL configurations
@@ -111,6 +115,19 @@ const generateCacheKey = (prefix, params = {}) => {
   }
   
   return keyParts.join(':');
+};
+
+// ==========================================
+// PROFILE CACHE KEY GENERATORS
+// ==========================================
+
+/**
+ * Generate cache key for user profile
+ * @param {string} userId - User ID
+ * @returns {string} Cache key
+ */
+const generateProfileCacheKey = (userId) => {
+  return `profile:${userId}`;
 };
 
 // ==========================================
@@ -514,11 +531,10 @@ const startHealthCheck = () => {
     clearInterval(healthCheckInterval);
   }
   
-  // Start health check every 2 minutes (120000ms)
+  // Start health check every 10 minutes (600000ms)
   healthCheckInterval = setInterval(async () => {
     try {
       await redis.ping();
-      logger.info('💓 Redis health check passed');
     } catch (error) {
       logger.warn('⚠️ Redis health check failed, attempting reconnection...');
       try {
@@ -528,7 +544,7 @@ const startHealthCheck = () => {
         logger.error('❌ Redis reconnection failed:', reconnectError);
       }
     }
-  }, 120000); // 2 minutes
+  }, 600000); // 10 minutes
   
   logger.info('🔄 Redis health check started (every 2 minutes)');
 };
@@ -666,6 +682,9 @@ module.exports = {
   generateFeaturedPromptsCacheKey,
   generatePromptCategoriesCountCacheKey,
   
+  // Profile cache key generators
+  generateProfileCacheKey,
+
   // Post cache key generators (EXISTING)
   generatePostsCacheKey,
   generatePostCacheKey,

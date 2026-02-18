@@ -118,29 +118,51 @@ const mapAgentToRow = (agent) => {
 
 // ==========================================
 // IN-MEMORY CACHE FOR ALL AGENTS
+// With size limits and Redis-first approach
 // ==========================================
 let allAgentsCache = null;
 let cacheLastUpdated = null;
 const CACHE_REFRESH_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+const MAX_MEMORY_CACHE_SIZE = 10000; // Cap in-memory cache at 10K agents to prevent OOM
 
 /**
  * Load all agents from PostgreSQL into memory cache
+ * Uses paginated loading for large datasets
  */
 const refreshAgentsCache = async () => {
   try {
     logger.info('Refreshing agents cache from PostgreSQL...');
     const startTime = Date.now();
 
-    const result = await pool.query('SELECT * FROM agents ORDER BY created_at DESC');
+    // Load in batches of 1000 to avoid blocking the event loop
+    const BATCH_SIZE = 1000;
+    let offset = 0;
+    let allAgents = [];
+    let hasMore = true;
 
-    allAgentsCache = result.rows.map(row => mapRowToAgent(row));
+    while (hasMore) {
+      const result = await pool.query(
+        'SELECT * FROM agents ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+        [BATCH_SIZE, offset]
+      );
+      allAgents = allAgents.concat(result.rows.map(row => mapRowToAgent(row)));
+      offset += BATCH_SIZE;
+      hasMore = result.rows.length === BATCH_SIZE;
+    }
 
+    // Enforce memory limit — keep only the most recent agents in memory
+    if (allAgents.length > MAX_MEMORY_CACHE_SIZE) {
+      logger.warn(`Agent count (${allAgents.length}) exceeds memory limit (${MAX_MEMORY_CACHE_SIZE}). Truncating in-memory cache.`);
+      allAgents = allAgents.slice(0, MAX_MEMORY_CACHE_SIZE);
+    }
+
+    allAgentsCache = allAgents;
     cacheLastUpdated = new Date();
     const loadTime = Date.now() - startTime;
 
-    logger.info(`Loaded ${allAgentsCache.length} agents into memory cache in ${loadTime}ms`);
+    logger.info(`Loaded ${allAgentsCache.length} agents into memory cache in ${loadTime}ms (${Math.round(JSON.stringify(allAgentsCache).length / 1024)}KB)`);
 
-    await setCache('agents:count:total', allAgentsCache.length);
+    await setCache('agents:count:total', allAgents.length);
     return true;
   } catch (error) {
     logger.error('Error refreshing agents cache:', error);

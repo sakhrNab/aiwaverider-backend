@@ -20,6 +20,7 @@ let videosCacheLastUpdated = {
   instagram: null
 };
 const VIDEO_CACHE_REFRESH_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_VIDEO_CACHE_PER_PLATFORM = 5000; // Cap per-platform cache to prevent OOM
 
 const normalizeVideoRow = (row) => {
   return {
@@ -49,11 +50,17 @@ const refreshVideosCache = async (platform) => {
   if (!['youtube', 'tiktok', 'instagram'].includes(platformKey)) return false;
   try {
     const result = await pool.query(
-      'SELECT * FROM videos WHERE platform = $1 ORDER BY created_at DESC',
-      [platformKey]
+      'SELECT * FROM videos WHERE platform = $1 ORDER BY created_at DESC LIMIT $2',
+      [platformKey, MAX_VIDEO_CACHE_PER_PLATFORM]
     );
 
-    const list = result.rows.map(normalizeVideoRow);
+    let list = result.rows.map(normalizeVideoRow);
+
+    // Enforce size limit per platform to prevent OOM
+    if (list.length > MAX_VIDEO_CACHE_PER_PLATFORM) {
+      console.warn(`Video cache for ${platformKey} truncated from ${list.length} to ${MAX_VIDEO_CACHE_PER_PLATFORM}`);
+      list = list.slice(0, MAX_VIDEO_CACHE_PER_PLATFORM);
+    }
 
     videosCacheByPlatform[platformKey] = list;
     videosCacheLastUpdated[platformKey] = new Date();

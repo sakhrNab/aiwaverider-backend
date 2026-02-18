@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const logger = require('../../utils/logger');
 const OpenAI = require('openai');
+const rateLimit = require('express-rate-limit');
 const {
   getCache,
   setCache,
@@ -19,6 +20,15 @@ const {
   generatePromptCountCacheKey,
   generatePromptSearchCacheKey
 } = require('../../utils/cache');
+
+// Rate limiter for OpenAI-backed JSON generation to prevent billing spikes
+const jsonGenerationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 30, // 30 requests per 15 minutes per IP
+  message: { success: false, error: 'Too many JSON generation requests. Please try again in a few minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
 
 /**
  * Helper: Convert a PostgreSQL row (snake_case) to camelCase object
@@ -58,6 +68,7 @@ const mapRowToCamelCase = (row) => {
 let allPromptsCache = null;
 let cacheLastUpdated = null;
 const CACHE_REFRESH_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+const MAX_MEMORY_CACHE_SIZE = 10000; // Cap in-memory cache to prevent OOM
 
 /**
  * Prompt specific categories
@@ -83,17 +94,35 @@ const refreshPromptsCache = async () => {
     logger.info('Refreshing prompts cache from PostgreSQL...');
     const startTime = Date.now();
 
-    // Fetch ALL prompts from PostgreSQL
-    const { rows } = await pool.query(
-      "SELECT * FROM prompts WHERE (type = 'prompt' OR type IS NULL) ORDER BY created_at DESC"
-    );
+    // Fetch prompts from PostgreSQL in batches to avoid loading huge result sets at once
+    let allPrompts = [];
+    const BATCH_SIZE = 1000;
+    let offset = 0;
+    let hasMore = true;
 
-    allPromptsCache = rows.map(mapRowToCamelCase);
+    while (hasMore) {
+      const { rows } = await pool.query(
+        "SELECT * FROM prompts WHERE (type = 'prompt' OR type IS NULL) ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+        [BATCH_SIZE, offset]
+      );
+      allPrompts = allPrompts.concat(rows.map(mapRowToCamelCase));
+      offset += rows.length;
+      hasMore = rows.length === BATCH_SIZE;
+    }
+
+    // Enforce size limit to prevent OOM
+    if (allPrompts.length > MAX_MEMORY_CACHE_SIZE) {
+      logger.warn(`Prompts cache truncated from ${allPrompts.length} to ${MAX_MEMORY_CACHE_SIZE} entries`);
+      allPrompts = allPrompts.slice(0, MAX_MEMORY_CACHE_SIZE);
+    }
+
+    allPromptsCache = allPrompts;
 
     cacheLastUpdated = new Date();
     const loadTime = Date.now() - startTime;
+    const memorySizeKB = Math.round(JSON.stringify(allPromptsCache).length / 1024);
 
-    logger.info(`Loaded ${allPromptsCache.length} prompts into memory cache in ${loadTime}ms`);
+    logger.info(`Loaded ${allPromptsCache.length} prompts into memory cache in ${loadTime}ms (~${memorySizeKB}KB)`);
 
     // Also cache total count in Redis
     await setCache('prompts:total:count', allPromptsCache.length);
@@ -2348,7 +2377,7 @@ router.post('/:id/like', auth, async (req, res) => {
  * @desc    Generate JSON prompt from prompt content using OpenAI
  * @access  Public (can be called by anyone viewing the prompt)
  */
-router.post('/:id/generate-json', async (req, res) => {
+router.post('/:id/generate-json', jsonGenerationLimiter, async (req, res) => {
   const startTime = Date.now();
   const promptId = req.params.id;
   

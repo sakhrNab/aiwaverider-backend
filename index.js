@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const session = require('express-session');
+const RedisStore = require('connect-redis').default;
 const passport = require('passport');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -11,7 +12,7 @@ const path = require('path');
 const logger = require('./utils/logger');
 const { initializePassport } = require('./config/passport');
 const { pool } = require('./config/database');
-const { initializeSettings } = require('./models/siteSettings');
+const { initializeSettings, getRateLimits, defaultSettings } = require('./models/siteSettings');
 const uploadMiddleware = require('./middleware/upload');
 const cron = require('node-cron');
 const { syncAllChannels } = require('./services/videoSync');
@@ -22,6 +23,9 @@ const swaggerSpec = require('./config/swagger');
 
 // Initialize express
 const app = express();
+
+// Trust proxy (behind Traefik/Coolify reverse proxy)
+app.set('trust proxy', 1);
 
 // Basic health check route - must be before ANY middleware
 app.get('/_health', (_, res) => res.send('OK'));
@@ -111,7 +115,9 @@ app.use(cookieParser());
 app.use(helmet());
 
 // Session configuration - required for Passport
+const { redis: redisClient } = require('./utils/cache');
 app.use(session({
+  store: new RedisStore({ client: redisClient, prefix: 'sess:' }),
   secret: process.env.SESSION_SECRET || 'your-secret-key',
   resave: false,
   saveUninitialized: false,
@@ -127,11 +133,18 @@ initializePassport(passport);
 app.use(passport.initialize());
 app.use(passport.session());
 
-// ------------------ Rate Limiting ------------------
+// ------------------ Rate Limiting (admin-configurable) ------------------
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 1000,
-  message: 'Too many requests, please try again in 15 minutes!',
+  windowMs: defaultSettings.rateLimits.globalApi.windowMinutes * 60 * 1000,
+  max: async () => {
+    try {
+      const limits = await getRateLimits();
+      return limits.globalApi?.maxRequests || defaultSettings.rateLimits.globalApi.maxRequests;
+    } catch {
+      return defaultSettings.rateLimits.globalApi.maxRequests;
+    }
+  },
+  message: 'Too many requests, please try again later.',
 });
 
 // Apply rate limiting only in production or development
@@ -139,26 +152,50 @@ if (isProduction || isDevelopment) {
   app.use(limiter);
 }
 
-// Add rate limiting specifically for auth routes
+// Rate limiting for auth routes (admin-configurable)
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 attempts per window
+  windowMs: defaultSettings.rateLimits.authRoutes.windowMinutes * 60 * 1000,
+  max: async () => {
+    try {
+      const limits = await getRateLimits();
+      return limits.authRoutes?.maxRequests || defaultSettings.rateLimits.authRoutes.maxRequests;
+    } catch {
+      return defaultSettings.rateLimits.authRoutes.maxRequests;
+    }
+  },
   handler: (req, res) => {
     res.status(429).json({ error: 'Too many login attempts, please try again later.' });
   }
 });
 
-// Track login attempts
+// Track login attempts (with size limit to prevent memory leaks)
 const loginAttempts = new Map();
+const MAX_LOGIN_ATTEMPTS_ENTRIES = 10000;
 
 // Clear login attempts every 15 minutes
 setInterval(() => {
   loginAttempts.clear();
 }, 15 * 60 * 1000);
 
+// Safety valve: if the map grows too large between clears, prune oldest entries
+const trackLoginAttempt = (key, value) => {
+  if (loginAttempts.size >= MAX_LOGIN_ATTEMPTS_ENTRIES) {
+    // Delete the first (oldest) 20% of entries
+    const deleteCount = Math.floor(MAX_LOGIN_ATTEMPTS_ENTRIES * 0.2);
+    const iterator = loginAttempts.keys();
+    for (let i = 0; i < deleteCount; i++) {
+      loginAttempts.delete(iterator.next().value);
+    }
+  }
+  loginAttempts.set(key, value);
+};
+
 // Import routes
 const apiRoutes = require('./routes/index');
 const chatRoutes = require('./routes/chat/chatRoutes');
+
+// Mount auth rate limiter on auth routes before they're handled
+app.use('/api/auth', authLimiter);
 
 // Mount API routes - all routes in apiRoutes will be prefixed with /api
 // So routes defined as '/agents' in routes/index.js will be accessible as '/api/agents'
