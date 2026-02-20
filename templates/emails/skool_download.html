@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your Download is Ready - AI Waverider</title>
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background-color: #f9f9f9;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 0;
+      background-color: #ffffff;
+    }
+    .header {
+      text-align: center;
+      padding: 30px 20px;
+      background: linear-gradient(135deg, #f59e0b, #eab308);
+      color: #1f2937;
+    }
+    .header h1 {
+      margin: 0 0 5px 0;
+      font-size: 24px;
+    }
+    .header p {
+      margin: 0;
+      font-size: 14px;
+      opacity: 0.8;
+    }
+    .content {
+      padding: 30px 20px;
+    }
+    .app-card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px 0;
+      text-align: center;
+    }
+    .app-card h2 {
+      margin: 0 0 8px 0;
+      color: #1f2937;
+      font-size: 20px;
+    }
+    .app-card p {
+      margin: 0;
+      color: #64748b;
+      font-size: 14px;
+    }
+    .button {
+      display: inline-block;
+      padding: 14px 28px;
+      margin: 10px 0;
+      background-color: #22c55e;
+      color: #ffffff !important;
+      text-decoration: none;
+      border-radius: 8px;
+      text-align: center;
+      font-weight: bold;
+      font-size: 16px;
+    }
+    .cta-section {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 25px 0;
+      text-align: center;
+    }
+    .cta-section h3 {
+      margin: 0 0 8px 0;
+      color: #1e40af;
+      font-size: 16px;
+    }
+    .cta-section p {
+      margin: 0 0 15px 0;
+      color: #3b82f6;
+      font-size: 14px;
+    }
+    .cta-button {
+      display: inline-block;
+      padding: 10px 24px;
+      background-color: #3b82f6;
+      color: #ffffff !important;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 14px;
+    }
+    .benefits {
+      margin: 20px 0;
+    }
+    .benefit {
+      margin-bottom: 12px;
+      padding-left: 28px;
+      position: relative;
+      font-size: 14px;
+    }
+    .benefit::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: #22c55e;
+      font-weight: bold;
+    }
+    .footer {
+      text-align: center;
+      padding: 20px;
+      font-size: 12px;
+      color: #666;
+      background-color: #f4f4f4;
+    }
+    @media only screen and (max-width: 600px) {
+      .container { width: 100%; }
+      .content { padding: 20px 15px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Your Download is Ready!</h1>
+      <p>Thanks for being part of the Skool community</p>
+    </div>
+
+    <div class="content">
+      <p>Hi there,</p>
+
+      <p>Your free download of <strong>{{appName}}</strong> is ready. If the download didn't start automatically, use the button below:</p>
+
+      <div class="app-card">
+        <h2>{{appName}}</h2>
+        {{#if appDescription}}
+        <p>{{appDescription}}</p>
+        {{/if}}
+        <div style="margin-top: 15px;">
+          <a href="{{downloadUrl}}" class="button">Download Now</a>
+        </div>
+      </div>
+
+      {{#unless isRegistered}}
+      <div class="cta-section">
+        <h3>Get Future Updates & Support</h3>
+        <p>Create a free AI Waverider account to receive app updates, new releases, and priority support.</p>
+        <div class="benefits">
+          <div class="benefit">Automatic updates when new versions are released</div>
+          <div class="benefit">Access to exclusive Skool member deals</div>
+          <div class="benefit">Priority support from the community</div>
+        </div>
+        <a href="{{websiteUrl}}/signup" class="cta-button">Create Free Account</a>
+      </div>
+      {{/unless}}
+
+      {{#if isRegistered}}
+      <p>As a registered member, you'll automatically receive notifications when updates are available for this app.</p>
+      {{/if}}
+
+      <p>Have questions? Reply to this email or reach us at <a href="mailto:{{supportEmail}}">{{supportEmail}}</a>.</p>
+
+      <p>Keep riding the wave,<br>The AI Waverider Team</p>
+    </div>
+
+    <div class="footer">
+      <p>&copy; {{currentYear}} AI Waverider. All rights reserved.</p>
+      <p>You received this email because you downloaded an app using your Skool community access code.</p>
+    </div>
+  </div>
+</body>
+</html>

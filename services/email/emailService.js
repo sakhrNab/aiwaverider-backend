@@ -1098,3 +1098,51 @@ exports.testEmailConfiguration = async () => {
 
 // Export the sendAgentUpdateEmail function
 exports.sendAgentUpdateEmail = sendAgentUpdateEmail;
+
+/**
+ * Send a thank-you/receipt email after Skool community download
+ * @param {Object} data - Download data
+ * @returns {Promise<Object>} - Email send result
+ */
+exports.sendSkoolDownloadEmail = async (data) => {
+  try {
+    const { email, appName, appDescription, downloadUrl, isRegistered } = data;
+
+    if (!email) throw new Error('Recipient email is required');
+
+    let html;
+    try {
+      const template = await getCompiledTemplate('skool_download');
+      html = template({
+        appName: appName || 'AI App',
+        appDescription: appDescription || '',
+        downloadUrl: downloadUrl || '',
+        isRegistered: !!isRegistered,
+        websiteUrl: config.websiteUrl,
+        supportEmail: config.supportEmail,
+        currentYear: new Date().getFullYear()
+      });
+    } catch (templateError) {
+      // Inline fallback if template file is missing
+      html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f59e0b;">Your Download is Ready!</h2>
+          <p>Thanks for being part of the Skool community!</p>
+          <p>Your free download of <strong>${appName || 'AI App'}</strong> is ready.</p>
+          <p><a href="${downloadUrl}" style="display:inline-block;padding:12px 24px;background:#22c55e;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">Download Now</a></p>
+          ${!isRegistered ? `<p>Create a free <a href="${config.websiteUrl}/signup">AI Waverider account</a> to get future updates and support.</p>` : ''}
+          <hr><p style="font-size:12px;color:#666;">&copy; ${new Date().getFullYear()} AI Waverider</p>
+        </div>
+      `;
+    }
+
+    return await sendEmail({
+      to: email,
+      subject: `Your Download: ${appName || 'AI App'} - AI Waverider`,
+      html
+    });
+  } catch (error) {
+    logger.error(`Failed to send Skool download email: ${error.message}`);
+    throw error;
+  }
+};

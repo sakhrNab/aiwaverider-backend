@@ -510,7 +510,7 @@ const skoolDownload = async (req, res) => {
 
     // Get the app and its Skool access code
     const appResult = await pool.query(
-      'SELECT title, download_url, external_url, price_details FROM apps WHERE id = $1',
+      'SELECT title, short_description, download_url, external_url, price_details FROM apps WHERE id = $1',
       [appId]
     );
     if (appResult.rows.length === 0) {
@@ -553,6 +553,21 @@ const skoolDownload = async (req, res) => {
 
     logger.info(`Skool download: ${email} downloaded "${app.title}" with access code`);
     res.status(200).json({ downloadUrl, title: app.title });
+
+    // Send thank-you email in background (don't block the response)
+    try {
+      const emailService = require('../../services/email/emailService');
+      await emailService.sendSkoolDownloadEmail({
+        email: email.toLowerCase().trim(),
+        appName: app.title,
+        appDescription: app.short_description || '',
+        downloadUrl,
+        isRegistered: false // We don't know — the banner hides email field for logged-in users
+      });
+      logger.info(`Skool download receipt email sent to ${email}`);
+    } catch (emailErr) {
+      logger.warn(`Failed to send Skool download email to ${email}: ${emailErr.message}`);
+    }
   } catch (error) {
     logger.error('Error processing Skool download:', error);
     res.status(500).json({ error: 'Failed to process download' });
@@ -630,6 +645,94 @@ const refreshCache = async (req, res) => {
   });
 };
 
+// ==========================================
+// GET /api/apps/skool-leads — Admin: list all Skool download leads
+// ==========================================
+const getSkoolLeads = async (req, res) => {
+  try {
+    const { appId, page = 1, limit = 50, search } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    let whereClause = '';
+    const params = [];
+
+    if (appId) {
+      params.push(appId);
+      whereClause = `WHERE sd.app_id = $${params.length}`;
+    }
+    if (search) {
+      params.push(`%${search.toLowerCase()}%`);
+      whereClause += whereClause ? ` AND sd.email ILIKE $${params.length}` : `WHERE sd.email ILIKE $${params.length}`;
+    }
+
+    // Count total
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM skool_downloads sd ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].count);
+
+    // Fetch leads with app title
+    params.push(parseInt(limit));
+    params.push(offset);
+    const leadsResult = await pool.query(
+      `SELECT sd.id, sd.email, sd.app_id, a.title AS app_title, sd.download_count, sd.created_at, sd.last_downloaded_at
+       FROM skool_downloads sd
+       LEFT JOIN apps a ON a.id = sd.app_id
+       ${whereClause}
+       ORDER BY sd.created_at DESC
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+
+    // Summary stats
+    const statsResult = await pool.query(
+      `SELECT COUNT(DISTINCT email) AS unique_emails, COUNT(DISTINCT app_id) AS apps_count, COUNT(*) AS total_downloads
+       FROM skool_downloads`
+    );
+
+    res.status(200).json({
+      leads: leadsResult.rows,
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      stats: statsResult.rows[0]
+    });
+  } catch (error) {
+    // If table doesn't exist, return empty
+    if (error.code === '42P01') {
+      return res.status(200).json({ leads: [], total: 0, page: 1, limit: 50, stats: { unique_emails: 0, apps_count: 0, total_downloads: 0 } });
+    }
+    logger.error('Error fetching Skool leads:', error);
+    res.status(500).json({ error: 'Failed to fetch Skool leads' });
+  }
+};
+
+// ==========================================
+// GET /api/apps/skool-leads/emails — Admin: get just email list for email composer
+// ==========================================
+const getSkoolLeadEmails = async (req, res) => {
+  try {
+    const { appId } = req.query;
+    let query = 'SELECT DISTINCT email FROM skool_downloads';
+    const params = [];
+    if (appId) {
+      params.push(appId);
+      query += ' WHERE app_id = $1';
+    }
+    query += ' ORDER BY email ASC';
+
+    const result = await pool.query(query, params);
+    res.status(200).json({ emails: result.rows.map(r => r.email) });
+  } catch (error) {
+    if (error.code === '42P01') {
+      return res.status(200).json({ emails: [] });
+    }
+    logger.error('Error fetching Skool lead emails:', error);
+    res.status(500).json({ error: 'Failed to fetch Skool lead emails' });
+  }
+};
+
 module.exports = {
   getApps,
   getAppById,
@@ -640,6 +743,8 @@ module.exports = {
   freeDownload,
   skoolDownload,
   getDownloadLink,
+  getSkoolLeads,
+  getSkoolLeadEmails,
   incrementViews,
   refreshCache,
 };

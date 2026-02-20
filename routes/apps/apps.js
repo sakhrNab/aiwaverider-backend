@@ -11,6 +11,12 @@ const { appFields } = require('../../middleware/upload');
 router.post('/cache/refresh', validateFirebaseToken, isAdmin, appsController.refreshCache);
 
 // ==========================================
+// SKOOL LEADS (Admin only) — must come before :appId
+// ==========================================
+router.get('/skool-leads', validateFirebaseToken, isAdmin, appsController.getSkoolLeads);
+router.get('/skool-leads/emails', validateFirebaseToken, isAdmin, appsController.getSkoolLeadEmails);
+
+// ==========================================
 // PUBLIC ENDPOINTS
 // ==========================================
 
