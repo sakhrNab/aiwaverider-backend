@@ -151,7 +151,7 @@ const validateFirebaseToken = async (req, res, next) => {
 
     if (rows.length === 0) {
       console.log('User not found in database for uid:', decodedToken.uid);
-      return res.status(404).json({ error: 'User not found in database' });
+      return res.status(401).json({ error: 'User not found in database', code: 'USER_NOT_IN_DB' });
     }
 
     const userData = rows[0];

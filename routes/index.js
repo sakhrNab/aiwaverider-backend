@@ -81,10 +81,10 @@ router.use('/templates', templateRoutes);   // Secure template downloads
 // Notification routes
 router.use('/notifications', notificationRoutes);
 
-// Admin routes
-router.use('/admin', adminRoutes);
+// Admin routes — mount specific sub-paths before the general /admin catch-all
 router.use('/admin/analytics', adminAnalyticsRoutes);
 router.use('/admin/email', adminEmailRoutes);
+router.use('/admin', adminRoutes);
 
 // Utility routes
 router.use('/email', emailRoutes);
