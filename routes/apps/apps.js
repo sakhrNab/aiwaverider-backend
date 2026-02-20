@@ -29,6 +29,9 @@ router.post('/:appId/views', appsController.incrementViews);
 // Free download tracking
 router.post('/:appId/download', appsController.freeDownload);
 
+// Get download link for purchased apps (auth required)
+router.get('/:appId/download-link', validateFirebaseToken, appsController.getDownloadLink);
+
 // ==========================================
 // ADMIN ENDPOINTS (Authenticated + Admin)
 // Disk storage with 1GB limit for download files

@@ -443,7 +443,43 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
    */
   async createTemplateAccess(item, order, email, userId) {
     try {
-      const agentId = item.id;
+      const itemId = item.id;
+      const itemType = item.type || 'agent'; // 'app' or 'agent'
+
+      // ---- APP PURCHASE: return download URL directly ----
+      if (itemType === 'app') {
+        const appResult = await pool.query('SELECT title, download_url, download_filename FROM apps WHERE id = $1', [itemId]);
+        if (appResult.rows.length === 0) {
+          logger.warn(`App not found for delivery: ${itemId}`);
+          return null;
+        }
+        const app = appResult.rows[0];
+
+        const accessToken = uuidv4();
+        await pool.query(
+          `INSERT INTO template_access (id, order_id, agent_id, user_id, email, used, revoked, expires_at,
+           invoice_id, unipay_order_hash_id, merchant_order_id, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
+          [accessToken, order.id, itemId, userId, email, false, false,
+           new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(), // 1 year for apps
+           order.invoiceId || null, order.uniPayOrderHashId || null, order.merchantOrderId || null]
+        );
+
+        const result = {
+          agentId: itemId,
+          agentName: app.title || item.title,
+          accessToken,
+          itemType: 'app',
+          downloadUrl: app.download_url, // Direct Firebase Storage URL
+          templateContent: null, // No template for apps
+        };
+
+        logger.info(`App download access created for ${itemId} in order ${order.id}`);
+        return result;
+      }
+
+      // ---- AGENT PURCHASE: original template flow ----
+      const agentId = itemId;
 
       // Get template content
       const templateContent = await this.getAgentTemplate(agentId);
@@ -487,6 +523,7 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
         agentId,
         agentName,
         accessToken,
+        itemType: 'agent',
         downloadUrl: `/api/templates/download/${agentId}?orderId=${order.id}&token=${accessToken}`,
         templateContent
       };
@@ -496,7 +533,7 @@ Remember to be respectful, maintain user privacy, and clarify when you're uncert
       });
       return result;
     } catch (error) {
-      logger.error(`Error creating template access for agent ${item.id}:`, error);
+      logger.error(`Error creating template access for item ${item.id}:`, error);
       return null;
     }
   }

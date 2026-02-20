@@ -479,6 +479,52 @@ const freeDownload = async (req, res) => {
 };
 
 // ==========================================
+// GET /api/apps/:appId/download-link — Get download URL (purchased apps only)
+// ==========================================
+const getDownloadLink = async (req, res) => {
+  try {
+    const { appId } = req.params;
+    const userId = req.user?.uid;
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    // Check if user has purchased this app
+    const userResult = await pool.query('SELECT subscription FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(403).json({ error: 'Purchase required' });
+    }
+
+    const subscription = userResult.rows[0].subscription || {};
+    const purchases = Array.isArray(subscription.purchases) ? subscription.purchases : [];
+    const hasPurchased = purchases.some(p => (p.agentId === appId || p.productId === appId));
+
+    if (!hasPurchased) {
+      return res.status(403).json({ error: 'You have not purchased this app' });
+    }
+
+    // Get the app's download URL
+    const appResult = await pool.query('SELECT title, download_url FROM apps WHERE id = $1', [appId]);
+    if (appResult.rows.length === 0) {
+      return res.status(404).json({ error: 'App not found' });
+    }
+
+    const app = appResult.rows[0];
+    if (!app.download_url) {
+      return res.status(404).json({ error: 'No download file available for this app' });
+    }
+
+    // Increment download count
+    await pool.query('UPDATE apps SET download_count = download_count + 1 WHERE id = $1', [appId]);
+
+    res.status(200).json({ downloadUrl: app.download_url, title: app.title });
+  } catch (error) {
+    logger.error('Error getting download link:', error);
+    res.status(500).json({ error: 'Failed to get download link' });
+  }
+};
+
+// ==========================================
 // POST /api/apps/:appId/views — Increment view count
 // ==========================================
 const incrementViews = async (req, res) => {
@@ -511,6 +557,7 @@ module.exports = {
   updateApp,
   deleteApp,
   freeDownload,
+  getDownloadLink,
   incrementViews,
   refreshCache,
 };
