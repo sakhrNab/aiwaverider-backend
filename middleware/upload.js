@@ -43,19 +43,47 @@ const upload = multer({
   }
 });
 
+// Large file upload instance for apps with downloadable files (50MB limit)
+const appUpload = multer({
+  storage,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Check for image file types (for image and icon)
+    if (file.fieldname === 'image' || file.fieldname === 'icon') {
+      const allowedTypes = /jpeg|jpg|png|gif/;
+      const ext = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+      const mimetype = allowedTypes.test(file.mimetype);
+
+      if (ext && mimetype) {
+        return cb(null, true);
+      } else {
+        return cb(new Error('Only image files are allowed (jpg, jpeg, png, gif)'));
+      }
+    }
+
+    // Allow any file type for downloadFile field
+    return cb(null, true);
+  }
+});
+
 // Export both single-file and multiple-file upload middlewares
 module.exports = {
   // For single file upload
   single: (fieldName) => upload.single(fieldName),
-  
+
   // For multiple fields with multiple files
   fields: (fields) => upload.fields(fields),
-  
+
   // For parsing form data without files
   none: () => upload.none(),
-  
+
   // For multiple files in one field
-  array: (fieldName, maxCount) => upload.array(fieldName, maxCount)
+  array: (fieldName, maxCount) => upload.array(fieldName, maxCount),
+
+  // For app uploads with large file support (50MB)
+  appFields: (fields) => appUpload.fields(fields)
 };
 
 // // backend/middleware/upload.js -- using bitbucket for firebase

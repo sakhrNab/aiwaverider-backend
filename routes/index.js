@@ -30,7 +30,9 @@ const imageCacheRoutes = require('./api/imageCacheRoutes');
 
 const adminRoutes = require('./admin/admin');
 const adminEmailRoutes = require('./admin/adminEmailRoutes');
+const adminAnalyticsRoutes = require('./admin/analytics');
 const emailRoutes = require('./api/emailRoutes');
+const analyticsRoutes = require('./api/analytics');
 const healthRoutes = require('./health');
 const videosRoutes = require('./videos/videos');
 // Old insecure token routes removed for security
@@ -64,6 +66,10 @@ router.use('/ai-tools', aiToolsRoutes);
 // NEW: Mount prompts routes - completely separate from ai-tools
 router.use('/prompts', promptsRoutes);
 
+// Apps marketplace
+const appsRoutes = require('./apps/apps');
+router.use('/apps', appsRoutes);
+
 // Payment system routes (PayPal only)
 router.use('/payments', paymentsRoutes);
 router.use('/invoices', invoiceRoutes);     // Invoice management API
@@ -72,9 +78,11 @@ router.use('/templates', templateRoutes);   // Secure template downloads
 // Admin routes
 router.use('/admin', adminRoutes);
 router.use('/admin/email', adminEmailRoutes);
+router.use('/admin/analytics', adminAnalyticsRoutes);
 
 // Utility routes
 router.use('/email', emailRoutes);
+router.use('/analytics', analyticsRoutes);
 router.use('/health', healthRoutes);
 // Old insecure token routes removed - use /secure-tokens instead
 router.use('/secure-tokens', secureTokenService);
