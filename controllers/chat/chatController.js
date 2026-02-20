@@ -79,9 +79,9 @@ async function fetchRecentPrompts(limit = 15) {
 }
 
 /**
- * Fetch AI tools / apps
+ * Fetch AI tools (external tools directory at /ai-tools)
  */
-async function fetchRecentApps(limit = 15) {
+async function fetchRecentAITools(limit = 15) {
   try {
     const snap = await db.collection('ai_tools')
       .orderBy('createdAt', 'desc')
@@ -93,10 +93,37 @@ async function fetchRecentApps(limit = 15) {
         id: doc.id,
         title: d.title || '',
         description: (d.description || '').slice(0, 120),
+        link: d.link || d.url || '',
+        tags: d.tags || [],
       };
     });
   } catch (err) {
-    console.error('fetchRecentApps error:', err.message);
+    console.error('fetchRecentAITools error:', err.message);
+    return [];
+  }
+}
+
+/**
+ * Fetch videos
+ */
+async function fetchRecentVideos(limit = 15) {
+  try {
+    const snap = await db.collection('videos')
+      .orderBy('createdAt', 'desc')
+      .limit(limit)
+      .get();
+    return snap.docs.map(doc => {
+      const d = doc.data();
+      return {
+        id: doc.id,
+        title: d.title || '',
+        platform: d.platform || '',
+        authorName: d.authorName || '',
+        originalUrl: d.originalUrl || '',
+      };
+    });
+  } catch (err) {
+    console.error('fetchRecentVideos error:', err.message);
     return [];
   }
 }
@@ -126,9 +153,8 @@ Website pages and their URL patterns:
 - Individual agent: /agents/{agentId}
 - Prompts marketplace: /prompts — browse & purchase prompts
 - Individual prompt: /prompts/{promptId}
-- Apps & AI Tools: /apps — browse AI tools and apps
-- Individual app: /apps/{appId}
-- AI Tools directory: /ai-tools
+- AI Tools directory: /ai-tools — curated external AI tools (links open external websites)
+- Video Tutorials: /videos — YouTube, TikTok, and Instagram video content
 - Monetization Paths: /monetization-paths
 - About: /about
 - Profile: /profile
@@ -138,9 +164,10 @@ IMPORTANT LINK RULES:
 - When referencing a specific post/article, ALWAYS use the format: /posts/{actual_post_id}
 - When referencing a specific agent, ALWAYS use the format: /agents/{actual_agent_id}
 - When referencing a specific prompt, use: /prompts/{actual_prompt_id}
-- When referencing a specific app, use: /apps/{actual_app_id}
+- For AI tools on the /ai-tools page: these are EXTERNAL tools. Direct users to /ai-tools to browse them. If you know the tool's external URL, you may share it.
+- For videos: direct users to /videos to watch them. If you know the video's original URL, you may share it.
 - NEVER guess or fabricate IDs. Only link to content listed in the AVAILABLE CONTENT section below.
-- If you don't have a matching item, direct the user to the relevant listing page (e.g., /latest-tech, /agents, /prompts, /apps) instead of making up a link.
+- If you don't have a matching item, direct the user to the relevant listing page (e.g., /latest-tech, /agents, /prompts, /ai-tools, /videos) instead of making up a link.
 
 CRITICAL BOOKING INSTRUCTIONS - ALWAYS FOLLOW THESE:
 When a user mentions ANY of these phrases or similar requests, you MUST include [SHOW_BOOKING_BUTTON] at the end:
@@ -204,16 +231,25 @@ async function buildContentContext(pageContext) {
       }
       break;
     }
-    case 'apps':
-    case 'app-detail':
     case 'ai-tools': {
-      items = await fetchRecentApps();
+      items = await fetchRecentAITools();
       if (items.length) {
-        section = `\n\nAVAILABLE CONTENT — Apps & AI Tools (the user is browsing Apps):\n`;
+        section = `\n\nAVAILABLE CONTENT — AI Tools (the user is browsing the AI Tools directory):\n`;
         section += items.map(a =>
-          `- "${a.title}" → Link: /apps/${a.id}`
+          `- "${a.title}"${a.tags.length ? ` [${a.tags.slice(0, 3).join(', ')}]` : ''}${a.link ? ` → External: ${a.link}` : ''}`
         ).join('\n');
-        section += `\n\nWhen the user asks about an app or tool, match their question to one of the items above and link to it using /apps/{id}.`;
+        section += `\n\nThese are external tools. When the user asks about a tool, describe it and share its external link if available. Direct them to /ai-tools to browse the full directory.`;
+      }
+      break;
+    }
+    case 'videos': {
+      items = await fetchRecentVideos();
+      if (items.length) {
+        section = `\n\nAVAILABLE CONTENT — Videos (the user is browsing Video Tutorials):\n`;
+        section += items.map(v =>
+          `- "${v.title}" [${v.platform}${v.authorName ? `, by ${v.authorName}` : ''}]${v.originalUrl ? ` → Watch: ${v.originalUrl}` : ''}`
+        ).join('\n');
+        section += `\n\nWhen the user asks about a video, match their question to one of the videos above. Share the original URL if available. Direct them to /videos to browse all videos.`;
       }
       break;
     }
