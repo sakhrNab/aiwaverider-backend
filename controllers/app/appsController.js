@@ -465,13 +465,22 @@ const freeDownload = async (req, res) => {
   try {
     const { appId } = req.params;
     const result = await pool.query(
-      'UPDATE apps SET download_count = download_count + 1 WHERE id = $1 RETURNING download_count',
+      'UPDATE apps SET download_count = download_count + 1 WHERE id = $1 RETURNING download_count, download_url, external_url, title',
       [appId]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'App not found' });
     }
-    res.status(200).json({ downloadCount: result.rows[0].download_count });
+    const app = result.rows[0];
+    const downloadUrl = app.download_url || app.external_url || null;
+    if (!downloadUrl) {
+      return res.status(404).json({ error: 'No download file available for this app' });
+    }
+    res.status(200).json({
+      downloadUrl,
+      downloadCount: app.download_count,
+      title: app.title,
+    });
   } catch (error) {
     logger.error('Error tracking download:', error);
     res.status(500).json({ error: 'Failed to track download' });
