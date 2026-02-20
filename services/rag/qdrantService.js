@@ -312,7 +312,7 @@ async function indexAll() {
 
 const SCORE_THRESHOLD = 0.35; // Minimum similarity score to include a result
 
-async function searchRelevant(query, limit = 5) {
+async function searchRelevant(query, limit = 5, filterCollections = null) {
   let vector;
   try {
     vector = await embedCached(query);
@@ -322,7 +322,7 @@ async function searchRelevant(query, limit = 5) {
   }
 
   const client = getQdrantClient();
-  const collections = ['agents', 'prompts', 'posts', 'apps'];
+  const collections = filterCollections || ['agents', 'prompts', 'posts', 'apps'];
 
   // Search all collections in parallel (4x faster)
   const results = await Promise.allSettled(

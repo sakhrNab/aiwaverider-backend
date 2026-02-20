@@ -91,6 +91,108 @@ function sanitizeMessages(messages) {
     }));
 }
 
+// ── OpenAI Function Calling Tools ────────────────────────────────────
+
+const CHAT_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'search_articles',
+      description: 'Search for news articles and blog posts on the site. Call this when the user asks about news, articles, blog posts, latest tech, or "what\'s new". Do NOT use this for workflows, prompts, or apps.',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search keywords' } } },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_workflows',
+      description: 'Search for N8N automation workflows available for purchase. Call this when the user asks about workflows, automations, bots, n8n templates, or agents to buy. These are PRODUCTS, not news.',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search keywords' } } },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_prompts',
+      description: 'Search for AI prompts available for purchase. Call this when the user asks about prompts, prompt templates, ChatGPT prompts, or Midjourney prompts. These are PRODUCTS, not news.',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search keywords' } } },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_apps',
+      description: 'Search for AI apps and tools built by AI Waverider. Call this when the user asks about our apps, software, or production tools.',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search keywords' } } },
+    },
+  },
+];
+
+// Map tool names to Qdrant collection names
+const TOOL_COLLECTION_MAP = {
+  search_articles: ['posts'],
+  search_workflows: ['agents'],
+  search_prompts: ['prompts'],
+  search_apps: ['apps'],
+};
+
+/**
+ * Execute a tool call by running a type-filtered RAG search.
+ */
+async function executeTool(name, args) {
+  const collections = TOOL_COLLECTION_MAP[name];
+  if (!collections) return 'Unknown tool.';
+
+  const query = args.query || 'popular';
+  const results = await searchRelevant(query, 6, collections).catch((err) => {
+    console.warn(`Tool ${name} search failed:`, err.message);
+    return [];
+  });
+
+  if (!results.length) return `No results found.`;
+
+  return results.map((r) => {
+    let line = `- [${r.type}] ${r.name}`;
+    if (r.description) line += `: ${r.description}`;
+    if (r.category) line += ` (Category: ${r.category})`;
+    if (r.price !== undefined && r.price > 0) line += ` — $${r.price}`;
+    if (r.is_free) line += ' — FREE';
+    if (r.url_path) line += ` | Link: ${r.url_path}`;
+    return line;
+  }).join('\n') + '\n\nALWAYS include clickable markdown links like [Title](url_path) when referencing these items.';
+}
+
+/**
+ * Process tool calls from an OpenAI response and build follow-up messages.
+ */
+async function handleToolCalls(allMessages, toolCalls) {
+  const assistantToolMsg = {
+    role: 'assistant',
+    content: null,
+    tool_calls: toolCalls.map((tc) => ({
+      id: tc.id,
+      type: 'function',
+      function: { name: tc.name, arguments: tc.arguments },
+    })),
+  };
+
+  const toolResultMessages = [];
+  for (const tc of toolCalls) {
+    let args = {};
+    try { args = JSON.parse(tc.arguments || '{}'); } catch (_) {}
+    const result = await executeTool(tc.name, args);
+    toolResultMessages.push({
+      role: 'tool',
+      tool_call_id: tc.id,
+      content: result,
+    });
+  }
+
+  return [...allMessages, assistantToolMsg, ...toolResultMessages];
+}
+
+// ── System Prompt ────────────────────────────────────────────────────
+
 const BASE_SYSTEM_PROMPT = `You are a helpful AI assistant for the AI Waverider website, founded by Sakhr Al-Absi (CS degree from TU Berlin, 7+ years enterprise experience, Fortune 500 background, hackathon winner). Your purpose is to assist users in navigating the site, understanding our offerings, and answering questions.
 
 Key information about AI Waverider:
@@ -132,7 +234,15 @@ NAVIGATION GUIDANCE — use these to direct users to the correct page:
 - For sponsorship or creator partnerships → direct to /media-kit
 - For B2B services or enterprise partnerships → direct to /media-kit-business
 - IMPORTANT: /ai-tools shows EXTERNAL tools (not ours). /apps shows OUR apps. /agents shows N8N WORKFLOWS. /prompts shows TEXT PROMPTS. Never confuse these pages.
-- When the "RELEVANT PRODUCTS" section below includes results, you may mention them, but ALWAYS also direct the user to the appropriate page listed above so they can browse more.
+
+YOU HAVE TOOLS to look up specific content types. Use them to give accurate answers:
+- User asks about news/articles/blog posts → call search_articles
+- User asks about workflows/automations/agents to buy → call search_workflows
+- User asks about prompts to buy → call search_prompts
+- User asks about our apps/software → call search_apps
+- Do NOT mix content types. If a user asks about news, ONLY call search_articles — never search_workflows.
+- ALWAYS include clickable markdown links like [Title](/path) when referencing items from tool results.
+- For general questions (about AI Waverider, booking, pricing, etc.), answer directly without tools.
 
 CRITICAL BOOKING INSTRUCTIONS - ALWAYS FOLLOW THESE:
 When a user mentions ANY of these phrases or similar requests, you MUST include [SHOW_BOOKING_BUTTON] at the end:
@@ -310,17 +420,40 @@ exports.processChat = async (req, res) => {
 
     const systemPrompt = buildSystemPrompt(pageContext, ragResults);
     const safeMessages = sanitizeMessages(messages);
-
     const fullMessages = [{ role: 'system', content: systemPrompt }, ...safeMessages];
 
-    const completion = await openai.chat.completions.create({
+    // First call — may return content or tool_calls
+    const firstCompletion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: fullMessages,
       max_tokens: 800,
       temperature: 0.7,
+      tools: CHAT_TOOLS,
     });
 
-    const assistantMessage = completion.choices[0].message.content;
+    const firstChoice = firstCompletion.choices[0];
+    let assistantMessage;
+
+    // If model called tools, execute them and make a second call
+    if (firstChoice.finish_reason === 'tool_calls' && firstChoice.message.tool_calls) {
+      const toolCalls = firstChoice.message.tool_calls.map((tc) => ({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: tc.function.arguments,
+      }));
+      const messagesWithTools = await handleToolCalls(fullMessages, toolCalls);
+
+      const secondCompletion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: messagesWithTools,
+        max_tokens: 800,
+        temperature: 0.7,
+      });
+      assistantMessage = secondCompletion.choices[0].message.content || '';
+    } else {
+      assistantMessage = firstChoice.message.content || '';
+    }
+
     const shouldShowBookingButton = assistantMessage.includes('[SHOW_BOOKING_BUTTON]');
     const cleanMessage = assistantMessage.replaceAll('[SHOW_BOOKING_BUTTON]', '').trim();
 
@@ -335,7 +468,7 @@ exports.processChat = async (req, res) => {
     if (error.response) {
       return res.status(error.response.status || 500).json({
         success: false,
-        error: error.response.data.error.message || 'OpenAI API error',
+        error: error.response.data?.error?.message || 'OpenAI API error',
         details: error.response.data,
       });
     }
@@ -393,30 +526,66 @@ exports.processChatStream = async (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering
     res.flushHeaders();
 
-    const stream = await openai.chat.completions.create({
+    let clientDisconnected = false;
+    req.on('close', () => { clientDisconnected = true; });
+
+    // First stream — with tools
+    const firstStream = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: fullMessages,
       max_tokens: 800,
       temperature: 0.7,
+      tools: CHAT_TOOLS,
       stream: true,
     });
 
-    // Handle client disconnect
-    let clientDisconnected = false;
-    req.on('close', () => {
-      clientDisconnected = true;
-    });
+    // Collect response — could be content or tool_calls
+    const toolCallsMap = {};
+    let hasToolCalls = false;
 
-    for await (const chunk of stream) {
+    for await (const chunk of firstStream) {
       if (clientDisconnected) break;
+      const delta = chunk.choices[0]?.delta;
 
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta) {
-        res.write(`data: ${JSON.stringify({ token: delta })}\n\n`);
+      if (delta?.tool_calls) {
+        hasToolCalls = true;
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index;
+          if (!toolCallsMap[idx]) toolCallsMap[idx] = { id: '', name: '', arguments: '' };
+          if (tc.id) toolCallsMap[idx].id = tc.id;
+          if (tc.function?.name) toolCallsMap[idx].name = tc.function.name;
+          if (tc.function?.arguments) toolCallsMap[idx].arguments += tc.function.arguments;
+        }
+      }
+
+      // Stream content tokens directly
+      if (delta?.content) {
+        res.write(`data: ${JSON.stringify({ token: delta.content })}\n\n`);
       }
     }
 
-    // Signal completion
+    // If model called tools, execute and stream second response
+    if (hasToolCalls && !clientDisconnected) {
+      const toolCalls = Object.values(toolCallsMap);
+      const messagesWithTools = await handleToolCalls(fullMessages, toolCalls);
+
+      const secondStream = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: messagesWithTools,
+        max_tokens: 800,
+        temperature: 0.7,
+        stream: true,
+      });
+
+      for await (const chunk of secondStream) {
+        if (clientDisconnected) break;
+        const token = chunk.choices[0]?.delta?.content;
+        if (token) {
+          res.write(`data: ${JSON.stringify({ token })}\n\n`);
+        }
+      }
+    }
+
     if (!clientDisconnected) {
       res.write('data: [DONE]\n\n');
       res.end();
