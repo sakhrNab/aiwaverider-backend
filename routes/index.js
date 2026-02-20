@@ -31,7 +31,10 @@ const appsRoutes = require('./apps/apps');
 const cacheRoutes = require('./api/cacheRoutes');
 const imageCacheRoutes = require('./api/imageCacheRoutes');
 
+const notificationRoutes = require('./api/notificationRoutes');
+
 const adminRoutes = require('./admin/admin');
+const adminAnalyticsRoutes = require('./admin/analytics');
 const adminEmailRoutes = require('./admin/adminEmailRoutes');
 const emailRoutes = require('./api/emailRoutes');
 const healthRoutes = require('./health');
@@ -75,8 +78,12 @@ router.use('/payments', paymentsRoutes);
 router.use('/invoices', invoiceRoutes);     // Invoice management API
 router.use('/templates', templateRoutes);   // Secure template downloads
 
+// Notification routes
+router.use('/notifications', notificationRoutes);
+
 // Admin routes
 router.use('/admin', adminRoutes);
+router.use('/admin/analytics', adminAnalyticsRoutes);
 router.use('/admin/email', adminEmailRoutes);
 
 // Utility routes

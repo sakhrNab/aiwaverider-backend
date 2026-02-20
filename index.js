@@ -480,6 +480,69 @@ const server = app.listen(PORT, async () => {
     console.warn('⚠️ skool_downloads migration check failed:', err.message);
   }
 
+  // Auto-migrate: create email_templates table if it doesn't exist
+  try {
+    const { rows: etRows } = await pool.query(
+      "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'email_templates')"
+    );
+    if (!etRows[0].exists) {
+      console.log('🔄 email_templates table not found — running migration...');
+      const fs = require('fs');
+      const path = require('path');
+      const migrationPath = path.join(__dirname, 'migration', '006_email_templates.sql');
+      if (fs.existsSync(migrationPath)) {
+        const sql = fs.readFileSync(migrationPath, 'utf8');
+        await pool.query(sql);
+        console.log('✅ email_templates table created successfully');
+      } else {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS email_templates (
+            type TEXT PRIMARY KEY, subject TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ DEFAULT NOW()
+          );
+        `);
+        console.log('✅ email_templates table created (inline fallback)');
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️ email_templates migration check failed:', err.message);
+  }
+
+  // Auto-migrate: create notifications table if it doesn't exist
+  try {
+    const { rows: ntRows } = await pool.query(
+      "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'notifications')"
+    );
+    if (!ntRows[0].exists) {
+      console.log('🔄 notifications table not found — running migration...');
+      const fs = require('fs');
+      const path = require('path');
+      const migrationPath = path.join(__dirname, 'migration', '007_notifications.sql');
+      if (fs.existsSync(migrationPath)) {
+        const sql = fs.readFileSync(migrationPath, 'utf8');
+        await pool.query(sql);
+        console.log('✅ notifications table created successfully');
+      } else {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS notifications (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            type TEXT NOT NULL DEFAULT 'general',
+            title TEXT NOT NULL,
+            message TEXT NOT NULL DEFAULT '',
+            read BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+          );
+          CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
+          CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(user_id, read);
+        `);
+        console.log('✅ notifications table created (inline fallback)');
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️ notifications migration check failed:', err.message);
+  }
+
   // Initialize Qdrant collections + auto-index on first run (RAG)
   try {
     console.log('🔄 Initializing Qdrant collections...');

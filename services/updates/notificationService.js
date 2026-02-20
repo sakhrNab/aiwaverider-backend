@@ -125,10 +125,11 @@ const sendInAppNotification = async (options) => {
   const { userId, type, title, message, data } = options;
 
   try {
-    // Note: notifications table not in current schema - log for now
-    // If you need in-app notifications, create a notifications table
-    logger.info(`In-app notification for user ${userId}: ${title} - ${message}`);
-    logger.info(`In-app notification data: ${JSON.stringify(data)}`);
+    await pool.query(
+      'INSERT INTO notifications (user_id, type, title, message) VALUES ($1, $2, $3, $4)',
+      [userId, type || 'general', title, message || '']
+    );
+    logger.info(`In-app notification saved for user ${userId}: ${title}`);
   } catch (error) {
     logger.error(`Error sending in-app notification: ${error.message}`);
     throw error;
