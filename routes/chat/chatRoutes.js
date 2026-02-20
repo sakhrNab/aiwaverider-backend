@@ -64,4 +64,32 @@ const chatController = require('../../controllers/chat/chatController');
  */
 router.post('/', chatController.processChat);
 
-module.exports = router; 
+/**
+ * @swagger
+ * /api/chat/stream:
+ *   post:
+ *     summary: Process chat message with SSE streaming
+ *     description: Process chat messages with OpenAI streaming integration
+ *     tags: [Chat]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - messages
+ *             properties:
+ *               messages:
+ *                 type: array
+ *                 description: Array of message objects with role and content
+ *               pageContext:
+ *                 type: object
+ *                 description: Current page context for content-aware responses
+ *     responses:
+ *       200:
+ *         description: SSE stream of chat tokens
+ */
+router.post('/stream', chatController.processChatStream);
+
+module.exports = router;
