@@ -1,10 +1,27 @@
 console.log('Loading appsController.js');
 
+const fs = require('fs');
 const { pool } = require('../../config/database');
 const logger = require('../../utils/logger');
 const { v4: uuidv4 } = require('uuid');
-const { uploadImageToStorage, deleteImageFromStorage } = require('../../utils/storage');
+const { uploadFileFromPath, deleteImageFromStorage } = require('../../utils/storage');
 const { indexSingleApp, removeFromIndex } = require('../../services/rag/qdrantService');
+
+/**
+ * Clean up temp files written by multer diskStorage.
+ */
+const cleanupTempFiles = (files) => {
+  if (!files) return;
+  for (const fieldFiles of Object.values(files)) {
+    for (const file of fieldFiles) {
+      if (file.path) {
+        fs.unlink(file.path, (err) => {
+          if (err) logger.warn(`Failed to clean up temp file: ${file.path}`);
+        });
+      }
+    }
+  }
+};
 
 // ==========================================
 // HELPERS
@@ -208,23 +225,23 @@ const createApp = async (req, res) => {
 
     const id = uuidv4();
 
-    // Handle file uploads
+    // Handle file uploads (all files are on disk via multer diskStorage)
     let imageUrl = null, imageFilename = null;
     let iconUrl = null, iconFilename = null;
     let downloadUrl = null, downloadFilename = null;
 
     if (files.image && files.image[0]) {
-      const result = await uploadImageToStorage(files.image[0].buffer, files.image[0].originalname, 'apps/images');
+      const result = await uploadFileFromPath(files.image[0].path, files.image[0].originalname, 'apps/images');
       imageUrl = result.url;
       imageFilename = result.filename;
     }
     if (files.icon && files.icon[0]) {
-      const result = await uploadImageToStorage(files.icon[0].buffer, files.icon[0].originalname, 'apps/icons');
+      const result = await uploadFileFromPath(files.icon[0].path, files.icon[0].originalname, 'apps/icons');
       iconUrl = result.url;
       iconFilename = result.filename;
     }
     if (files.downloadFile && files.downloadFile[0]) {
-      const result = await uploadImageToStorage(files.downloadFile[0].buffer, files.downloadFile[0].originalname, 'apps/downloads');
+      const result = await uploadFileFromPath(files.downloadFile[0].path, files.downloadFile[0].originalname, 'apps/downloads');
       downloadUrl = result.url;
       downloadFilename = result.filename;
     }
@@ -294,8 +311,10 @@ const createApp = async (req, res) => {
     indexSingleApp(result.rows[0]).catch(() => {});
 
     logger.info(`App created: ${id} — "${body.title}"`);
+    cleanupTempFiles(files);
     res.status(201).json({ message: 'App created successfully', app: newApp });
   } catch (error) {
+    cleanupTempFiles(req.files);
     logger.error('Error creating app:', error);
     res.status(500).json({ error: 'Failed to create app' });
   }
@@ -324,19 +343,19 @@ const updateApp = async (req, res) => {
 
     if (files.image && files.image[0]) {
       if (oldApp.image_filename) deleteImageFromStorage(oldApp.image_filename).catch(() => {});
-      const result = await uploadImageToStorage(files.image[0].buffer, files.image[0].originalname, 'apps/images');
+      const result = await uploadFileFromPath(files.image[0].path, files.image[0].originalname, 'apps/images');
       imageUrl = result.url;
       imageFilename = result.filename;
     }
     if (files.icon && files.icon[0]) {
       if (oldApp.icon_filename) deleteImageFromStorage(oldApp.icon_filename).catch(() => {});
-      const result = await uploadImageToStorage(files.icon[0].buffer, files.icon[0].originalname, 'apps/icons');
+      const result = await uploadFileFromPath(files.icon[0].path, files.icon[0].originalname, 'apps/icons');
       iconUrl = result.url;
       iconFilename = result.filename;
     }
     if (files.downloadFile && files.downloadFile[0]) {
       if (oldApp.download_filename) deleteImageFromStorage(oldApp.download_filename).catch(() => {});
-      const result = await uploadImageToStorage(files.downloadFile[0].buffer, files.downloadFile[0].originalname, 'apps/downloads');
+      const result = await uploadFileFromPath(files.downloadFile[0].path, files.downloadFile[0].originalname, 'apps/downloads');
       downloadUrl = result.url;
       downloadFilename = result.filename;
     }
@@ -399,8 +418,10 @@ const updateApp = async (req, res) => {
     indexSingleApp(result.rows[0]).catch(() => {});
 
     logger.info(`App updated: ${appId}`);
+    cleanupTempFiles(files);
     res.status(200).json({ message: 'App updated successfully', app: updatedApp });
   } catch (error) {
+    cleanupTempFiles(req.files);
     logger.error('Error updating app:', error);
     res.status(500).json({ error: 'Failed to update app' });
   }

@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const appsController = require('../../controllers/app/appsController');
 const { validateFirebaseToken, isAdmin } = require('../../middleware/authenticationMiddleware');
-const upload = require('../../middleware/upload');
+const { appFields } = require('../../middleware/upload');
 
 // ==========================================
 // CACHE MANAGEMENT (Admin only)
@@ -31,21 +31,14 @@ router.post('/:appId/download', appsController.freeDownload);
 
 // ==========================================
 // ADMIN ENDPOINTS (Authenticated + Admin)
+// Disk storage with 1GB limit for download files
 // ==========================================
 
 // Create new app
-router.post('/', validateFirebaseToken, isAdmin, upload.fields([
-  { name: 'image', maxCount: 1 },
-  { name: 'icon', maxCount: 1 },
-  { name: 'downloadFile', maxCount: 1 }
-]), appsController.createApp);
+router.post('/', validateFirebaseToken, isAdmin, appFields, appsController.createApp);
 
 // Update app
-router.put('/:appId', validateFirebaseToken, isAdmin, upload.fields([
-  { name: 'image', maxCount: 1 },
-  { name: 'icon', maxCount: 1 },
-  { name: 'downloadFile', maxCount: 1 }
-]), appsController.updateApp);
+router.put('/:appId', validateFirebaseToken, isAdmin, appFields, appsController.updateApp);
 
 // Delete app
 router.delete('/:appId', validateFirebaseToken, isAdmin, appsController.deleteApp);
