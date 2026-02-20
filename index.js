@@ -448,6 +448,38 @@ const server = app.listen(PORT, async () => {
     console.warn('⚠️ Apps table migration check failed:', err.message);
   }
 
+  // Auto-migrate: create skool_downloads table if it doesn't exist
+  try {
+    const { rows: sdRows } = await pool.query(
+      "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'skool_downloads')"
+    );
+    if (!sdRows[0].exists) {
+      console.log('🔄 skool_downloads table not found — running migration...');
+      const fs = require('fs');
+      const path = require('path');
+      const migrationPath = path.join(__dirname, 'migration', '005_skool_downloads.sql');
+      if (fs.existsSync(migrationPath)) {
+        const sql = fs.readFileSync(migrationPath, 'utf8');
+        await pool.query(sql);
+        console.log('✅ skool_downloads table created successfully');
+      } else {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS skool_downloads (
+            id TEXT PRIMARY KEY, app_id TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+            email TEXT NOT NULL, download_count INTEGER DEFAULT 1,
+            created_at TIMESTAMPTZ DEFAULT NOW(), last_downloaded_at TIMESTAMPTZ,
+            UNIQUE(app_id, email)
+          );
+          CREATE INDEX IF NOT EXISTS idx_skool_downloads_app_id ON skool_downloads (app_id);
+          CREATE INDEX IF NOT EXISTS idx_skool_downloads_email ON skool_downloads (email);
+        `);
+        console.log('✅ skool_downloads table created (inline fallback)');
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️ skool_downloads migration check failed:', err.message);
+  }
+
   // Initialize Qdrant collections + auto-index on first run (RAG)
   try {
     console.log('🔄 Initializing Qdrant collections...');
