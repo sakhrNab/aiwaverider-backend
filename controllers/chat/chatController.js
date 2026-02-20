@@ -5,10 +5,7 @@ const db = admin.firestore();
 
 // ── Firestore helpers to fetch real content ──────────────────────────
 
-/**
- * Fetch recent posts (used on /latest-tech and /posts pages)
- */
-async function fetchRecentPosts(limit = 15) {
+async function fetchRecentPosts(limit = 10) {
   try {
     const snap = await db.collection('posts')
       .orderBy('createdAt', 'desc')
@@ -29,10 +26,7 @@ async function fetchRecentPosts(limit = 15) {
   }
 }
 
-/**
- * Fetch agents
- */
-async function fetchRecentAgents(limit = 15) {
+async function fetchRecentAgents(limit = 10) {
   try {
     const snap = await db.collection('agents')
       .orderBy('createdAt', 'desc')
@@ -54,10 +48,7 @@ async function fetchRecentAgents(limit = 15) {
   }
 }
 
-/**
- * Fetch prompts
- */
-async function fetchRecentPrompts(limit = 15) {
+async function fetchRecentPrompts(limit = 10) {
   try {
     const snap = await db.collection('prompts')
       .orderBy('createdAt', 'desc')
@@ -78,10 +69,7 @@ async function fetchRecentPrompts(limit = 15) {
   }
 }
 
-/**
- * Fetch AI tools (external tools directory at /ai-tools)
- */
-async function fetchRecentAITools(limit = 15) {
+async function fetchRecentAITools(limit = 10) {
   try {
     const snap = await db.collection('ai_tools')
       .orderBy('createdAt', 'desc')
@@ -103,10 +91,7 @@ async function fetchRecentAITools(limit = 15) {
   }
 }
 
-/**
- * Fetch videos
- */
-async function fetchRecentVideos(limit = 15) {
+async function fetchRecentVideos(limit = 10) {
   try {
     const snap = await db.collection('videos')
       .orderBy('createdAt', 'desc')
@@ -128,7 +113,136 @@ async function fetchRecentVideos(limit = 15) {
   }
 }
 
-// ── Build context-aware system prompt ────────────────────────────────
+// ── OpenAI Tool Definitions ──────────────────────────────────────────
+
+const CHAT_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'search_articles',
+      description: 'Search for news articles and blog posts on the AI Waverider site. Call this when the user asks about news, articles, blog posts, latest tech, or "what\'s new". Do NOT use this for workflows or prompts.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Optional keywords to filter articles by topic',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_workflows',
+      description: 'Search for automation workflows and n8n agents available for purchase on the marketplace. Call this when the user asks about workflows, automations, bots, n8n templates, or products to buy. These are PRODUCTS, not news articles.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Optional keywords to filter workflows',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_prompts',
+      description: 'Search for AI prompts available for purchase. Call this when the user asks about prompts, prompt templates, ChatGPT prompts, or Midjourney prompts. These are PRODUCTS, not news articles.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Optional keywords to filter prompts',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_ai_tools',
+      description: 'Search the AI tools directory of external third-party tools and software. Call this when the user asks about AI tools, external services, or software recommendations.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Optional keywords to filter tools',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_videos',
+      description: 'Search video tutorials (YouTube, TikTok, Instagram). Call this when the user asks about video tutorials, how-to videos, or learning content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Optional keywords to filter videos',
+          },
+        },
+      },
+    },
+  },
+];
+
+// ── Tool Execution ───────────────────────────────────────────────────
+
+async function executeTool(name, args) {
+  switch (name) {
+    case 'search_articles': {
+      const posts = await fetchRecentPosts();
+      if (!posts.length) return 'No articles found on the site right now.';
+      return 'NEWS ARTICLES (blog posts):\n' + posts.map(p =>
+        `- "${p.title}" [${p.category}] — link: /posts/${p.id}`
+      ).join('\n') + '\n\nIMPORTANT: Always include a clickable markdown link like [Article Title](/posts/id) when referencing an article.';
+    }
+    case 'search_workflows': {
+      const agents = await fetchRecentAgents();
+      if (!agents.length) return 'No workflows found on the marketplace right now.';
+      return 'AUTOMATION WORKFLOWS FOR SALE:\n' + agents.map(a =>
+        `- "${a.title}" [${a.category}${a.isFree ? ', FREE' : ''}] — link: /agents/${a.id}`
+      ).join('\n') + '\n\nIMPORTANT: Always include a clickable markdown link like [Workflow Title](/agents/id) when referencing a workflow.';
+    }
+    case 'search_prompts': {
+      const prompts = await fetchRecentPrompts();
+      if (!prompts.length) return 'No prompts found on the marketplace right now.';
+      return 'PROMPTS FOR SALE:\n' + prompts.map(p =>
+        `- "${p.title}" [${p.category}] — link: /prompts/${p.id}`
+      ).join('\n') + '\n\nIMPORTANT: Always include a clickable markdown link like [Prompt Title](/prompts/id) when referencing a prompt.';
+    }
+    case 'search_ai_tools': {
+      const tools = await fetchRecentAITools();
+      if (!tools.length) return 'No AI tools found in the directory right now.';
+      return 'AI TOOLS DIRECTORY (external third-party tools):\n' + tools.map(t =>
+        `- "${t.title}"${t.tags.length ? ` [${t.tags.slice(0, 3).join(', ')}]` : ''}${t.link ? ` — external link: ${t.link}` : ''}`
+      ).join('\n') + '\n\nThese are external tools. Share the external link when available. Users can browse all tools at /ai-tools.';
+    }
+    case 'search_videos': {
+      const videos = await fetchRecentVideos();
+      if (!videos.length) return 'No videos found right now.';
+      return 'VIDEO TUTORIALS:\n' + videos.map(v =>
+        `- "${v.title}" [${v.platform}${v.authorName ? `, by ${v.authorName}` : ''}]${v.originalUrl ? ` — watch: ${v.originalUrl}` : ''}`
+      ).join('\n') + '\n\nShare original URLs when available. Users can browse all videos at /videos.';
+    }
+    default:
+      return 'Unknown tool.';
+  }
+}
+
+// ── System Prompt (no content pre-loaded — tools handle retrieval) ───
 
 const BASE_SYSTEM_PROMPT = `You are a helpful AI assistant for the AI Waverider website (https://aiwaverider.com). Your purpose is to assist users in navigating the site, understanding our offerings, and answering questions.
 
@@ -145,29 +259,29 @@ Key information about AI Waverider:
 - Our program is designed to be accessible for non-technical people
 - We're located in Tbilisi, Georgia and offer services globally in multiple languages (Arabic, German, English, Spanish)
 
-Website pages and their URL patterns:
+Website pages:
 - Home: /
-- Latest Tech News (blog posts): /latest-tech — lists all posts
-- Individual post: /posts/{postId}
-- AI Agents marketplace: /agents — browse & purchase AI agents
-- Individual agent: /agents/{agentId}
-- Prompts marketplace: /prompts — browse & purchase prompts
-- Individual prompt: /prompts/{promptId}
-- AI Tools directory: /ai-tools — curated external AI tools (links open external websites)
-- Video Tutorials: /videos — YouTube, TikTok, and Instagram video content
+- Latest Tech News: /latest-tech
+- AI Agents marketplace: /agents
+- Prompts marketplace: /prompts
+- AI Tools directory: /ai-tools
+- Video Tutorials: /videos
 - Monetization Paths: /monetization-paths
 - About: /about
-- Profile: /profile
-- Checkout: /checkout
 
-IMPORTANT LINK RULES:
-- When referencing a specific post/article, ALWAYS use the format: /posts/{actual_post_id}
-- When referencing a specific agent, ALWAYS use the format: /agents/{actual_agent_id}
-- When referencing a specific prompt, use: /prompts/{actual_prompt_id}
-- For AI tools on the /ai-tools page: these are EXTERNAL tools. Direct users to /ai-tools to browse them. If you know the tool's external URL, you may share it.
-- For videos: direct users to /videos to watch them. If you know the video's original URL, you may share it.
-- NEVER guess or fabricate IDs. Only link to content listed in the AVAILABLE CONTENT section below.
-- If you don't have a matching item, direct the user to the relevant listing page (e.g., /latest-tech, /agents, /prompts, /ai-tools, /videos) instead of making up a link.
+YOU HAVE TOOLS to look up site content. Use them:
+- User asks about news/articles/blog posts → call search_articles
+- User asks about workflows/automations/agents to buy → call search_workflows
+- User asks about prompts → call search_prompts
+- User asks about AI tools/software → call search_ai_tools
+- User asks about videos/tutorials → call search_videos
+
+IMPORTANT RULES:
+- ALWAYS use the appropriate tool to look up content before referencing it. Do NOT make up links or IDs.
+- ALWAYS include clickable markdown links when referencing specific content (e.g., [Title](/posts/id)).
+- Do NOT mix content types. If a user asks about news, only call search_articles — do NOT also call search_workflows.
+- If the user's question is general (about AI Waverider, pricing, booking, etc.), answer directly without calling tools.
+- For simple questions like "hi" or "how are you", just respond conversationally — no need to call tools.
 
 CRITICAL BOOKING INSTRUCTIONS - ALWAYS FOLLOW THESE:
 When a user mentions ANY of these phrases or similar requests, you MUST include [SHOW_BOOKING_BUTTON] at the end:
@@ -184,118 +298,14 @@ ALWAYS respond with enthusiasm about booking and include [SHOW_BOOKING_BUTTON]. 
 
 Remember: EVERY booking-related request should get [SHOW_BOOKING_BUTTON] - no exceptions!`;
 
-/**
- * Build context-aware content section based on the page the user is on.
- */
-async function buildContentContext(pageContext) {
-  if (!pageContext || !pageContext.page) return '';
+// ── Build system message with lightweight page hint ──────────────────
 
-  const page = pageContext.page;
-  let items = [];
-  let section = '';
-
-  switch (page) {
-    case 'posts':
-    case 'post-detail': {
-      items = await fetchRecentPosts();
-      if (items.length) {
-        section = `\n\nAVAILABLE CONTENT — Recent Posts/Articles (the user is browsing the Latest Tech News page):\n`;
-        section += items.map(p =>
-          `- "${p.title}" [category: ${p.category}] → Link: /posts/${p.id}`
-        ).join('\n');
-        section += `\n\nWhen the user asks about an article or post, match their question to one of the posts above and link to it using /posts/{id}. Do NOT link to /agents/ for posts.`;
-      }
-      break;
-    }
-    case 'agents':
-    case 'agent-detail': {
-      items = await fetchRecentAgents();
-      if (items.length) {
-        section = `\n\nAVAILABLE CONTENT — AI Agents (the user is browsing the Agents marketplace):\n`;
-        section += items.map(a =>
-          `- "${a.title}" [${a.category}${a.isFree ? ', FREE' : ''}] → Link: /agents/${a.id}`
-        ).join('\n');
-        section += `\n\nWhen the user asks about an agent, match their question to one of the agents above and link to it using /agents/{id}.`;
-      }
-      break;
-    }
-    case 'prompts':
-    case 'prompt-detail': {
-      items = await fetchRecentPrompts();
-      if (items.length) {
-        section = `\n\nAVAILABLE CONTENT — Prompts (the user is browsing the Prompts marketplace):\n`;
-        section += items.map(p =>
-          `- "${p.title}" [${p.category}] → Link: /prompts/${p.id}`
-        ).join('\n');
-        section += `\n\nWhen the user asks about a prompt, match their question to one of the prompts above and link to it using /prompts/{id}.`;
-      }
-      break;
-    }
-    case 'ai-tools': {
-      items = await fetchRecentAITools();
-      if (items.length) {
-        section = `\n\nAVAILABLE CONTENT — AI Tools (the user is browsing the AI Tools directory):\n`;
-        section += items.map(a =>
-          `- "${a.title}"${a.tags.length ? ` [${a.tags.slice(0, 3).join(', ')}]` : ''}${a.link ? ` → External: ${a.link}` : ''}`
-        ).join('\n');
-        section += `\n\nThese are external tools. When the user asks about a tool, describe it and share its external link if available. Direct them to /ai-tools to browse the full directory.`;
-      }
-      break;
-    }
-    case 'videos': {
-      items = await fetchRecentVideos();
-      if (items.length) {
-        section = `\n\nAVAILABLE CONTENT — Videos (the user is browsing Video Tutorials):\n`;
-        section += items.map(v =>
-          `- "${v.title}" [${v.platform}${v.authorName ? `, by ${v.authorName}` : ''}]${v.originalUrl ? ` → Watch: ${v.originalUrl}` : ''}`
-        ).join('\n');
-        section += `\n\nWhen the user asks about a video, match their question to one of the videos above. Share the original URL if available. Direct them to /videos to browse all videos.`;
-      }
-      break;
-    }
-    case 'home': {
-      // On homepage, give a broad overview - fetch a few from each
-      const [posts, agents, prompts] = await Promise.all([
-        fetchRecentPosts(5),
-        fetchRecentAgents(5),
-        fetchRecentPrompts(5),
-      ]);
-      if (posts.length || agents.length || prompts.length) {
-        section = `\n\nAVAILABLE CONTENT — Overview of recent items on the site:\n`;
-        if (posts.length) {
-          section += `\nRecent posts:\n` + posts.map(p => `- "${p.title}" → /posts/${p.id}`).join('\n');
-        }
-        if (agents.length) {
-          section += `\nRecent agents:\n` + agents.map(a => `- "${a.title}" → /agents/${a.id}`).join('\n');
-        }
-        if (prompts.length) {
-          section += `\nRecent prompts:\n` + prompts.map(p => `- "${p.title}" → /prompts/${p.id}`).join('\n');
-        }
-        section += `\n\nUse the correct URL pattern for each content type.`;
-      }
-      break;
-    }
-    default:
-      // For other pages (monetization, about, etc.), no content injection needed
-      break;
+function buildSystemMessage(pageContext) {
+  let content = BASE_SYSTEM_PROMPT;
+  if (pageContext && pageContext.pageTitle) {
+    content += `\n\nThe user is currently on the "${pageContext.pageTitle}" page.`;
   }
-
-  // Add page context hint
-  if (pageContext.pageTitle) {
-    section = `\n\nThe user is currently on the "${pageContext.pageTitle}" page.` + section;
-  }
-
-  return section;
-}
-
-// ── Helper: build the full system message ────────────────────────────
-
-async function buildSystemMessage(pageContext) {
-  const contentContext = await buildContentContext(pageContext);
-  return {
-    role: 'system',
-    content: BASE_SYSTEM_PROMPT + contentContext,
-  };
+  return { role: 'system', content };
 }
 
 // ── Helper: validate request ─────────────────────────────────────────
@@ -316,6 +326,36 @@ function validateRequest(req, res) {
   return messages;
 }
 
+// ── Helper: handle tool calls in a conversation ──────────────────────
+
+async function handleToolCalls(openai, allMessages, toolCalls) {
+  // Build the assistant message that triggered tool calls
+  const assistantToolMsg = {
+    role: 'assistant',
+    content: null,
+    tool_calls: toolCalls.map(tc => ({
+      id: tc.id,
+      type: 'function',
+      function: { name: tc.name, arguments: tc.arguments },
+    })),
+  };
+
+  // Execute each tool and build result messages
+  const toolResultMessages = [];
+  for (const tc of toolCalls) {
+    let args = {};
+    try { args = JSON.parse(tc.arguments || '{}'); } catch (_) {}
+    const result = await executeTool(tc.name, args);
+    toolResultMessages.push({
+      role: 'tool',
+      tool_call_id: tc.id,
+      content: result,
+    });
+  }
+
+  return [...allMessages, assistantToolMsg, ...toolResultMessages];
+}
+
 // ── Non-streaming endpoint: POST /api/chat ───────────────────────────
 
 exports.processChat = async (req, res) => {
@@ -324,18 +364,52 @@ exports.processChat = async (req, res) => {
     if (!messages) return;
 
     const { pageContext } = req.body;
-
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const systemMessage = await buildSystemMessage(pageContext);
+    const systemMessage = buildSystemMessage(pageContext);
+    const allMessages = [systemMessage, ...messages];
 
-    const completion = await openai.chat.completions.create({
+    // First call — may return content or tool_calls
+    const firstCompletion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
-      messages: [systemMessage, ...messages],
+      messages: allMessages,
       max_tokens: 600,
       temperature: 0.7,
+      tools: CHAT_TOOLS,
     });
 
-    const assistantMessage = completion.choices[0].message.content;
+    const firstChoice = firstCompletion.choices[0];
+
+    // If model called tools, execute them and make a second call
+    if (firstChoice.finish_reason === 'tool_calls' && firstChoice.message.tool_calls) {
+      const toolCalls = firstChoice.message.tool_calls.map(tc => ({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: tc.function.arguments,
+      }));
+
+      const messagesWithTools = await handleToolCalls(openai, allMessages, toolCalls);
+
+      // Second call — no tools, just generate the final answer
+      const secondCompletion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: messagesWithTools,
+        max_tokens: 600,
+        temperature: 0.7,
+      });
+
+      const assistantMessage = secondCompletion.choices[0].message.content;
+      const shouldShowBookingButton = assistantMessage.includes('[SHOW_BOOKING_BUTTON]');
+      const cleanMessage = assistantMessage.replaceAll('[SHOW_BOOKING_BUTTON]', '').trim();
+
+      return res.status(200).json({
+        success: true,
+        message: cleanMessage,
+        showBookingButton: shouldShowBookingButton,
+      });
+    }
+
+    // No tool calls — direct response
+    const assistantMessage = firstChoice.message.content || '';
     const shouldShowBookingButton = assistantMessage.includes('[SHOW_BOOKING_BUTTON]');
     const cleanMessage = assistantMessage.replaceAll('[SHOW_BOOKING_BUTTON]', '').trim();
 
@@ -367,34 +441,78 @@ exports.processChatStream = async (req, res) => {
     if (!messages) return;
 
     const { pageContext } = req.body;
-
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const systemMessage = await buildSystemMessage(pageContext);
+    const systemMessage = buildSystemMessage(pageContext);
+    const allMessages = [systemMessage, ...messages];
 
     // Set SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
-    const stream = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [systemMessage, ...messages],
-      max_tokens: 600,
-      temperature: 0.7,
-      stream: true,
-    });
-
-    // Handle client disconnect
     let aborted = false;
     req.on('close', () => { aborted = true; });
 
-    for await (const chunk of stream) {
+    // First call — stream with tools
+    const firstStream = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: allMessages,
+      max_tokens: 600,
+      temperature: 0.7,
+      tools: CHAT_TOOLS,
+      stream: true,
+    });
+
+    // Collect the response — could be content tokens or tool_calls
+    let toolCallsMap = {};
+    let hasToolCalls = false;
+
+    for await (const chunk of firstStream) {
       if (aborted) break;
-      const token = chunk.choices[0]?.delta?.content;
-      if (token) {
-        res.write(`data: ${JSON.stringify({ token })}\n\n`);
+      const delta = chunk.choices[0]?.delta;
+
+      // Accumulate tool calls from delta chunks
+      if (delta?.tool_calls) {
+        hasToolCalls = true;
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index;
+          if (!toolCallsMap[idx]) {
+            toolCallsMap[idx] = { id: '', name: '', arguments: '' };
+          }
+          if (tc.id) toolCallsMap[idx].id = tc.id;
+          if (tc.function?.name) toolCallsMap[idx].name = tc.function.name;
+          if (tc.function?.arguments) toolCallsMap[idx].arguments += tc.function.arguments;
+        }
+      }
+
+      // Stream content tokens directly to client
+      if (delta?.content) {
+        res.write(`data: ${JSON.stringify({ token: delta.content })}\n\n`);
+      }
+    }
+
+    // If model called tools, execute them and stream a second response
+    if (hasToolCalls && !aborted) {
+      const toolCalls = Object.values(toolCallsMap);
+      const messagesWithTools = await handleToolCalls(openai, allMessages, toolCalls);
+
+      // Second stream — final answer with tool results, no tools offered
+      const secondStream = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: messagesWithTools,
+        max_tokens: 600,
+        temperature: 0.7,
+        stream: true,
+      });
+
+      for await (const chunk of secondStream) {
+        if (aborted) break;
+        const token = chunk.choices[0]?.delta?.content;
+        if (token) {
+          res.write(`data: ${JSON.stringify({ token })}\n\n`);
+        }
       }
     }
 
@@ -404,7 +522,6 @@ exports.processChatStream = async (req, res) => {
     }
   } catch (error) {
     console.error('Chat stream error:', error.message);
-    // If headers already sent, try to send error via SSE
     if (res.headersSent) {
       res.write(`data: ${JSON.stringify({ error: 'Stream interrupted' })}\n\n`);
       res.write('data: [DONE]\n\n');
