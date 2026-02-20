@@ -488,6 +488,78 @@ const freeDownload = async (req, res) => {
 };
 
 // ==========================================
+// POST /api/apps/:appId/skool-download — Free download for Skool members
+// ==========================================
+const skoolDownload = async (req, res) => {
+  try {
+    const { appId } = req.params;
+    const { email, accessCode } = req.body;
+
+    if (!accessCode) {
+      return res.status(400).json({ error: 'Access code is required' });
+    }
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Please enter a valid email address' });
+    }
+
+    // Get the app and its Skool access code
+    const appResult = await pool.query(
+      'SELECT title, download_url, external_url, price_details FROM apps WHERE id = $1',
+      [appId]
+    );
+    if (appResult.rows.length === 0) {
+      return res.status(404).json({ error: 'App not found' });
+    }
+
+    const app = appResult.rows[0];
+    const priceDetails = app.price_details || {};
+
+    if (!priceDetails.freeForSkool) {
+      return res.status(403).json({ error: 'This app is not available for free Skool download' });
+    }
+
+    // Validate access code
+    const storedCode = priceDetails.skoolAccessCode;
+    if (!storedCode || accessCode.trim().toLowerCase() !== storedCode.trim().toLowerCase()) {
+      return res.status(403).json({ error: 'Invalid access code' });
+    }
+
+    const downloadUrl = app.download_url || app.external_url || null;
+    if (!downloadUrl) {
+      return res.status(404).json({ error: 'No download file available for this app' });
+    }
+
+    // Record the Skool download (email capture)
+    try {
+      await pool.query(
+        `INSERT INTO skool_downloads (id, app_id, email, created_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (app_id, email) DO UPDATE SET download_count = skool_downloads.download_count + 1, last_downloaded_at = NOW()`,
+        [uuidv4(), appId, email.toLowerCase().trim()]
+      );
+    } catch (dbErr) {
+      // Table might not exist yet — log and continue, don't block the download
+      logger.warn('Could not record skool download (table may not exist):', dbErr.message);
+    }
+
+    // Increment app download count
+    await pool.query('UPDATE apps SET download_count = download_count + 1 WHERE id = $1', [appId]);
+
+    logger.info(`Skool download: ${email} downloaded "${app.title}" with access code`);
+    res.status(200).json({ downloadUrl, title: app.title });
+  } catch (error) {
+    logger.error('Error processing Skool download:', error);
+    res.status(500).json({ error: 'Failed to process download' });
+  }
+};
+
+// ==========================================
 // GET /api/apps/:appId/download-link — Get download URL (purchased apps only)
 // ==========================================
 const getDownloadLink = async (req, res) => {
@@ -566,6 +638,7 @@ module.exports = {
   updateApp,
   deleteApp,
   freeDownload,
+  skoolDownload,
   getDownloadLink,
   incrementViews,
   refreshCache,

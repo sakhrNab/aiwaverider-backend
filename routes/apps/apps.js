@@ -29,6 +29,9 @@ router.post('/:appId/views', appsController.incrementViews);
 // Free download tracking
 router.post('/:appId/download', appsController.freeDownload);
 
+// Skool member free download (email + access code)
+router.post('/:appId/skool-download', appsController.skoolDownload);
+
 // Get download link for purchased apps (auth required)
 router.get('/:appId/download-link', validateFirebaseToken, appsController.getDownloadLink);
 
