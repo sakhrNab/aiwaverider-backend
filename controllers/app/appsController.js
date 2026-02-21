@@ -1,11 +1,27 @@
 console.log('Loading appsController.js');
 
 const fs = require('fs');
+const admin = require('firebase-admin');
 const { pool } = require('../../config/database');
 const logger = require('../../utils/logger');
 const { v4: uuidv4 } = require('uuid');
 const { uploadFileFromPath, deleteImageFromStorage } = require('../../utils/storage');
 const { indexSingleApp, removeFromIndex } = require('../../services/rag/qdrantService');
+const { getEmailSettings } = require('../../models/siteSettings');
+
+/**
+ * Build a clean PascalCase filename from app title + storage path extension.
+ */
+const buildCleanFilename = (title, storagePath) => {
+  const ext = (storagePath || '').split('.').pop() || 'zip';
+  const clean = (title || 'Download')
+    .replace(/[^a-zA-Z0-9\s]/g, '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+    .join('');
+  return `${clean}.${ext}`;
+};
 
 /**
  * Clean up temp files written by multer diskStorage.
@@ -554,17 +570,22 @@ const skoolDownload = async (req, res) => {
     logger.info(`Skool download: ${email} downloaded "${app.title}" with access code`);
     res.status(200).json({ downloadUrl, title: app.title });
 
-    // Send thank-you email in background (don't block the response)
+    // Send thank-you email in background (don't block the response) — check admin toggle
     try {
-      const emailService = require('../../services/email/emailService');
-      await emailService.sendSkoolDownloadEmail({
-        email: email.toLowerCase().trim(),
-        appName: app.title,
-        appDescription: app.short_description || '',
-        downloadUrl,
-        isRegistered: false // We don't know — the banner hides email field for logged-in users
-      });
-      logger.info(`Skool download receipt email sent to ${email}`);
+      const emailSettingsData = await getEmailSettings();
+      if (emailSettingsData.autoSkoolDownloadEmail !== false) {
+        const emailService = require('../../services/email/emailService');
+        await emailService.sendSkoolDownloadEmail({
+          email: email.toLowerCase().trim(),
+          appName: app.title,
+          appDescription: app.short_description || '',
+          downloadUrl,
+          isRegistered: false
+        });
+        logger.info(`Skool download receipt email sent to ${email}`);
+      } else {
+        logger.info(`Skool download email skipped for ${email} — autoSkoolDownloadEmail is disabled`);
+      }
     } catch (emailErr) {
       logger.warn(`Failed to send Skool download email to ${email}: ${emailErr.message}`);
     }
@@ -733,6 +754,62 @@ const getSkoolLeadEmails = async (req, res) => {
   }
 };
 
+// ==========================================
+// GET /api/apps/:appId/file — Serve download with clean filename
+// ==========================================
+const serveFile = async (req, res) => {
+  try {
+    const { appId } = req.params;
+    const result = await pool.query(
+      'SELECT title, download_url, download_filename, external_url FROM apps WHERE id = $1',
+      [appId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'App not found' });
+    }
+
+    const app = result.rows[0];
+    const storagePath = app.download_filename;
+
+    // If no file stored in Firebase, redirect to external URL as fallback
+    if (!storagePath) {
+      const fallbackUrl = app.download_url || app.external_url;
+      if (fallbackUrl) return res.redirect(fallbackUrl);
+      return res.status(404).json({ error: 'No download file available' });
+    }
+
+    const bucket = admin.storage().bucket();
+    const fileRef = bucket.file(storagePath);
+
+    const [exists] = await fileRef.exists();
+    if (!exists) {
+      return res.status(404).json({ error: 'File not found in storage' });
+    }
+
+    const [metadata] = await fileRef.getMetadata();
+    const filename = buildCleanFilename(app.title, storagePath);
+
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', metadata.contentType || 'application/octet-stream');
+    if (metadata.size) res.setHeader('Content-Length', metadata.size);
+
+    const readStream = fileRef.createReadStream();
+    readStream.pipe(res);
+    readStream.on('error', (err) => {
+      logger.error('File stream error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to stream file' });
+      }
+    });
+  } catch (error) {
+    logger.error('Error serving file:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to serve file' });
+    }
+  }
+};
+
 module.exports = {
   getApps,
   getAppById,
@@ -747,4 +824,5 @@ module.exports = {
   getSkoolLeadEmails,
   incrementViews,
   refreshCache,
+  serveFile,
 };

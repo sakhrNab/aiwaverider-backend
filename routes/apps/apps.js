@@ -29,6 +29,9 @@ router.get('/', appsController.getApps);
 // Get single app by ID or slug
 router.get('/:appId', appsController.getAppById);
 
+// Serve download file with clean filename
+router.get('/:appId/file', appsController.serveFile);
+
 // Track views
 router.post('/:appId/views', appsController.incrementViews);
 
