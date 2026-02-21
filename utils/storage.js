@@ -30,6 +30,7 @@ const uploadImageToStorage = async (fileBuffer, originalFilename, folderPath = '
       await fileRef.save(fileBuffer, {
         metadata: {
           contentType: getContentType(originalFilename),
+          contentDisposition: `attachment; filename="${sanitizedFilename}"`,
         },
       });
 
@@ -83,6 +84,7 @@ const uploadFileFromPath = async (filePath, originalFilename, folderPath = 'apps
         const writeStream = fileRef.createWriteStream({
           metadata: {
             contentType: getContentType(originalFilename),
+            contentDisposition: `attachment; filename="${sanitizedFilename}"`,
           },
           resumable: true, // Enables resumable uploads for large files
         });
