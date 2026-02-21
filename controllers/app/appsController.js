@@ -755,6 +755,43 @@ const getSkoolLeadEmails = async (req, res) => {
 };
 
 // ==========================================
+// DELETE /api/apps/:appId/download-file — Remove only the download file (admin)
+// ==========================================
+const deleteDownloadFile = async (req, res) => {
+  try {
+    const { appId } = req.params;
+    const existing = await pool.query('SELECT download_url, download_filename, title FROM apps WHERE id = $1', [appId]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'App not found' });
+    }
+
+    const app = existing.rows[0];
+    if (!app.download_filename && !app.download_url) {
+      return res.status(400).json({ error: 'No download file to remove' });
+    }
+
+    // Delete from Firebase Storage
+    if (app.download_filename) {
+      deleteImageFromStorage(app.download_filename).catch((err) => {
+        logger.warn(`Failed to delete file from storage: ${err.message}`);
+      });
+    }
+
+    // Clear download fields in DB
+    await pool.query(
+      'UPDATE apps SET download_url = NULL, download_filename = NULL WHERE id = $1',
+      [appId]
+    );
+
+    logger.info(`Download file removed from app: ${appId} — "${app.title}"`);
+    res.status(200).json({ success: true, message: 'Download file removed' });
+  } catch (error) {
+    logger.error('Error removing download file:', error);
+    res.status(500).json({ error: 'Failed to remove download file' });
+  }
+};
+
+// ==========================================
 // GET /api/apps/:appId/file — Serve download with clean filename
 // ==========================================
 const serveFile = async (req, res) => {
@@ -825,4 +862,5 @@ module.exports = {
   incrementViews,
   refreshCache,
   serveFile,
+  deleteDownloadFile,
 };

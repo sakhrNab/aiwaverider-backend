@@ -55,6 +55,9 @@ router.post('/', validateFirebaseToken, isAdmin, appFields, appsController.creat
 // Update app
 router.put('/:appId', validateFirebaseToken, isAdmin, appFields, appsController.updateApp);
 
+// Remove only the download file (keeps the app)
+router.delete('/:appId/download-file', validateFirebaseToken, isAdmin, appsController.deleteDownloadFile);
+
 // Delete app
 router.delete('/:appId', validateFirebaseToken, isAdmin, appsController.deleteApp);
 
