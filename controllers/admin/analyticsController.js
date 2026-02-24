@@ -49,6 +49,7 @@ exports.getAnalyticsData = async (req, res) => {
       revenueTimeRes,
       topAgentsRes,
       userActivityRes,
+      newUsersListRes,
     ] = await Promise.all([
       // Total users
       pool.query('SELECT COUNT(*) AS total FROM users'),
@@ -107,6 +108,14 @@ exports.getAnalyticsData = async (req, res) => {
         LEFT JOIN orders o ON o.user_id = u.id AND o.status = 'completed'
         GROUP BY u.id ORDER BY u.updated_at DESC NULLS LAST LIMIT 20
       `),
+
+      // New users detail list (for expandable panel)
+      pool.query(`
+        SELECT id, email, first_name, last_name, display_name, photo_url,
+               signup_method, created_at
+        FROM users WHERE created_at >= $1
+        ORDER BY created_at DESC LIMIT 50
+      `, [startDate]),
     ]);
 
     const totalUsers = parseInt(totalUsersRes.rows[0].total);
@@ -157,10 +166,21 @@ exports.getAnalyticsData = async (req, res) => {
 
     const revenue = parseFloat(ordersRow.revenue) || 0;
 
+    const newUsersList = newUsersListRes.rows.map(u => ({
+      id: u.id,
+      email: u.email,
+      firstName: u.first_name || '',
+      lastName: u.last_name || '',
+      displayName: u.display_name || '',
+      photoUrl: u.photo_url || '',
+      signupMethod: u.signup_method || 'unknown',
+      joinedAt: u.created_at,
+    }));
+
     return res.status(200).json({
       success: true,
       data: {
-        users: { total: totalUsers, new: newUsers, active: activeUsers, data: userGrowthData },
+        users: { total: totalUsers, new: newUsers, active: activeUsers, data: userGrowthData, newUsersList },
         agents: {
           total: parseInt(agentsRow.total),
           free: parseInt(agentsRow.free),
