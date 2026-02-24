@@ -6,6 +6,18 @@
 const { pool } = require('../../config/database');
 const logger = require('../../utils/logger');
 
+// Test/internal emails to exclude from revenue calculations
+const EXCLUDED_EMAILS = [
+  'aiwaverider8@gmail.com',
+  'customer@example.com',
+  'testuser@gmail.com',
+  'test@email.com',
+  'test@gmail.com',
+];
+
+// Orders with these statuses count as successful
+const COMPLETED_STATUSES = ['completed', 'successful'];
+
 /**
  * Calculate start date based on time range
  */
@@ -50,6 +62,9 @@ exports.getAnalyticsData = async (req, res) => {
       topAgentsRes,
       userActivityRes,
       newUsersListRes,
+      appsRes,
+      appViewsRes,
+      topAppsRes,
     ] = await Promise.all([
       // Total users
       pool.query('SELECT COUNT(*) AS total FROM users'),
@@ -69,11 +84,13 @@ exports.getAnalyticsData = async (req, res) => {
         FROM agents
       `),
 
-      // Orders summary (completed)
+      // Orders summary — exclude test emails, include both completed & successful
       pool.query(`
         SELECT COUNT(*) AS total, COALESCE(SUM(total), 0) AS revenue
-        FROM orders WHERE status = 'completed'
-      `),
+        FROM orders
+        WHERE status = ANY($1)
+          AND LOWER(user_email) != ALL($2)
+      `, [COMPLETED_STATUSES, EXCLUDED_EMAILS]),
 
       // Total views from agents
       pool.query('SELECT COALESCE(SUM(view_count), 0) AS total FROM agents'),
@@ -85,12 +102,15 @@ exports.getAnalyticsData = async (req, res) => {
         GROUP BY DATE(created_at) ORDER BY day
       `, [startDate]),
 
-      // Time series: revenue by day
+      // Time series: revenue by day — exclude test emails
       pool.query(`
         SELECT DATE(created_at) AS day, COALESCE(SUM(total), 0) AS value
-        FROM orders WHERE status = 'completed' AND created_at >= $1
+        FROM orders
+        WHERE status = ANY($1)
+          AND LOWER(user_email) != ALL($2)
+          AND created_at >= $3
         GROUP BY DATE(created_at) ORDER BY day
-      `, [startDate]),
+      `, [COMPLETED_STATUSES, EXCLUDED_EMAILS, startDate]),
 
       // Top agents by downloads
       pool.query(`
@@ -99,15 +119,17 @@ exports.getAnalyticsData = async (req, res) => {
         FROM agents ORDER BY download_count DESC LIMIT 10
       `),
 
-      // User activity with purchase stats
+      // User activity with purchase stats — exclude test emails from order joins
       pool.query(`
         SELECT u.id, u.username, u.email, u.created_at, u.updated_at,
                COUNT(DISTINCT o.id) AS purchases,
                COALESCE(SUM(o.total), 0) AS revenue
         FROM users u
-        LEFT JOIN orders o ON o.user_id = u.id AND o.status = 'completed'
+        LEFT JOIN orders o ON o.user_id = u.id
+          AND o.status = ANY($1)
+          AND LOWER(o.user_email) != ALL($2)
         GROUP BY u.id ORDER BY u.updated_at DESC NULLS LAST LIMIT 20
-      `),
+      `, [COMPLETED_STATUSES, EXCLUDED_EMAILS]),
 
       // New users detail list (for expandable panel)
       pool.query(`
@@ -116,6 +138,25 @@ exports.getAnalyticsData = async (req, res) => {
         FROM users WHERE created_at >= $1
         ORDER BY created_at DESC LIMIT 50
       `, [startDate]),
+
+      // Apps summary
+      pool.query(`
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE is_free = true OR price = 0) AS free,
+               COUNT(*) FILTER (WHERE is_free IS NOT TRUE AND price > 0) AS paid,
+               COALESCE(SUM(download_count), 0) AS downloads
+        FROM apps
+      `),
+
+      // Total views from apps
+      pool.query('SELECT COALESCE(SUM(view_count), 0) AS total FROM apps'),
+
+      // Top apps by downloads
+      pool.query(`
+        SELECT id, title, type, category, download_count, view_count,
+               price, is_free, rating_average, rating_count
+        FROM apps ORDER BY download_count DESC LIMIT 10
+      `),
     ]);
 
     const totalUsers = parseInt(totalUsersRes.rows[0].total);
@@ -177,6 +218,23 @@ exports.getAnalyticsData = async (req, res) => {
       joinedAt: u.created_at,
     }));
 
+    // Apps analytics
+    const appsRow = appsRes.rows[0];
+    const appViews = parseInt(appViewsRes.rows[0].total);
+
+    const topApps = topAppsRes.rows.map(a => ({
+      id: a.id,
+      name: a.title,
+      type: a.type || 'app',
+      category: a.category || '',
+      downloads: parseInt(a.download_count) || 0,
+      views: parseInt(a.view_count) || 0,
+      price: parseFloat(a.price) || 0,
+      isFree: a.is_free || parseFloat(a.price) === 0,
+      rating: parseFloat(a.rating_average) || 0,
+      reviews: parseInt(a.rating_count) || 0,
+    }));
+
     return res.status(200).json({
       success: true,
       data: {
@@ -187,10 +245,18 @@ exports.getAnalyticsData = async (req, res) => {
           paid: parseInt(agentsRow.paid),
           downloads: parseInt(agentsRow.downloads),
         },
+        apps: {
+          total: parseInt(appsRow.total),
+          free: parseInt(appsRow.free),
+          paid: parseInt(appsRow.paid),
+          downloads: parseInt(appsRow.downloads),
+          views: appViews,
+        },
         sales: { total: revenue, data: salesData },
         orders: { total: parseInt(ordersRow.total), revenue },
         visitors: { total: totalViews, data: visitorData },
         topAgents,
+        topApps,
         userActivity,
       },
     });
