@@ -41,7 +41,8 @@ const normalizeVideoRow = (row) => {
     addedBy: row.added_by,
     addedByUid: row.added_by_uid,
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
-    lastFetched: row.last_fetched ? new Date(row.last_fetched).toISOString() : null
+    lastFetched: row.last_fetched ? new Date(row.last_fetched).toISOString() : null,
+    category: row.category || 'general'
   };
 };
 
