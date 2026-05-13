@@ -188,7 +188,7 @@ const addVideo = async (req, res) => {
  */
 const listVideos = async (req, res) => {
   try {
-    const { platform, page = 1, category } = req.query;
+    const { platform, page = 1, category, search } = req.query;
 
     // Validate platform parameter
     if (!platform) {
@@ -215,16 +215,19 @@ const listVideos = async (req, res) => {
     }
 
     const categoryFilter = category && category !== 'all' ? category : null;
+    const searchTerm = search && search.trim() ? search.trim() : null;
 
-    // Check Redis cache first
+    // Check Redis cache first (skip cache for search queries — they're too varied to cache efficiently)
     const cacheKey = `video_list:${platform}:page=${pageNum}${categoryFilter ? `:cat=${categoryFilter}` : ''}`;
-    const cached = await getCache(cacheKey);
-    if (cached) {
-      console.log(`Cache hit for video list: ${platform}, page ${pageNum}`);
-      return res.json(cached);
+    if (!searchTerm) {
+      const cached = await getCache(cacheKey);
+      if (cached) {
+        console.log(`Cache hit for video list: ${platform}, page ${pageNum}`);
+        return res.json(cached);
+      }
     }
 
-    console.log(`Fetching ${platform} videos (cache miss), page ${pageNum}`);
+    console.log(`Fetching ${platform} videos (cache miss), page ${pageNum}${searchTerm ? `, search="${searchTerm}"` : ''}`);
 
     // Ensure in-memory cache loaded for this platform
     await ensureVideosCacheLoaded(platform);
@@ -232,22 +235,29 @@ const listVideos = async (req, res) => {
     const offset = (pageNum - 1) * PAGE_SIZE;
 
     let allVideosResult;
+    const queryParams = [platform];
+    let paramIdx = 2;
+
+    let whereClause = 'WHERE platform = $1';
+
     if (categoryFilter) {
-      allVideosResult = await pool.query(
-        'SELECT * FROM videos WHERE platform = $1 AND $2 = ANY(categories) ORDER BY created_at DESC',
-        [platform, categoryFilter]
-      );
-    } else if (platform === 'tiktok') {
-      allVideosResult = await pool.query(
-        'SELECT * FROM videos WHERE platform = $1',
-        [platform]
-      );
-    } else {
-      allVideosResult = await pool.query(
-        'SELECT * FROM videos WHERE platform = $1 ORDER BY created_at DESC',
-        [platform]
-      );
+      whereClause += ` AND $${paramIdx} = ANY(categories)`;
+      queryParams.push(categoryFilter);
+      paramIdx++;
     }
+
+    if (searchTerm) {
+      const searchPattern = `%${searchTerm}%`;
+      whereClause += ` AND (title ILIKE $${paramIdx} OR description ILIKE $${paramIdx} OR author_name ILIKE $${paramIdx} OR author_user ILIKE $${paramIdx} OR category ILIKE $${paramIdx} OR EXISTS (SELECT 1 FROM unnest(categories) AS cat WHERE cat ILIKE $${paramIdx}))`;
+      queryParams.push(searchPattern);
+      paramIdx++;
+    }
+
+    const orderClause = platform === 'tiktok' && !searchTerm && !categoryFilter ? '' : ' ORDER BY created_at DESC';
+    allVideosResult = await pool.query(
+      `SELECT * FROM videos ${whereClause}${orderClause}`,
+      queryParams
+    );
 
     const allVideos = [];
     for (const row of allVideosResult.rows) {
