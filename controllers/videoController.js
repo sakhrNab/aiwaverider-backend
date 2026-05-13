@@ -186,7 +186,7 @@ const addVideo = async (req, res) => {
  */
 const listVideos = async (req, res) => {
   try {
-    const { platform, page = 1 } = req.query;
+    const { platform, page = 1, category } = req.query;
 
     // Validate platform parameter
     if (!platform) {
@@ -212,8 +212,10 @@ const listVideos = async (req, res) => {
       });
     }
 
+    const categoryFilter = category && category !== 'all' ? category : null;
+
     // Check Redis cache first
-    const cacheKey = `video_list:${platform}:page=${pageNum}`;
+    const cacheKey = `video_list:${platform}:page=${pageNum}${categoryFilter ? `:cat=${categoryFilter}` : ''}`;
     const cached = await getCache(cacheKey);
     if (cached) {
       console.log(`Cache hit for video list: ${platform}, page ${pageNum}`);
@@ -225,84 +227,63 @@ const listVideos = async (req, res) => {
     // Ensure in-memory cache loaded for this platform
     await ensureVideosCacheLoaded(platform);
 
-    // Compute totals from in-memory cache
-    const allForPlatform = videosCacheByPlatform[platform] || [];
-    const totalVideos = allForPlatform.length;
-    const totalPages = Math.ceil(totalVideos / PAGE_SIZE);
-
-    // Paginate from in-memory cache
     const offset = (pageNum - 1) * PAGE_SIZE;
 
-    let videos = [];
-
-    if (totalVideos > 0) {
-      // Fetch all documents for this platform from PostgreSQL
-      let allVideosResult;
-
-      if (platform === 'tiktok') {
-        allVideosResult = await pool.query(
-          'SELECT * FROM videos WHERE platform = $1',
-          [platform]
-        );
-      } else {
-        allVideosResult = await pool.query(
-          'SELECT * FROM videos WHERE platform = $1 ORDER BY created_at DESC',
-          [platform]
-        );
-      }
-
-      // Process each video row
-      const allVideos = [];
-      for (const row of allVideosResult.rows) {
-        const videoData = normalizeVideoRow(row);
-
-        // Only try to refresh metadata for platforms that provide real-time stats
-        // Instagram doesn't provide public stats, so skip the refresh
-        if (platform !== 'instagram') {
-          try {
-            // Check if originalUrl exists before trying to extract video ID
-            if (videoData.originalUrl) {
-              const metaCacheKey = `video_meta:${platform}:${extractVideoId[platform](videoData.originalUrl)}`;
-              const freshMeta = await getCache(metaCacheKey);
-
-              if (freshMeta) {
-                videoData.views = freshMeta.views;
-                videoData.likes = freshMeta.likes;
-              }
-            } else {
-              console.warn(`Video ${videoData.id} has undefined originalUrl, skipping metadata refresh`);
-            }
-          } catch (error) {
-            console.warn(`Could not extract video ID for ${videoData.originalUrl}:`, error.message);
-          }
-        }
-
-        // Calculate engagement score for TikTok (likes + views)
-        if (platform === 'tiktok') {
-          const views = parseInt(videoData.views) || 0;
-          const likes = parseInt(videoData.likes) || 0;
-          const comments = parseInt(videoData.commentsCount) || 0;
-          const shares = parseInt(videoData.shares) || 0;
-          // Engagement = likes + (views * 0.01) + (comments * 2) + (shares * 3)
-          // This weights likes most heavily, then comments, then shares, then views
-          videoData.engagementScore = likes + (views * 0.01) + (comments * 2) + (shares * 3);
-        }
-
-        allVideos.push(videoData);
-      }
-
-      // Sort TikTok videos by engagement score (highest first)
-      if (platform === 'tiktok') {
-        allVideos.sort((a, b) => {
-          const scoreA = a.engagementScore || 0;
-          const scoreB = b.engagementScore || 0;
-          return scoreB - scoreA; // Descending order
-        });
-      }
-
-      // Apply pagination
-      videos = allVideos.slice(offset, offset + PAGE_SIZE);
+    let allVideosResult;
+    if (categoryFilter) {
+      allVideosResult = await pool.query(
+        'SELECT * FROM videos WHERE platform = $1 AND category = $2 ORDER BY created_at DESC',
+        [platform, categoryFilter]
+      );
+    } else if (platform === 'tiktok') {
+      allVideosResult = await pool.query(
+        'SELECT * FROM videos WHERE platform = $1',
+        [platform]
+      );
+    } else {
+      allVideosResult = await pool.query(
+        'SELECT * FROM videos WHERE platform = $1 ORDER BY created_at DESC',
+        [platform]
+      );
     }
+
+    const allVideos = [];
+    for (const row of allVideosResult.rows) {
+      const videoData = normalizeVideoRow(row);
+
+      if (platform !== 'instagram') {
+        try {
+          if (videoData.originalUrl) {
+            const metaCacheKey = `video_meta:${platform}:${extractVideoId[platform](videoData.originalUrl)}`;
+            const freshMeta = await getCache(metaCacheKey);
+            if (freshMeta) {
+              videoData.views = freshMeta.views;
+              videoData.likes = freshMeta.likes;
+            }
+          }
+        } catch (error) {
+          console.warn(`Could not extract video ID for ${videoData.originalUrl}:`, error.message);
+        }
+      }
+
+      if (platform === 'tiktok') {
+        const views = parseInt(videoData.views) || 0;
+        const likes = parseInt(videoData.likes) || 0;
+        const comments = parseInt(videoData.commentsCount) || 0;
+        const shares = parseInt(videoData.shares) || 0;
+        videoData.engagementScore = likes + (views * 0.01) + (comments * 2) + (shares * 3);
+      }
+
+      allVideos.push(videoData);
+    }
+
+    if (platform === 'tiktok') {
+      allVideos.sort((a, b) => (b.engagementScore || 0) - (a.engagementScore || 0));
+    }
+
+    const totalVideos = allVideos.length;
+    const totalPages = Math.ceil(totalVideos / PAGE_SIZE);
+    const videos = allVideos.slice(offset, offset + PAGE_SIZE);
 
     const response = {
       videos,
