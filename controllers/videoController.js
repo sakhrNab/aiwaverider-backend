@@ -42,7 +42,8 @@ const normalizeVideoRow = (row) => {
     addedByUid: row.added_by_uid,
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
     lastFetched: row.last_fetched ? new Date(row.last_fetched).toISOString() : null,
-    category: row.category || 'general'
+    category: row.category || 'general',
+    categories: row.categories || [row.category || 'general']
   };
 };
 
@@ -233,7 +234,7 @@ const listVideos = async (req, res) => {
     let allVideosResult;
     if (categoryFilter) {
       allVideosResult = await pool.query(
-        'SELECT * FROM videos WHERE platform = $1 AND category = $2 ORDER BY created_at DESC',
+        'SELECT * FROM videos WHERE platform = $1 AND $2 = ANY(categories) ORDER BY created_at DESC',
         [platform, categoryFilter]
       );
     } else if (platform === 'tiktok') {
