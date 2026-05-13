@@ -18,6 +18,23 @@ const {
 } = require('../../utils/cache');
 const { indexSinglePost, removeFromIndex } = require('../../services/rag/qdrantService');
 
+const normalizePostRow = (row) => ({
+  id: row.id,
+  title: row.title,
+  description: row.description,
+  category: row.category,
+  imageUrl: row.image_url,
+  imageFilename: row.image_filename,
+  additionalHTML: row.additional_html,
+  graphHtml: row.graph_html,
+  createdBy: row.created_by,
+  createdByUsername: row.created_by_username,
+  views: row.views,
+  likes: row.likes,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
 const createPost = async (req, res) => {
   try {
     const { title, description, category, additionalHTML, graphHTML } = req.body;
@@ -74,7 +91,7 @@ const createPost = async (req, res) => {
       [postId, title, description, category, imageUrl, imageFilename, sanitizedAdditionalHTML, sanitizedGraphHTML, user.uid || null, username]
     );
 
-    const newPost = insertResult.rows[0];
+    const newPost = normalizePostRow(insertResult.rows[0]);
 
     // Invalidate relevant caches
     await deleteCacheByPattern('posts:*');
@@ -130,7 +147,7 @@ const getPosts = async (req, res) => {
 
     const query = `SELECT * FROM posts ${whereClause} ORDER BY created_at DESC LIMIT $${paramIndex}`;
     const result = await pool.query(query, params);
-    const posts = result.rows;
+    const posts = result.rows.map(normalizePostRow);
 
     const lastPost = posts.length > 0 ? posts[posts.length - 1] : null;
 
@@ -174,7 +191,7 @@ const getPostById = async (req, res) => {
       return res.status(404).json({ error: 'Post not found.' });
     }
 
-    const post = result.rows[0];
+    const post = normalizePostRow(result.rows[0]);
 
     // Cache the post (unless skipCache is true)
     if (!skipCache) {
@@ -203,7 +220,7 @@ const updatePost = async (req, res) => {
       return res.status(404).json({ error: 'Post not found.' });
     }
 
-    const postData = postResult.rows[0];
+    const postData = normalizePostRow(postResult.rows[0]);
     if (postData.created_by !== user.uid && user.role !== 'admin') {
       return res.status(403).json({ error: 'Unauthorized to update this post.' });
     }
@@ -271,7 +288,7 @@ const updatePost = async (req, res) => {
     values.push(postId);
     const updateQuery = `UPDATE posts SET ${setClauses.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
     const updateResult = await pool.query(updateQuery, values);
-    const updatedPost = updateResult.rows[0];
+    const updatedPost = normalizePostRow(updateResult.rows[0]);
 
     // Clear cache for this post
     await deleteCache(generatePostCacheKey(postId));
@@ -301,7 +318,7 @@ const deletePost = async (req, res) => {
       return res.status(404).json({ error: 'Post not found.' });
     }
 
-    const postData = postResult.rows[0];
+    const postData = normalizePostRow(postResult.rows[0]);
     if (postData.created_by !== user.uid && user.role !== 'admin') {
       return res.status(403).json({ error: 'Unauthorized to delete this post.' });
     }
@@ -358,7 +375,7 @@ const toggleLike = async (req, res) => {
       return res.status(404).json({ error: 'Post not found' });
     }
 
-    const post = postResult.rows[0];
+    const post = normalizePostRow(postResult.rows[0]);
     const likes = post.likes || [];
     const isLiked = likes.includes(userId);
     console.log(`Current like status for user ${userId} on post ${postId}: ${isLiked ? 'liked' : 'not liked'}`);
@@ -388,7 +405,7 @@ const toggleLike = async (req, res) => {
 
     // Get updated post
     const updatedResult = await pool.query('SELECT * FROM posts WHERE id = $1', [postId]);
-    const updatedPost = updatedResult.rows[0];
+    const updatedPost = normalizePostRow(updatedResult.rows[0]);
 
     // Double-check the like status was actually changed
     const updatedLikes = updatedPost.likes || [];
