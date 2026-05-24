@@ -243,9 +243,19 @@ const listVideos = async (req, res) => {
     let whereClause = 'WHERE platform = $1';
 
     if (categoryFilter && categoryFilter.length > 0) {
-      whereClause += ` AND categories @> $${paramIdx}::text[]`;
-      queryParams.push(categoryFilter);
-      paramIdx++;
+      const LANG_CATS = ['English', 'Arabic'];
+      const topicCats = categoryFilter.filter(c => !LANG_CATS.includes(c));
+      const langCats = categoryFilter.filter(c => LANG_CATS.includes(c));
+      if (topicCats.length > 0) {
+        whereClause += ` AND categories && $${paramIdx}::text[]`;
+        queryParams.push(topicCats);
+        paramIdx++;
+      }
+      if (langCats.length > 0) {
+        whereClause += ` AND categories && $${paramIdx}::text[]`;
+        queryParams.push(langCats);
+        paramIdx++;
+      }
     }
 
     if (searchTerm) {
