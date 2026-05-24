@@ -214,11 +214,13 @@ const listVideos = async (req, res) => {
       });
     }
 
-    const categoryFilter = category && category !== 'all' ? category : null;
+    const categoryFilter = category && category !== 'all'
+      ? category.split(',').map(c => c.trim()).filter(Boolean)
+      : null;
     const searchTerm = search && search.trim() ? search.trim() : null;
 
     // Check Redis cache first (skip cache for search queries — they're too varied to cache efficiently)
-    const cacheKey = `video_list:${platform}:page=${pageNum}${categoryFilter ? `:cat=${categoryFilter}` : ''}`;
+    const cacheKey = `video_list:${platform}:page=${pageNum}${categoryFilter ? `:cat=${categoryFilter.sort().join(',')}` : ''}`;
     if (!searchTerm) {
       const cached = await getCache(cacheKey);
       if (cached) {
@@ -240,8 +242,8 @@ const listVideos = async (req, res) => {
 
     let whereClause = 'WHERE platform = $1';
 
-    if (categoryFilter) {
-      whereClause += ` AND $${paramIdx} = ANY(categories)`;
+    if (categoryFilter && categoryFilter.length > 0) {
+      whereClause += ` AND categories @> $${paramIdx}::text[]`;
       queryParams.push(categoryFilter);
       paramIdx++;
     }
