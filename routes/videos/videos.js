@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { addVideo, listVideos, refreshVideoStats, deleteVideo } = require('../../controllers/videoController');
+const { addVideo, listVideos, refreshVideoStats, deleteVideo, getVideoById } = require('../../controllers/videoController');
 const adminAuth = require('../../middleware/adminAuth');
 
 /**
@@ -77,6 +77,8 @@ router.post('/', adminAuth, addVideo);
  * @access  Admin
  * @params  id (video document ID)
  */
+router.get('/:id', getVideoById);
+
 router.put('/:id/refresh', adminAuth, refreshVideoStats);
 
 /**

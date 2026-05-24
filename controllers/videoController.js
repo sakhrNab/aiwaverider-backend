@@ -452,9 +452,29 @@ const deleteVideo = async (req, res) => {
   }
 };
 
+const getVideoById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ error: 'Missing video ID' });
+    }
+
+    const result = await pool.query('SELECT * FROM videos WHERE id = $1', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+
+    res.json({ video: normalizeVideoRow(result.rows[0]) });
+  } catch (error) {
+    console.error('Error fetching video by ID:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   addVideo,
   listVideos,
   refreshVideoStats,
-  deleteVideo
+  deleteVideo,
+  getVideoById
 };
