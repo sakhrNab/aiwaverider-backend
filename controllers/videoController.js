@@ -471,10 +471,91 @@ const getVideoById = async (req, res) => {
   }
 };
 
+const escapeHtml = (str) =>
+  String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const shareVideoOG = async (req, res) => {
+  const siteUrl = process.env.FRONTEND_URL || 'https://aiwaverider.com';
+  try {
+    const { id } = req.params;
+    const result = await pool.query('SELECT * FROM videos WHERE id = $1', [id]);
+    if (result.rows.length === 0) {
+      return res.redirect(siteUrl + '/videos');
+    }
+
+    const v = normalizeVideoRow(result.rows[0]);
+    const redirectUrl = `${siteUrl}/videos?v=${v.id}`;
+    const title = v.title || 'Video on AI Wave Rider';
+    const desc = (v.description || `Watch ${v.title || 'this video'} by ${v.authorName || 'AI Wave Rider'}`).substring(0, 200);
+    const img = v.thumbnailUrl || '';
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!DOCTYPE html><html><head>
+<meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<meta property="og:title" content="${escapeHtml(title)}"/>
+<meta property="og:description" content="${escapeHtml(desc)}"/>
+<meta property="og:image" content="${escapeHtml(img)}"/>
+<meta property="og:url" content="${escapeHtml(redirectUrl)}"/>
+<meta property="og:type" content="video.other"/>
+<meta property="og:site_name" content="AI Wave Rider"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="${escapeHtml(title)}"/>
+<meta name="twitter:description" content="${escapeHtml(desc)}"/>
+<meta name="twitter:image" content="${escapeHtml(img)}"/>
+<meta http-equiv="refresh" content="0;url=${escapeHtml(redirectUrl)}"/>
+</head><body><p>Redirecting to <a href="${escapeHtml(redirectUrl)}">AI Wave Rider</a>…</p></body></html>`);
+  } catch (error) {
+    console.error('Error generating share page:', error);
+    res.redirect(siteUrl + '/videos');
+  }
+};
+
+const getRelatedVideos = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const limit = Math.min(parseInt(req.query.limit) || 8, 20);
+
+    const videoResult = await pool.query('SELECT * FROM videos WHERE id = $1', [id]);
+    if (videoResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+
+    const video = videoResult.rows[0];
+    const cats = video.categories || [video.category || 'general'];
+
+    const result = await pool.query(
+      `SELECT * FROM videos
+       WHERE id != $1 AND platform = $2 AND categories && $3::text[]
+       ORDER BY created_at DESC LIMIT $4`,
+      [id, video.platform, cats, limit]
+    );
+
+    let related = result.rows.map(normalizeVideoRow);
+
+    if (related.length < limit) {
+      const existingIds = [id, ...related.map(r => r.id)];
+      const filler = await pool.query(
+        `SELECT * FROM videos
+         WHERE id != ALL($1::text[]) AND platform = $2
+         ORDER BY created_at DESC LIMIT $3`,
+        [existingIds, video.platform, limit - related.length]
+      );
+      related = related.concat(filler.rows.map(normalizeVideoRow));
+    }
+
+    res.json({ videos: related, sourceVideo: normalizeVideoRow(video) });
+  } catch (error) {
+    console.error('Error fetching related videos:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   addVideo,
   listVideos,
   refreshVideoStats,
   deleteVideo,
-  getVideoById
+  getVideoById,
+  shareVideoOG,
+  getRelatedVideos
 };
